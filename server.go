@@ -2,13 +2,14 @@ package main
 
 import (
 	"net/http"	
-	"github.com/labstack/echo/v4"
 	"fmt"
     "io/ioutil"
     "encoding/json"
 	"strings"
 	"bytes"
+	"strconv"
 )
+// "github.com/labstack/echo/v4"
 type SimpleTask struct {
 			Task_id string `json:"task_id"`
 			Name string `json:"name"`
@@ -21,9 +22,27 @@ type Tasks struct {
 	EndDate string `json:"endDate"`
 }
 
+type Duration struct {
+	Duration int `json:"duration"`
+}
+
+func GetStringInBetween(str string, start string, end string) (result string) {
+    s := strings.Index(str, start)
+    if s == -1 {
+        return
+    }
+    s += len(start)
+    e := strings.Index(str[s:], end)
+    if e == -1 {
+        return
+    }
+    e += s + e - 4//QUICK FIx
+    return str[s:e]
+}
+
 func main() {
-	e := echo.New()
-	e.GET("/", func(c echo.Context) error {
+	/*e := echo.New()
+	e.GET("/", func(c echo.Context) error {*/
 		timecamp_api_key := "cb27cd4c3598f624e85309c40c"
 		server_url := "https://app.timecamp.com/third_party/api" //mock server url
 		tasks_url := server_url + "/tasks/168140512"
@@ -58,7 +77,7 @@ func main() {
 		if err := json.Unmarshal([]byte(body), &x); err != nil {
 			fmt.Println("error")
 		}
-		fmt.Println(x)
+		//fmt.Println(x)
 
 
 		for key, value := range x {
@@ -66,7 +85,13 @@ func main() {
 			fmt.Println("Task ID:", key)
 			fmt.Println("Name:", value.Name)
 
-			if !strings.Contains(value.Name, "[") || !strings.Contains(value.Name, "]") {
+			time_estimated := GetStringInBetween(value.Name, "[", "]");
+			fmt.Println(time_estimated, "time estimated in hours");
+
+			hours := strings.Split(time_estimated, "-");
+			fmt.Println(hours);
+
+			//if !strings.Contains(value.Name, "[") || !strings.Contains(value.Name, "]") {
 				tasks := Tasks{
 					TaskIds: []string{key},
 					StartDate: "2024-09-01",
@@ -100,12 +125,46 @@ func main() {
 				if err != nil {
 					fmt.Printf("error reading time entry request")
 				}
-				fmt.Println(string(body))
-			}
+				fmt.Println(string(body))	
+			
+					
+				x := []Duration{}
+				err = json.Unmarshal([]byte(body), &x)
+				if err := json.Unmarshal([]byte(body), &x); err != nil {
+					fmt.Println("error")
+				}
+				fmt.Println(x)
+
+				total_time_spent := 0	
+				for _, value := range x {
+					fmt.Println(value.Duration, "seconds")
+					total_time_spent += value.Duration;
+				}
+
+				fmt.Println(total_time_spent, "total time spent in seconds");
+
+
+			min_hours, err := strconv.Atoi(hours[0])
+			if err != nil {
+        // ... handle error
+        panic(err)
+    }
+			max_hours, err := strconv.Atoi(hours[1])
+			if err != nil {
+        // ... handle error
+        panic(err)
+    }
+
+				var min_percentage float32 = float32(float32(total_time_spent) / float32(min_hours * 3600) * float32(100.3));
+				var max_percentage float32 = float32(float32(total_time_spent) / float32(max_hours * 3600) * float32(100.0));
+
+				fmt.Printf("%.2f Percentage of the minimal estimation\r\n", min_percentage)
+				fmt.Printf("%.2f Percentage of the maximal estimation\r\n\r\n", max_percentage)
+			//}
 
 		}
 
-		return c.String(http.StatusOK, string(body))
+		/*return c.String(http.StatusOK, string(body))
 	})
-	e.Logger.Fatal(e.Start(":1324"))
+	e.Logger.Fatal(e.Start(":1324"))*/
 }
