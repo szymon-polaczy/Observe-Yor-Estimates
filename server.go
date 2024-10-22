@@ -10,7 +10,6 @@ import (
 	"io/ioutil"
 	"encoding/json"
 	"time"
-	"bytes"
 
 	_ "github.com/go-sql-driver/mysql"
 )
@@ -37,12 +36,7 @@ type SimpleTimeEntry struct {
 	ID         string `json:"id"`
 	Duration   string `json:"duration"`
 	Last_modify string `json:"last_modify"`
-	Task 	 SimpleTask `json:"task"`
-}
-
-type EntriesRequest struct {
-	StartDate string   `json:"startDate"`
-	EndDate   string   `json:"endDate"`
+	Task_id 	string `json:"task_id"`
 }
 
 func main() {
@@ -60,9 +54,6 @@ func main() {
 	})
 
 	http.HandleFunc("/sync_tasks", func(w http.ResponseWriter, r *http.Request) {
-		//connect with sql database, then connect with an api to get data and put it in the database
-		//then return the new data to the user
-
 		db, err := sql.Open("mysql", "root:password@tcp(localhost:3306)/oye")
 		if err != nil {
 			log.Fatal(err)
@@ -75,7 +66,6 @@ func main() {
 			log.Fatal(err)
 		}
 
-		//GET api_key from the settings table
 		rows, err := db.Query("SELECT value FROM `settings` WHERE `key` = 'api_key'")
 		if err != nil {
 			log.Fatal(err)
@@ -91,21 +81,16 @@ func main() {
 			}
 		}
 
-		//GET data from the api
-		server_url := "https://app.timecamp.com/third_party/api" //mock server url
+		server_url := "https://app.timecamp.com/third_party/api"
 		tasks_url := server_url + "/tasks"
 
-		// Create a Bearer string by appending string access token
 		bearer := "Bearer " + api_key
 
-		// Create a new request using http
 		req, err := http.NewRequest("GET", tasks_url, nil)
 
-		// add authorization header to the req
 		req.Header.Add("Authorization", bearer)
 		req.Header.Add("Accept", "application/json")
 
-		// Send req using http Client
 		client := &http.Client{}
 		resp, err := client.Do(req)
 
@@ -127,8 +112,6 @@ func main() {
 		}
 
 		for key, value := range x {
-
-			//INSERT data into the database
 			insert, err := db.Query("INSERT INTO tasks (Task_id, Name, Assigned_By, Add_date, Modify_time) VALUES (?, ?, ?, ?, ?)", key, value.Name, value.Assigned_by, value.Add_date, value.Modify_time)
 
 			if err != nil {
@@ -142,9 +125,6 @@ func main() {
 	})
 
 	http.HandleFunc("/sync_time_entries", func(w http.ResponseWriter, r *http.Request) {
-		//connect with sql database, then connect with an api to get data and put it in the database
-		//then return the new data to the user
-
 		db, err := sql.Open("mysql", "root:password@tcp(localhost:3306)/oye")
 		if err != nil {
 			log.Fatal(err)
@@ -157,7 +137,6 @@ func main() {
 			log.Fatal(err)
 		}
 
-		//GET api_key from the settings table
 		api_rows, err := db.Query("SELECT value FROM `settings` WHERE `key` = 'api_key'")
 		if err != nil {
 			log.Fatal(err)
@@ -174,7 +153,6 @@ func main() {
 		}
 
 
-		//GET the oldest add_date from the tasks table
 		rows, err := db.Query("SELECT Add_date FROM `tasks` ORDER BY Add_date ASC LIMIT 1")
 		if err != nil {
 			log.Fatal(err)
@@ -190,41 +168,19 @@ func main() {
 			}
 		}
 
-		//get first date in this format YYYY-MM-DD
 		oldest_task = oldest_task[:10]//TODO: fix this
-
-		//get tomorrow date in this format YYYY-MM-DD
 		tomorrow := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
 
-		entries_request := EntriesRequest{
-			StartDate: oldest_task,
-			EndDate: string(tomorrow),
-		}
+		server_url := "https://app.timecamp.com/third_party/api/entries"
+		server_url = server_url + "?from=" + oldest_task + "&to=" + tomorrow
 
-		marshalled, err := json.Marshal(entries_request)
-
-		fmt.Println(string(marshalled))
-
-		if err != nil {
-			fmt.Println("error marshalling")
-		}
-
-
-		//GET data from the api
-		server_url := "https://app.timecamp.com/third_party/api/v3/time-entries" //mock server url
-
-		// Create a Bearer string by appending string access token
 		bearer := "Bearer " + api_key
 
-		// Create a new request using http
-		req, err := http.NewRequest("POST", server_url, bytes.NewReader(marshalled))
+		req, err := http.NewRequest("GET", server_url, nil)
 
-		// add authorization header to the req
 		req.Header.Add("Authorization", bearer)
 		req.Header.Add("Accept", "application/json")
-		req.Header.Add("Content-Type", "application/json")
 
-		// Send req using http Client
 		client := &http.Client{}
 		resp, err := client.Do(req)
 
@@ -239,24 +195,14 @@ func main() {
 			fmt.Printf("error reading tasks request")
 		}
 
-		//dump the body
-		fmt.Println(string(body))
-
 		var entries []SimpleTimeEntry
 		err = json.Unmarshal([]byte(body), &entries)
 		if err := json.Unmarshal([]byte(body), &entries); err != nil {
 			fmt.Println("error")
 		}
 
-		//dump entries
-		fmt.Println(entries)
-
 		for _, value := range entries {
-
-			fmt.Println("daaa\n\n")
-
-			//INSERT data into the database
-			insert, err := db.Query("INSERT INTO time_entries (ID, Duration, Task_id, Last_modify) VALUES (?, ?, ?, ?)", value.ID, value.Duration, value.Task.Task_id, value.Last_modify)
+			insert, err := db.Query("INSERT INTO time_entries (ID, Duration, Task_id, Last_modify) VALUES (?, ?, ?, ?)", value.ID, value.Duration, value.Task_id, value.Last_modify)
 
 			if err != nil {
 				log.Fatal(err)
