@@ -33,10 +33,29 @@ type SimpleTask struct {
 }
 
 type SimpleTimeEntry struct {
-	ID         string `json:"id"`
+	ID         int `json:"id"`
 	Duration   string `json:"duration"`
 	Last_modify string `json:"last_modify"`
 	Task_id 	string `json:"task_id"`
+}
+
+func getApiKey(db *sql.DB) string{
+	api_rows, err := db.Query("SELECT value FROM `settings` WHERE `key` = 'api_key'")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	defer api_rows.Close()
+
+	var api_key string
+	for api_rows.Next() {
+		err = api_rows.Scan(&api_key)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+
+	return api_key
 }
 
 func main() {
@@ -66,20 +85,7 @@ func main() {
 			log.Fatal(err)
 		}
 
-		rows, err := db.Query("SELECT value FROM `settings` WHERE `key` = 'api_key'")
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		defer rows.Close()
-
-		var api_key string
-		for rows.Next() {
-			err = rows.Scan(&api_key)
-			if err != nil {
-				log.Fatal(err)
-			}
-		}
+		api_key := getApiKey(db)
 
 		server_url := "https://app.timecamp.com/third_party/api"
 		tasks_url := server_url + "/tasks"
@@ -137,21 +143,7 @@ func main() {
 			log.Fatal(err)
 		}
 
-		api_rows, err := db.Query("SELECT value FROM `settings` WHERE `key` = 'api_key'")
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		defer api_rows.Close()
-
-		var api_key string
-		for api_rows.Next() {
-			err = api_rows.Scan(&api_key)
-			if err != nil {
-				log.Fatal(err)
-			}
-		}
-
+		api_key := getApiKey(db)
 
 		rows, err := db.Query("SELECT Add_date FROM `tasks` ORDER BY Add_date ASC LIMIT 1")
 		if err != nil {
