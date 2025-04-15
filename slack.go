@@ -59,10 +59,7 @@ func main() {
 	}
 	defer c.Close()
 
-	done := make(chan struct{})
-
 	go func() {
-		defer close(done)
 		for {
 			_, message, err := c.ReadMessage()
 			if err != nil {
@@ -77,40 +74,40 @@ func main() {
 				panic(err)
 			}
 
-			response := TEST_SLACK_PAYLOAD_RESPONSE{
-				EnvelopeID: test_payload.EnvelopeID,
-				Payload: Payload{
-					[]Block{
-						Block{
-							Type: "section",
-							Text: Text{
-								Type: "mrkdwn",
-								Text: "**Test text**",
+			if len(test_payload.EnvelopeID) != 0 {
+				response := TEST_SLACK_PAYLOAD_RESPONSE{
+					EnvelopeID: test_payload.EnvelopeID,
+					Payload: Payload{
+						[]Block{
+							Block{
+								Type: "section",
+								Text: Text{
+									Type: "mrkdwn",
+									Text: "**Test text**",
+								},
 							},
 						},
 					},
-				},
-			}
+				}
 
-			json_response, err := json.Marshal(response)
-			if err != nil {
-				panic(err)
-			}
+				json_response, err := json.Marshal(response)
+				if err != nil {
+					panic(err)
+				}
 
-			err = c.WriteMessage(websocket.TextMessage, []byte(json_response))
-			if err != nil {
-				log.Println("write:", err)
-				return
-			}
+				err = c.WriteMessage(websocket.TextMessage, []byte(json_response))
+				if err != nil {
+					log.Println("write:", err)
+					return
+				}
 
-			fmt.Printf("%s", json_response)
+				fmt.Printf("%s", json_response)
+			}
 		}
 	}()
 
 	for {
 		select {
-		case <-done:
-			return
 		case <-interrupt:
 			log.Println("interrupt")
 
@@ -120,9 +117,6 @@ func main() {
 			if err != nil {
 				log.Println("write close:", err)
 				return
-			}
-			select {
-			case <-done:
 			}
 			return
 		}
@@ -140,7 +134,6 @@ func get_slack_socket_url() string {
 
 	request.Header.Add("Authorization", "Bearer "+os.Getenv("SLACK_TOKEN"))
 	request.Header.Add("Content-type", "application/x-www-form-urlencoded")
-	request.Header.Add("User-Agent", "insomnia/11.0.0")
 
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
