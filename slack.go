@@ -1,16 +1,14 @@
 package main
 
 import (
-	//"github.com/gobwas/ws"
-	//"github.com/gobwas/ws/wsutil"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"time"
 
 	"net/http"
-	//"net/url"
 	"os"
 	"os/signal"
 
@@ -21,6 +19,29 @@ import (
 type SOCKET_URL_RESPONSE struct {
 	Ok  bool   `json:"ok"`
 	Url string `json:"url"`
+}
+
+type TEST_SLACK_PAYLOAD struct {
+	EnvelopeID string `json:"envelope_id"`
+}
+
+type Payload struct {
+	Blocks []Block `json:"blocks"`
+}
+
+type Block struct {
+	Type string `json:"type"`
+	Text Text   `json:"text"`
+}
+
+type Text struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+type TEST_SLACK_PAYLOAD_RESPONSE struct {
+	EnvelopeID string  `json:"envelope_id"`
+	Payload    Payload `json:"payload"`
 }
 
 func main() {
@@ -37,12 +58,6 @@ func main() {
 
 	new_socket_url := get_slack_socket_url()
 
-	//var addr = flag.String("addr", new_socket_url, "http service address")
-
-	//u := url.URL{Scheme: "ws", Host: new_socket_url, Path: "/"}
-	//log.Printf("connecting to %s", u.String())
-
-	//c, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 	c, _, err := websocket.DefaultDialer.Dial(new_socket_url, nil)
 	if err != nil {
 		log.Fatal("dial:", err)
@@ -61,6 +76,39 @@ func main() {
 			}
 			log.Printf("recv: %s", message)
 
+			var test_payload TEST_SLACK_PAYLOAD
+
+			if err := json.Unmarshal(message, &test_payload); err != nil {
+				panic(err)
+			}
+
+			response := TEST_SLACK_PAYLOAD_RESPONSE{
+				EnvelopeID: test_payload.EnvelopeID,
+				Payload: Payload{
+					[]Block{
+						Block{
+							Type: "section",
+							Text: Text{
+								Type: "mrkdwn",
+								Text: "**Test text**",
+							},
+						},
+					},
+				},
+			}
+
+			json_response, err := json.Marshal(response)
+			if err != nil {
+				panic(err)
+			}
+
+			err = c.WriteMessage(websocket.TextMessage, []byte(json_response))
+			if err != nil {
+				log.Println("write:", err)
+				return
+			}
+
+			fmt.Printf("%s", json_response)
 		}
 	}()
 
