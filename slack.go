@@ -2,11 +2,9 @@ package main
 
 import (
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"log"
-	"time"
 
 	"net/http"
 	"os"
@@ -45,9 +43,6 @@ type TEST_SLACK_PAYLOAD_RESPONSE struct {
 }
 
 func main() {
-	flag.Parse()
-	log.SetFlags(0)
-
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)
 
@@ -112,19 +107,10 @@ func main() {
 		}
 	}()
 
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-
 	for {
 		select {
 		case <-done:
 			return
-		case t := <-ticker.C:
-			err := c.WriteMessage(websocket.TextMessage, []byte(t.String()))
-			if err != nil {
-				log.Println("write:", err)
-				return
-			}
 		case <-interrupt:
 			log.Println("interrupt")
 
@@ -137,7 +123,6 @@ func main() {
 			}
 			select {
 			case <-done:
-			case <-time.After(time.Second):
 			}
 			return
 		}
