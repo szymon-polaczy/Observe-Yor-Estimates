@@ -35,7 +35,7 @@ func main() {
 		panic("Error loading .env file")
 	}
 
-	//timecamp_tasks := get_timecamp_tasks()
+	timecamp_tasks := get_timecamp_tasks()
 
 	//for testing purposes remove the table and create a new one right after
 	os.Remove("./oye.db")
@@ -47,6 +47,12 @@ func main() {
 
 	defer db.Close()
 
+	//later on add task_hash here so that we can align the tables
+	//and go through the tasks and check if their hashes changed
+	//or just update them
+	//I could also try to no go task by task and insert all of the data
+	//at once but that could also have an issue with the max length
+	//of a query in sql
 	create_table_sql := `CREATE TABLE tasks (
 		task_id INTEGER PRIMARY KEY,
 		parent_id INT NOT NULL,
@@ -61,6 +67,18 @@ func main() {
 	}
 
 	fmt.Println("everything created correctly")
+
+	insert_statement, err := db.Prepare("INSERT INTO tasks values(?, ?, ?, ?, ?, ?)")
+	if err != nil {
+		panic(err)
+	}
+
+	for _, task := range timecamp_tasks {
+		_, err := insert_statement.Exec(task.TaskID, task.ParentID, task.AssignedBy, task.Name, task.Level, task.RootGroupID)
+		if err != nil {
+			panic(err)
+		}
+	}
 }
 
 func get_timecamp_tasks() []JsonTask {
