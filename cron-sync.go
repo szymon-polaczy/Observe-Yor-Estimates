@@ -1,8 +1,10 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
+	_ "github.com/mattn/go-sqlite3"
 	"io"
 	"net/http"
 	"os"
@@ -10,17 +12,17 @@ import (
 	"github.com/joho/godotenv"
 )
 
-type Task struct {
+type JsonTask struct {
 	TaskID      int    `json:"task_id"`
 	ParentID    int    `json:"parent_id"`
 	AssignedBy  int    `json:"assigned_by"`
 	Name        string `json:"name"`
 	Level       int    `json:"level"`
-	BudgetUnit  string `json:"budget_unit"`
 	RootGroupID int    `json:"root_group_id"`
 }
 
 func main() {
+
 	// contact timecamp and get the tasks
 	// open a connection with the database - do we create it using an outside thing or do we add it's creation here?
 	// how do we update everythign - if we would actually be getting a full database each time then we can basically override it and add data from the start
@@ -33,6 +35,35 @@ func main() {
 		panic("Error loading .env file")
 	}
 
+	//timecamp_tasks := get_timecamp_tasks()
+
+	//for testing purposes remove the table and create a new one right after
+	os.Remove("./oye.db")
+
+	db, err := sql.Open("sqlite3", "./oye.db")
+	if err != nil {
+		panic(err)
+	}
+
+	defer db.Close()
+
+	create_table_sql := `CREATE TABLE tasks (
+		task_id INTEGER PRIMARY KEY,
+		parent_id INT NOT NULL,
+		assigned_by INT NOT NULL,
+		name STRING NOT NULL,
+		level INT NOT NULL,
+		root_group_id INT NOT NULL
+	);`
+	_, err = db.Exec(create_table_sql)
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Println("everything created correctly")
+}
+
+func get_timecamp_tasks() []JsonTask {
 	timecamp_api_url := "https://app.timecamp.com/third_party/api"
 	get_all_tasks_url := timecamp_api_url + "/tasks"
 
@@ -55,13 +86,13 @@ func main() {
 	}
 
 	// Unmarshal into a map first
-	taskMap := make(map[string]Task)
+	taskMap := make(map[string]JsonTask)
 	if err := json.Unmarshal(body, &taskMap); err != nil {
 		panic(err)
 	}
 
 	// Convert the map to a slice
-	tasks := make([]Task, 0, len(taskMap))
+	tasks := make([]JsonTask, 0, len(taskMap))
 	for _, task := range taskMap {
 		tasks = append(tasks, task)
 	}
@@ -70,4 +101,6 @@ func main() {
 	for _, t := range tasks {
 		fmt.Printf("%+v\n", t)
 	}
+
+	return tasks
 }
