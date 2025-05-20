@@ -12,6 +12,8 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/joho/godotenv"
+
+	"crons/tasks"
 )
 
 type SOCKET_URL_RESPONSE struct {
@@ -43,6 +45,8 @@ type TEST_SLACK_PAYLOAD_RESPONSE struct {
 }
 
 func main() {
+	tasks.SyncTasksToDatabase()
+
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)
 

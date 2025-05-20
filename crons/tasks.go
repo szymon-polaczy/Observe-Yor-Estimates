@@ -1,4 +1,4 @@
-package main
+package tasks
 
 import (
 	"database/sql"
@@ -21,7 +21,7 @@ type JsonTask struct {
 	RootGroupID int    `json:"root_group_id"`
 }
 
-func main() {
+func SyncTasksToDatabase() {
 
 	// contact timecamp and get the tasks
 	// open a connection with the database - do we create it using an outside thing or do we add it's creation here?
@@ -73,12 +73,15 @@ func main() {
 		panic(err)
 	}
 
+	index := 0
 	for _, task := range timecamp_tasks {
 		_, err := insert_statement.Exec(task.TaskID, task.ParentID, task.AssignedBy, task.Name, task.Level, task.RootGroupID)
 		if err != nil {
 			panic(err)
 		}
+		index++
 	}
+	fmt.Println("We've imported %s tasks", index)
 }
 
 func get_timecamp_tasks() []JsonTask {
