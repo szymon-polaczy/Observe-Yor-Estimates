@@ -1,10 +1,8 @@
-package tasks
+package main
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
-	_ "github.com/mattn/go-sqlite3"
 	"io"
 	"net/http"
 	"os"
@@ -37,36 +35,11 @@ func SyncTasksToDatabase() {
 
 	timecamp_tasks := get_timecamp_tasks()
 
-	//for testing purposes remove the table and create a new one right after
-	os.Remove("./oye.db")
-
-	db, err := sql.Open("sqlite3", "./oye.db")
+	db, err := GetDB()
 	if err != nil {
 		panic(err)
 	}
-
 	defer db.Close()
-
-	//later on add task_hash here so that we can align the tables
-	//and go through the tasks and check if their hashes changed
-	//or just update them
-	//I could also try to no go task by task and insert all of the data
-	//at once but that could also have an issue with the max length
-	//of a query in sql
-	create_table_sql := `CREATE TABLE tasks (
-		task_id INTEGER PRIMARY KEY,
-		parent_id INT NOT NULL,
-		assigned_by INT NOT NULL,
-		name STRING NOT NULL,
-		level INT NOT NULL,
-		root_group_id INT NOT NULL
-	);`
-	_, err = db.Exec(create_table_sql)
-	if err != nil {
-		panic(err)
-	}
-
-	fmt.Println("everything created correctly")
 
 	insert_statement, err := db.Prepare("INSERT INTO tasks values(?, ?, ?, ?, ?, ?)")
 	if err != nil {
@@ -81,7 +54,7 @@ func SyncTasksToDatabase() {
 		}
 		index++
 	}
-	fmt.Println("We've imported %s tasks", index)
+	fmt.Printf("We've imported %d tasks\n", index)
 }
 
 func get_timecamp_tasks() []JsonTask {
