@@ -428,26 +428,31 @@ func getColorIndicator(percentage float64) (string, string, bool) {
 	var emoji, description string
 	var isBold bool
 
+	// Get thresholds from environment variables with defaults
+	midPoint := 50.0  // default
+	highPoint := 90.0 // default
+
+	if midPointStr := os.Getenv("MID_POINT"); midPointStr != "" {
+		if parsed, err := strconv.ParseFloat(midPointStr, 64); err == nil {
+			midPoint = parsed
+		}
+	}
+
+	if highPointStr := os.Getenv("HIGH_POINT"); highPointStr != "" {
+		if parsed, err := strconv.ParseFloat(highPointStr, 64); err == nil {
+			highPoint = parsed
+		}
+	}
+
 	switch {
 	case percentage == 0:
-		emoji = "⚫" // Black circle
-		description = "0% used"
-	case percentage > 0 && percentage <= 25:
-		emoji = "🟢" // Green circle
-		description = fmt.Sprintf("%.0f%% used", percentage)
-	case percentage > 25 && percentage <= 50:
-		emoji = "🟡" // Yellow circle
-		description = fmt.Sprintf("%.0f%% used", percentage)
-	case percentage > 50 && percentage < 100:
-		emoji = "🟠" // Orange circle
-		description = fmt.Sprintf("%.0f%% used", percentage)
-	case percentage == 100:
-		emoji = "🔴" // Red circle
-		description = "100% used"
-	case percentage > 100:
-		emoji = "🔴" // Red circle
-		description = fmt.Sprintf("**%.0f%% OVER**", percentage)
-		isBold = true
+		emoji = "⚫"
+	case percentage > 0 && percentage <= midPoint:
+		emoji = "🟢"
+	case percentage > midPoint && percentage <= highPoint:
+		emoji = "🟠"
+	case percentage > highPoint:
+		emoji = "🔴"
 	default:
 		emoji = "⚫"
 		description = "unknown"

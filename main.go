@@ -85,13 +85,9 @@ func main() {
 			}
 			logger.Info("Tasks sync completed successfully")
 			return
-		case "test-colors":
-			logger.Info("Running color indicator tests")
-			runTests()
-			return
 		default:
 			logger.Warnf("Unknown command line argument: %s", os.Args[1])
-			logger.Info("Available commands: daily-update, sync-time-entries, sync-tasks, test-colors")
+			logger.Info("Available commands: daily-update, sync-time-entries, sync-tasks")
 			return
 		}
 	}
