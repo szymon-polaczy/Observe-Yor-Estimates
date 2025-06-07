@@ -33,21 +33,31 @@ type SlackMessage struct {
 
 // SendDailySlackUpdate sends a daily update to Slack with task changes
 func SendDailySlackUpdate() {
+	logger := NewLogger()
+	logger.Info("Starting daily Slack update")
+
 	db, err := GetDB()
 	if err != nil {
-		fmt.Printf("Error opening database: %v\n", err)
+		logger.Errorf("Failed to open database connection: %v", err)
+		// Send a notification to user about the failure if webhook is configured
+		sendFailureNotification("Database connection failed", err)
 		return
 	}
-	defer db.Close()
+	defer CloseWithErrorLog(db, "database connection")
 
 	taskInfos, err := getTaskTimeChanges(db)
 	if err != nil {
-		fmt.Printf("Error getting task time changes: %v\n", err)
+		logger.Errorf("Failed to get task time changes: %v", err)
+		sendFailureNotification("Failed to retrieve task changes", err)
 		return
 	}
 
 	if len(taskInfos) == 0 {
-		fmt.Println("No task changes to report today")
+		logger.Info("No task changes to report today")
+		// Still send a brief update to let users know the system is working
+		if err := sendNoChangesNotification(); err != nil {
+			logger.Errorf("Failed to send 'no changes' notification: %v", err)
+		}
 		return
 	}
 
@@ -56,24 +66,26 @@ func SendDailySlackUpdate() {
 	// Check if we have webhook URL configured
 	webhookURL := os.Getenv("SLACK_WEBHOOK_URL")
 	if webhookURL == "" {
-		fmt.Println("SLACK_WEBHOOK_URL not configured. Here's what would be sent:")
-		fmt.Println(strings.Repeat("=", 50))
-		fmt.Println(message.Text)
-		fmt.Println(strings.Repeat("=", 50))
+		logger.Warn("SLACK_WEBHOOK_URL not configured. Daily update would contain:")
+		logger.Info(strings.Repeat("=", 50))
+		logger.Info(message.Text)
+		logger.Info(strings.Repeat("=", 50))
 		return
 	}
 
 	err = sendSlackMessage(message)
 	if err != nil {
-		fmt.Printf("Error sending Slack message: %v\n", err)
+		logger.Errorf("Failed to send Slack message: %v", err)
 		return
 	}
 
-	fmt.Println("Daily Slack update sent successfully")
+	logger.Info("Daily Slack update sent successfully")
 }
 
 // getTaskTimeChanges retrieves task time changes between yesterday and today
 func getTaskTimeChanges(db *sql.DB) ([]TaskTimeInfo, error) {
+	logger := NewLogger()
+
 	// For this example, we'll simulate task time data since we don't have actual time tracking
 	// In a real scenario, you'd query your time tracking data
 	query := `
@@ -87,18 +99,23 @@ func getTaskTimeChanges(db *sql.DB) ([]TaskTimeInfo, error) {
 		LIMIT 10
 	`
 
+	logger.Debug("Querying tasks with recent changes")
+
 	rows, err := db.Query(query)
 	if err != nil {
-		return nil, fmt.Errorf("error querying tasks: %w", err)
+		return nil, fmt.Errorf("error querying tasks with recent changes: %w", err)
 	}
-	defer rows.Close()
+	defer CloseWithErrorLog(rows, "database rows")
 
 	var taskInfos []TaskTimeInfo
+	errorCount := 0
 
 	for rows.Next() {
 		var taskInfo TaskTimeInfo
 		err := rows.Scan(&taskInfo.TaskID, &taskInfo.Name)
 		if err != nil {
+			logger.Errorf("Error scanning task row: %v", err)
+			errorCount++
 			continue
 		}
 
@@ -113,16 +130,29 @@ func getTaskTimeChanges(db *sql.DB) ([]TaskTimeInfo, error) {
 		taskInfos = append(taskInfos, taskInfo)
 	}
 
+	// Check for iteration errors
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error during rows iteration: %w", err)
+	}
+
+	if errorCount > 0 {
+		logger.Warnf("Encountered %d errors while processing task rows", errorCount)
+	}
+
+	logger.Debugf("Successfully retrieved %d task changes", len(taskInfos))
 	return taskInfos, nil
 }
 
 // parseEstimation extracts estimation information from task name
 func parseEstimation(taskName string) (string, string) {
+	logger := NewLogger()
+
 	// Regex to match patterns like [7-13] or [13-29]
 	re := regexp.MustCompile(`\[(\d+)-(\d+)\]`)
 	matches := re.FindStringSubmatch(taskName)
 
 	if len(matches) != 3 {
+		logger.Debugf("No estimation pattern found in task name: %s", taskName)
 		return "", "no estimation given"
 	}
 
@@ -130,16 +160,23 @@ func parseEstimation(taskName string) (string, string) {
 	pessimistic, err2 := strconv.Atoi(matches[2])
 
 	if err1 != nil || err2 != nil {
-		return "", "no estimation given"
+		logger.Warnf("Failed to parse estimation numbers from task name '%s': optimistic=%v, pessimistic=%v",
+			taskName, err1, err2)
+		return "", "invalid estimation format"
 	}
 
 	if optimistic > pessimistic {
-		return fmt.Sprintf("Estimation: %d-%d hours", optimistic, pessimistic), "broken estimation"
+		logger.Warnf("Invalid estimation range in task '%s': optimistic (%d) > pessimistic (%d)",
+			taskName, optimistic, pessimistic)
+		return fmt.Sprintf("Estimation: %d-%d hours", optimistic, pessimistic), "broken estimation (optimistic > pessimistic)"
 	}
 
 	// Calculate percentage used (simulated with random values for now)
 	// In real implementation, you'd calculate based on actual time spent
 	percentageUsed := simulatePercentageUsed()
+
+	logger.Debugf("Parsed estimation for task '%s': %d-%d hours, %d%% used",
+		taskName, optimistic, pessimistic, percentageUsed)
 
 	return fmt.Sprintf("Estimation: %d-%d hours (%d%% used)", optimistic, pessimistic, percentageUsed), ""
 }
@@ -307,4 +344,64 @@ func sendSlackMessage(message SlackMessage) error {
 	}
 
 	return nil
+}
+
+// sendFailureNotification sends a notification about system failures
+func sendFailureNotification(operation string, err error) {
+	logger := NewLogger()
+
+	webhookURL := os.Getenv("SLACK_WEBHOOK_URL")
+	if webhookURL == "" {
+		logger.Warnf("Cannot send failure notification - SLACK_WEBHOOK_URL not configured. %s failed: %v", operation, err)
+		return
+	}
+
+	message := SlackMessage{
+		Text: fmt.Sprintf("⚠️ System Alert: %s failed", operation),
+		Blocks: []Block{
+			{
+				Type: "header",
+				Text: &Text{
+					Type: "plain_text",
+					Text: "⚠️ System Alert",
+				},
+			},
+			{
+				Type: "section",
+				Text: &Text{
+					Type: "mrkdwn",
+					Text: fmt.Sprintf("*Operation:* %s\n*Error:* `%v`\n*Time:* %s",
+						operation, err, time.Now().Format("2006-01-02 15:04:05")),
+				},
+			},
+		},
+	}
+
+	if sendErr := sendSlackMessage(message); sendErr != nil {
+		logger.Errorf("Failed to send failure notification: %v", sendErr)
+	}
+}
+
+// sendNoChangesNotification sends a brief notification when there are no changes
+func sendNoChangesNotification() error {
+	webhookURL := os.Getenv("SLACK_WEBHOOK_URL")
+	if webhookURL == "" {
+		return nil // Not an error, just not configured
+	}
+
+	message := SlackMessage{
+		Text: "📊 Daily Update: No task changes today",
+		Blocks: []Block{
+			{
+				Type: "section",
+				Text: &Text{
+					Type: "mrkdwn",
+					Text: fmt.Sprintf("📊 *Daily Update* - %s\n\nNo task changes to report today. System is running normally.",
+						time.Now().Format("January 2, 2006")),
+				},
+			},
+		},
+	}
+
+	return sendSlackMessage(message)
 }

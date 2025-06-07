@@ -79,6 +79,26 @@ Daily updates include:
   - Today's time
   - Estimation information with usage percentage or status
 
+## Documentation
+
+For detailed information about the application's architecture and error handling:
+
+- **[Error Handling Summary](Documentation/ERROR_HANDLING_SUMMARY.md)** - Comprehensive overview of error handling patterns and best practices implemented in the application
+- **[Close Error Handling](Documentation/CLOSE_ERROR_HANDLING.md)** - Detailed guide on resource cleanup patterns and close error handling strategies
+
+## Project Structure
+/home/haven/Documents/Observe-Yor-Estimates/
+├── Documentation/
+│   ├── ERROR_HANDLING_SUMMARY.md
+│   └── CLOSE_ERROR_HANDLING.md
+├── error_handling_utils.go        # Centralized error handling utilities
+├── logger.go                      # Structured logging system
+├── main.go                        # Main application with WebSocket handling
+├── sync_tasks_to_db.go           # Task synchronization with proper error handling
+├── daily_slack_update.go         # Slack notifications with error handling
+├── db-setup.go                   # Database operations with error handling
+└── README.md                     # Updated with documentation links
+
 ## Cron Schedule
 
 - **Task Sync**: Every 5 minutes (`*/5 * * * *`)

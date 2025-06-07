@@ -20,35 +20,42 @@ type JsonTask struct {
 	RootGroupID int    `json:"root_group_id"`
 }
 
-func SyncTasksToDatabase() {
+func SyncTasksToDatabase() error {
+	logger := NewLogger()
 
-	// contact timecamp and get the tasks
-	// open a connection with the database - do we create it using an outside thing or do we add it's creation here?
-	// how do we update everythign - if we would actually be getting a full database each time then we can basically override it and add data from the start
-	// if we don't get everything then we would have to update things where most of the things don't change
-	// so we already know that we have to at least get all of the json, run it through a hash and see what value we get - if we already synced that value then we don't have
-	// anything more to sync and we can stop - with the option to override for testing
-
+	// Load environment variables - but don't panic here since main already validated them
 	err := godotenv.Load()
 	if err != nil {
-		panic("Error loading .env file")
+		logger.Warnf("Could not reload .env file (continuing with existing env vars): %v", err)
 	}
 
-	timecamp_tasks := get_timecamp_tasks()
+	logger.Debug("Starting task synchronization with TimeCamp")
+
+	timecamp_tasks, err := get_timecamp_tasks()
+	if err != nil {
+		return fmt.Errorf("failed to fetch tasks from TimeCamp: %w", err)
+	}
+
+	if len(timecamp_tasks) == 0 {
+		logger.Warn("No tasks received from TimeCamp API")
+		return nil // Not an error, just no data
+	}
 
 	db, err := GetDB()
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("failed to open database connection: %w", err)
 	}
-	defer db.Close()
+	defer CloseWithErrorLog(db, "database connection")
 
 	// Use INSERT OR IGNORE to handle existing tasks
 	insert_statement, err := db.Prepare("INSERT OR IGNORE INTO tasks values(?, ?, ?, ?, ?, ?)")
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("failed to prepare insert statement: %w", err)
 	}
+	defer CloseWithErrorLog(insert_statement, "prepared statement")
 
 	index := 0
+	errorCount := 0
 	for _, task := range timecamp_tasks {
 		// Check if task already exists to track changes
 		var existingName string
@@ -59,26 +66,62 @@ func SyncTasksToDatabase() {
 			// New task
 			_, err := insert_statement.Exec(task.TaskID, task.ParentID, task.AssignedBy, task.Name, task.Level, task.RootGroupID)
 			if err != nil {
-				panic(err)
+				logger.Errorf("Failed to insert task %d (%s): %v", task.TaskID, task.Name, err)
+				errorCount++
+				continue
 			}
 			// Track new task creation
-			TrackTaskChange(db, task.TaskID, task.Name, "created", "", task.Name)
+			if trackErr := TrackTaskChange(db, task.TaskID, task.Name, "created", "", task.Name); trackErr != nil {
+				logger.Errorf("Failed to track task creation for task %d: %v", task.TaskID, trackErr)
+			}
 		} else if err != nil {
-			panic(err)
+			logger.Errorf("Failed to check existing task %d: %v", task.TaskID, err)
+			errorCount++
+			continue
 		} else if existingName != task.Name {
 			// Task name changed, update it
 			updateQuery := "UPDATE tasks SET name = ? WHERE task_id = ?"
 			_, err := db.Exec(updateQuery, task.Name, task.TaskID)
 			if err != nil {
-				panic(err)
+				logger.Errorf("Failed to update task %d name: %v", task.TaskID, err)
+				errorCount++
+				continue
 			}
 			// Track name change
-			TrackTaskChange(db, task.TaskID, task.Name, "name_changed", existingName, task.Name)
+			if trackErr := TrackTaskChange(db, task.TaskID, task.Name, "name_changed", existingName, task.Name); trackErr != nil {
+				logger.Errorf("Failed to track task name change for task %d: %v", task.TaskID, trackErr)
+			}
 		}
 		index++
 	}
-	fmt.Printf("We've imported %d tasks\n", index)
+
+	logger.Infof("Task sync completed: %d tasks processed, %d errors encountered", index, errorCount)
+
+	if errorCount > 0 && errorCount == len(timecamp_tasks) {
+		return fmt.Errorf("all task operations failed during sync")
+	}
+
+	return nil
 }
+
+// Example of critical close error handling (for reference - not changing existing code)
+// func criticalDatabaseOperation() error {
+//     db, err := GetDB()
+//     if err != nil {
+//         return err
+//     }
+//
+//     // For critical operations where close errors matter
+//     defer func() {
+//         if closeErr := db.Close(); closeErr != nil {
+//             // In critical operations, you might want to return this error
+//             logger.Errorf("Critical: Failed to close database: %v", closeErr)
+//         }
+//     }()
+//
+//     // ... critical operations
+//     return nil
+// }
 
 // TrackTaskChange records a task change in the history table
 func TrackTaskChange(db *sql.DB, taskID int, taskName, changeType, previousValue, currentValue string) error {
@@ -93,32 +136,56 @@ func TrackTaskChange(db *sql.DB, taskID int, taskName, changeType, previousValue
 	return nil
 }
 
-func get_timecamp_tasks() []JsonTask {
+func get_timecamp_tasks() ([]JsonTask, error) {
+	logger := NewLogger()
+
 	timecamp_api_url := "https://app.timecamp.com/third_party/api"
 	get_all_tasks_url := timecamp_api_url + "/tasks"
 
-	auth_bearer := "Bearer " + os.Getenv("TIMECAMP_API_KEY")
+	// Validate API key exists
+	apiKey := os.Getenv("TIMECAMP_API_KEY")
+	if apiKey == "" {
+		return nil, fmt.Errorf("TIMECAMP_API_KEY environment variable not set")
+	}
+
+	auth_bearer := "Bearer " + apiKey
 
 	request, err := http.NewRequest("GET", get_all_tasks_url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
+	}
+
 	request.Header.Add("Authorization", auth_bearer)
 	request.Header.Add("Accept", "application/json")
 
+	logger.Debugf("Fetching tasks from TimeCamp API: %s", get_all_tasks_url)
+
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
-		panic(err)
+		return nil, fmt.Errorf("HTTP request to TimeCamp API failed: %w", err)
 	}
+	defer CloseWithErrorLog(response.Body, "HTTP response body")
 
-	defer response.Body.Close()
+	// Check HTTP status code
+	if response.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(response.Body)
+		return nil, fmt.Errorf("TimeCamp API returned status %d: %s", response.StatusCode, string(body))
+	}
 
 	body, err := io.ReadAll(response.Body)
 	if err != nil {
-		panic(err)
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if len(body) == 0 {
+		logger.Warn("Empty response from TimeCamp API")
+		return []JsonTask{}, nil
 	}
 
 	// Unmarshal into a map first
 	taskMap := make(map[string]JsonTask)
 	if err := json.Unmarshal(body, &taskMap); err != nil {
-		panic(err)
+		return nil, fmt.Errorf("failed to parse JSON response from TimeCamp: %w", err)
 	}
 
 	// Convert the map to a slice
@@ -127,10 +194,7 @@ func get_timecamp_tasks() []JsonTask {
 		tasks = append(tasks, task)
 	}
 
-	// Output the slice to check
-	for _, t := range tasks {
-		fmt.Printf("%+v\n", t)
-	}
+	logger.Debugf("Successfully fetched %d tasks from TimeCamp", len(tasks))
 
-	return tasks
+	return tasks, nil
 }
