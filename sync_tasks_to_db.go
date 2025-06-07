@@ -45,7 +45,7 @@ func SyncTasksToDatabase() error {
 	if err != nil {
 		return fmt.Errorf("failed to open database connection: %w", err)
 	}
-	defer CloseWithErrorLog(db, "database connection")
+	// Note: Using shared database connection, no need to close here
 
 	// Use INSERT OR IGNORE to handle existing tasks
 	insertStatement, err := db.Prepare("INSERT OR IGNORE INTO tasks values(?, ?, ?, ?, ?, ?)")

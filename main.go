@@ -62,6 +62,13 @@ func main() {
 
 	logger.Info("Starting Observe-Yor-Estimates application")
 
+	// Initialize database connection once at startup
+	_, err = GetDB()
+	if err != nil {
+		logger.Fatalf("Critical error: Failed to initialize database: %v", err)
+	}
+	logger.Info("Database connection initialized successfully")
+
 	// Check for command line arguments
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -239,6 +246,14 @@ func main() {
 			// Stop the cron scheduler first
 			logger.Info("Stopping cron scheduler...")
 			cronScheduler.Stop()
+
+			// Close the database connection
+			logger.Info("Closing database connection...")
+			if err := CloseDB(); err != nil {
+				logger.Errorf("Error closing database: %v", err)
+			} else {
+				logger.Info("Database connection closed successfully")
+			}
 
 			// Cleanly close the connection by sending a close message and then
 			// waiting (with timeout) for the server to close the connection.

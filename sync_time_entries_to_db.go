@@ -139,7 +139,7 @@ func SyncTimeEntriesToDatabase() error {
 	if err != nil {
 		return fmt.Errorf("failed to open database connection: %w", err)
 	}
-	defer CloseWithErrorLog(db, "database connection")
+	// Note: Using shared database connection, no need to close here
 
 	// Ensure time_entries table exists
 	if err := migrateTimeEntriesTable(db); err != nil {

@@ -43,7 +43,7 @@ func SendDailySlackUpdate() {
 		sendFailureNotification("Database connection failed", err)
 		return
 	}
-	defer CloseWithErrorLog(db, "database connection")
+	// Note: Using shared database connection, no need to close here
 
 	taskInfos, err := getTaskTimeChanges(db)
 	if err != nil {
@@ -173,7 +173,7 @@ func formatSlackMessage(taskInfos []TaskTimeInfo) SlackMessage {
 			percentage, _, err := calculateTimeUsagePercentage(task)
 			if err == nil {
 				emoji, description, _ := getColorIndicator(percentage)
-				messageText.WriteString(fmt.Sprintf("\n• Usage: %s %s %s", emoji, description))
+				messageText.WriteString(fmt.Sprintf("\n• Usage: %s %s", emoji, description))
 			}
 			messageText.WriteString("\n")
 		}

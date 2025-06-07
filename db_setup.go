@@ -4,8 +4,17 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"sync"
 
 	_ "github.com/mattn/go-sqlite3"
+)
+
+// Global database connection
+var (
+	globalDB *sql.DB
+	dbMutex  sync.RWMutex
+	dbOnce   sync.Once
+	initErr  error
 )
 
 // getDBPath returns the database path from environment variable or default
@@ -16,41 +25,76 @@ func getDBPath() string {
 	return "./oye.db" // default path
 }
 
-// GetDB opens a connection to the SQLite database, creates or migrates tables as needed, and returns the DB handle.
+// GetDB returns a shared connection to the SQLite database, creating it once if needed
 func GetDB() (*sql.DB, error) {
-	logger := NewLogger()
+	dbOnce.Do(func() {
+		logger := NewLogger()
+		dbPath := getDBPath()
+		logger.Debugf("Initializing database connection to: %s", dbPath)
 
-	dbPath := getDBPath()
-	logger.Debugf("Opening database connection to: %s", dbPath)
+		db, err := sql.Open("sqlite3", dbPath)
+		if err != nil {
+			initErr = fmt.Errorf("failed to open database at %s: %w", dbPath, err)
+			return
+		}
 
-	db, err := sql.Open("sqlite3", dbPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open database at %s: %w", dbPath, err)
+		// Test the connection
+		if err := db.Ping(); err != nil {
+			db.Close()
+			initErr = fmt.Errorf("failed to ping database: %w", err)
+			return
+		}
+
+		if err := migrateTasksTable(db); err != nil {
+			db.Close()
+			initErr = fmt.Errorf("failed to migrate tasks table: %w", err)
+			return
+		}
+
+		if err := migrateTaskHistoryTable(db); err != nil {
+			db.Close()
+			initErr = fmt.Errorf("failed to migrate task_history table: %w", err)
+			return
+		}
+
+		if err := migrateTimeEntriesTable(db); err != nil {
+			db.Close()
+			initErr = fmt.Errorf("failed to migrate time_entries table: %w", err)
+			return
+		}
+
+		logger.Info("Database connection established and tables migrated successfully")
+
+		dbMutex.Lock()
+		globalDB = db
+		dbMutex.Unlock()
+	})
+
+	if initErr != nil {
+		return nil, initErr
 	}
 
-	// Test the connection
-	if err := db.Ping(); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("failed to ping database: %w", err)
+	dbMutex.RLock()
+	defer dbMutex.RUnlock()
+
+	if globalDB == nil {
+		return nil, fmt.Errorf("database connection not initialized")
 	}
 
-	if err := migrateTasksTable(db); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("failed to migrate tasks table: %w", err)
-	}
+	return globalDB, nil
+}
 
-	if err := migrateTaskHistoryTable(db); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("failed to migrate task_history table: %w", err)
-	}
+// CloseDB closes the global database connection
+func CloseDB() error {
+	dbMutex.Lock()
+	defer dbMutex.Unlock()
 
-	if err := migrateTimeEntriesTable(db); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("failed to migrate time_entries table: %w", err)
+	if globalDB != nil {
+		err := globalDB.Close()
+		globalDB = nil
+		return err
 	}
-
-	logger.Debug("Database connection established and tables migrated successfully")
-	return db, nil
+	return nil
 }
 
 // migrateTasksTable ensures the tasks table exists and matches the desired schema.
@@ -79,13 +123,13 @@ func createTasksTable(db *sql.DB) error {
 	logger := NewLogger()
 
 	createTableSQL := `CREATE TABLE tasks (
-		task_id INTEGER PRIMARY KEY,
-		parent_id INT NOT NULL,
-		assigned_by INT NOT NULL,
-		name STRING NOT NULL,
-		level INT NOT NULL,
-		root_group_id INT NOT NULL
-	);`
+task_id INTEGER PRIMARY KEY,
+parent_id INT NOT NULL,
+assigned_by INT NOT NULL,
+name STRING NOT NULL,
+level INT NOT NULL,
+root_group_id INT NOT NULL
+);`
 
 	_, err := db.Exec(createTableSQL)
 	if err != nil {
@@ -122,15 +166,15 @@ func createTaskHistoryTable(db *sql.DB) error {
 	logger := NewLogger()
 
 	createTableSQL := `CREATE TABLE task_history (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		task_id INTEGER NOT NULL,
-		name STRING NOT NULL,
-		timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-		change_type STRING NOT NULL,
-		previous_value TEXT,
-		current_value TEXT,
-		FOREIGN KEY (task_id) REFERENCES tasks(task_id)
-	);`
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+task_id INTEGER NOT NULL,
+name STRING NOT NULL,
+timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+change_type STRING NOT NULL,
+previous_value TEXT,
+current_value TEXT,
+FOREIGN KEY (task_id) REFERENCES tasks(task_id)
+);`
 
 	_, err := db.Exec(createTableSQL)
 	if err != nil {
@@ -167,19 +211,19 @@ func createTimeEntriesTable(db *sql.DB) error {
 	logger := NewLogger()
 
 	createTableSQL := `CREATE TABLE time_entries (
-		id INTEGER PRIMARY KEY,
-		task_id INTEGER NOT NULL,
-		user_id INTEGER NOT NULL,
-		date TEXT NOT NULL,
-		start_time TEXT,
-		end_time TEXT,
-		duration INTEGER NOT NULL,
-		description TEXT,
-		billable INTEGER DEFAULT 0,
-		locked INTEGER DEFAULT 0,
-		modify_time TEXT,
-		FOREIGN KEY (task_id) REFERENCES tasks(task_id)
-	);`
+id INTEGER PRIMARY KEY,
+task_id INTEGER NOT NULL,
+user_id INTEGER NOT NULL,
+date TEXT NOT NULL,
+start_time TEXT,
+end_time TEXT,
+duration INTEGER NOT NULL,
+description TEXT,
+billable INTEGER DEFAULT 0,
+locked INTEGER DEFAULT 0,
+modify_time TEXT,
+FOREIGN KEY (task_id) REFERENCES tasks(task_id)
+);`
 
 	_, err := db.Exec(createTableSQL)
 	if err != nil {
