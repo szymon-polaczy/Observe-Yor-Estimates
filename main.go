@@ -12,6 +12,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/joho/godotenv"
+	"github.com/robfig/cron/v3"
 )
 
 type SOCKET_URL_RESPONSE struct {
@@ -43,27 +44,42 @@ type TEST_SLACK_PAYLOAD_RESPONSE struct {
 }
 
 func main() {
+	// Run initial sync
 	SyncTasksToDatabase()
+
+	// Set up cron scheduler
+	cronScheduler := cron.New()
+
+	// Schedule SyncTasksToDatabase to run every 5 minutes
+	// Using "*/5 * * * *" to run at :00, :05, :10, :15, :20, etc.
+	_, err := cronScheduler.AddFunc("*/5 * * * *", SyncTasksToDatabase)
+	if err != nil {
+		log.Fatal("Failed to schedule cron job:", err)
+	}
+
+	// Start the cron scheduler
+	cronScheduler.Start()
+	defer cronScheduler.Stop()
 
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)
 
-	err := godotenv.Load()
+	err = godotenv.Load()
 	if err != nil {
 		panic("Error loading .env file")
 	}
 
 	new_socket_url := get_slack_socket_url()
 
-	c, _, err := websocket.DefaultDialer.Dial(new_socket_url, nil)
+	conn, _, err := websocket.DefaultDialer.Dial(new_socket_url, nil)
 	if err != nil {
 		log.Fatal("dial:", err)
 	}
-	defer c.Close()
+	defer conn.Close()
 
 	go func() {
 		for {
-			_, message, err := c.ReadMessage()
+			_, message, err := conn.ReadMessage()
 			if err != nil {
 				log.Println("read:", err)
 				return
@@ -97,7 +113,7 @@ func main() {
 					panic(err)
 				}
 
-				err = c.WriteMessage(websocket.TextMessage, []byte(json_response))
+				err = conn.WriteMessage(websocket.TextMessage, []byte(json_response))
 				if err != nil {
 					log.Println("write:", err)
 					return
@@ -115,7 +131,7 @@ func main() {
 
 			// Cleanly close the connection by sending a close message and then
 			// waiting (with timeout) for the server to close the connection.
-			err := c.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+			err := conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 			if err != nil {
 				log.Println("write close:", err)
 				return

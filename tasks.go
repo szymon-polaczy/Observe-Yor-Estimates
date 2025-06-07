@@ -41,7 +41,8 @@ func SyncTasksToDatabase() {
 	}
 	defer db.Close()
 
-	insert_statement, err := db.Prepare("INSERT INTO tasks values(?, ?, ?, ?, ?, ?)")
+	// Use INSERT OR IGNORE to handle existing tasks
+	insert_statement, err := db.Prepare("INSERT OR IGNORE INTO tasks values(?, ?, ?, ?, ?, ?)")
 	if err != nil {
 		panic(err)
 	}
