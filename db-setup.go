@@ -37,23 +37,8 @@ func migrateTasksTable(db *sql.DB) error {
 		return err
 	}
 
-	// Table exists, check schema (simple check: count columns)
-	cols, err := db.Query("PRAGMA table_info(tasks);")
-	if err != nil {
-		return err
-	}
-	defer cols.Close()
-	colCount := 0
-	for cols.Next() {
-		colCount++
-	}
-	if colCount != 6 {
-		// Drop and recreate for now (simple migration)
-		if _, err := db.Exec("DROP TABLE IF EXISTS tasks;"); err != nil {
-			return err
-		}
-		return createTasksTable(db)
-	}
+	// Table exists, for now we don't do migration logic,
+	// but we could add checks for schema changes in the future.
 	return nil
 }
 
