@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -49,13 +50,47 @@ func SyncTasksToDatabase() {
 
 	index := 0
 	for _, task := range timecamp_tasks {
-		_, err := insert_statement.Exec(task.TaskID, task.ParentID, task.AssignedBy, task.Name, task.Level, task.RootGroupID)
-		if err != nil {
+		// Check if task already exists to track changes
+		var existingName string
+		checkQuery := "SELECT name FROM tasks WHERE task_id = ?"
+		err := db.QueryRow(checkQuery, task.TaskID).Scan(&existingName)
+
+		if err == sql.ErrNoRows {
+			// New task
+			_, err := insert_statement.Exec(task.TaskID, task.ParentID, task.AssignedBy, task.Name, task.Level, task.RootGroupID)
+			if err != nil {
+				panic(err)
+			}
+			// Track new task creation
+			TrackTaskChange(db, task.TaskID, task.Name, "created", "", task.Name)
+		} else if err != nil {
 			panic(err)
+		} else if existingName != task.Name {
+			// Task name changed, update it
+			updateQuery := "UPDATE tasks SET name = ? WHERE task_id = ?"
+			_, err := db.Exec(updateQuery, task.Name, task.TaskID)
+			if err != nil {
+				panic(err)
+			}
+			// Track name change
+			TrackTaskChange(db, task.TaskID, task.Name, "name_changed", existingName, task.Name)
 		}
 		index++
 	}
 	fmt.Printf("We've imported %d tasks\n", index)
+}
+
+// TrackTaskChange records a task change in the history table
+func TrackTaskChange(db *sql.DB, taskID int, taskName, changeType, previousValue, currentValue string) error {
+	query := `INSERT INTO task_history (task_id, name, change_type, previous_value, current_value) 
+			  VALUES (?, ?, ?, ?, ?)`
+
+	_, err := db.Exec(query, taskID, taskName, changeType, previousValue, currentValue)
+	if err != nil {
+		return fmt.Errorf("failed to track task change: %w", err)
+	}
+
+	return nil
 }
 
 func get_timecamp_tasks() []JsonTask {

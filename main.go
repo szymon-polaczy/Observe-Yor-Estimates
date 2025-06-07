@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"io"
 	"log"
-
-	"net/http"
 	"os"
 	"os/signal"
+
+	"net/http"
 
 	"github.com/gorilla/websocket"
 	"github.com/joho/godotenv"
@@ -29,8 +29,10 @@ type Payload struct {
 }
 
 type Block struct {
-	Type string `json:"type"`
-	Text Text   `json:"text"`
+	Type     string    `json:"type"`
+	Text     *Text     `json:"text,omitempty"`
+	Fields   []Field   `json:"fields,omitempty"`
+	Elements []Element `json:"elements,omitempty"`
 }
 
 type Text struct {
@@ -44,6 +46,20 @@ type TEST_SLACK_PAYLOAD_RESPONSE struct {
 }
 
 func main() {
+	err := godotenv.Load()
+	if err != nil {
+		panic("Error loading .env file")
+	}
+
+	// Check for command line arguments
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "daily-update":
+			SendDailySlackUpdate()
+			return
+		}
+	}
+
 	// Run initial sync
 	SyncTasksToDatabase()
 
@@ -52,9 +68,15 @@ func main() {
 
 	// Schedule SyncTasksToDatabase to run every 5 minutes
 	// Using "*/5 * * * *" to run at :00, :05, :10, :15, :20, etc.
-	_, err := cronScheduler.AddFunc("*/5 * * * *", SyncTasksToDatabase)
+	_, err = cronScheduler.AddFunc("*/5 * * * *", SyncTasksToDatabase)
 	if err != nil {
 		log.Fatal("Failed to schedule cron job:", err)
+	}
+
+	// Schedule daily Slack update to run at 6 AM every day
+	_, err = cronScheduler.AddFunc("0 6 * * *", SendDailySlackUpdate)
+	if err != nil {
+		log.Fatal("Failed to schedule daily Slack update:", err)
 	}
 
 	// Start the cron scheduler
@@ -63,11 +85,6 @@ func main() {
 
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)
-
-	err = godotenv.Load()
-	if err != nil {
-		panic("Error loading .env file")
-	}
 
 	new_socket_url := get_slack_socket_url()
 
@@ -99,7 +116,7 @@ func main() {
 						[]Block{
 							Block{
 								Type: "section",
-								Text: Text{
+								Text: &Text{
 									Type: "mrkdwn",
 									Text: "**Test text**",
 								},
