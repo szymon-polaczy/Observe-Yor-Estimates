@@ -168,6 +168,14 @@ func formatSlackMessage(taskInfos []TaskTimeInfo) SlackMessage {
 			if task.EstimationStatus != "" {
 				messageText.WriteString(fmt.Sprintf(" (%s)", task.EstimationStatus))
 			}
+
+			// Add color indicator to plain text version
+			percentage, _, err := calculateTimeUsagePercentage(task)
+			if err == nil {
+				emoji, description, _ := getColorIndicator(percentage)
+				progressBar := generateProgressBar(percentage)
+				messageText.WriteString(fmt.Sprintf("\n• Usage: %s %s %s", emoji, description, progressBar))
+			}
 			messageText.WriteString("\n")
 		}
 		messageText.WriteString("\n")
@@ -198,11 +206,30 @@ func formatTaskBlock(task TaskTimeInfo) []Block {
 		Text: fmt.Sprintf("*Today:*\n%s", task.TodayTime),
 	})
 
+	// Calculate percentage and get color indicator
+	var accessory *Accessory
+	estimationText := ""
+
 	if task.EstimationInfo != "" {
-		estimationText := task.EstimationInfo
+		estimationText = task.EstimationInfo
 		if task.EstimationStatus != "" {
 			estimationText += fmt.Sprintf("\n_(%s)_", task.EstimationStatus)
 		}
+
+		// Try to calculate percentage usage
+		percentage, _, err := calculateTimeUsagePercentage(task)
+		if err == nil {
+			emoji, _, _ := getColorIndicator(percentage)
+
+			accessory = &Accessory{
+				Type: "button",
+				Text: &Text{
+					Type: "plain_text",
+					Text: fmt.Sprintf("%s %.0f%%", emoji, percentage),
+				},
+			}
+		}
+
 		fields = append(fields, Field{
 			Type: "mrkdwn",
 			Text: fmt.Sprintf("*Estimation:*\n%s", estimationText),
@@ -214,14 +241,18 @@ func formatTaskBlock(task TaskTimeInfo) []Block {
 		})
 	}
 
-	return []Block{
-		{
-			Type: "section",
-			Text: &Text{
-				Type: "mrkdwn",
-				Text: fmt.Sprintf("*%s*", task.Name),
-			},
+	// Create the main section block
+	sectionBlock := Block{
+		Type: "section",
+		Text: &Text{
+			Type: "mrkdwn",
+			Text: fmt.Sprintf("*%s*", task.Name),
 		},
+		Accessory: accessory,
+	}
+
+	return []Block{
+		sectionBlock,
 		{
 			Type:   "section",
 			Fields: fields,
@@ -242,6 +273,12 @@ type Element struct {
 type Field struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
+}
+
+// Accessory represents a Slack block accessory element
+type Accessory struct {
+	Type string `json:"type"`
+	Text *Text  `json:"text,omitempty"`
 }
 
 // sendSlackMessage sends a message to Slack using the webhook
@@ -328,4 +365,113 @@ func sendNoChangesNotification() error {
 	}
 
 	return sendSlackMessage(message)
+}
+
+// calculateTimeUsagePercentage calculates the percentage of estimation used based on total time spent
+func calculateTimeUsagePercentage(task TaskTimeInfo) (float64, int, error) {
+	logger := NewLogger()
+
+	// Parse the pessimistic (maximum) estimation from task name
+	re := regexp.MustCompile(`\[(\d+)-(\d+)\]`)
+	matches := re.FindStringSubmatch(task.Name)
+
+	if len(matches) != 3 {
+		return 0, 0, fmt.Errorf("no estimation pattern found")
+	}
+
+	pessimistic, err := strconv.Atoi(matches[2])
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to parse pessimistic estimation: %w", err)
+	}
+
+	// Convert time strings back to seconds for calculation
+	yesterdaySeconds := parseTimeToSeconds(task.YesterdayTime)
+	todaySeconds := parseTimeToSeconds(task.TodayTime)
+	totalSeconds := yesterdaySeconds + todaySeconds
+
+	// Convert pessimistic estimation from hours to seconds
+	pessimisticSeconds := pessimistic * 3600
+
+	// Calculate percentage
+	percentage := (float64(totalSeconds) / float64(pessimisticSeconds)) * 100
+
+	logger.Debugf("Task '%s': %d total seconds vs %d pessimistic seconds = %.1f%%",
+		task.Name, totalSeconds, pessimisticSeconds, percentage)
+
+	return percentage, pessimisticSeconds, nil
+}
+
+// parseTimeToSeconds converts time strings like "1h 30m" or "45m" back to seconds
+func parseTimeToSeconds(timeStr string) int {
+	if timeStr == "0h 0m" {
+		return 0
+	}
+
+	var hours, minutes int
+
+	// Try to parse "Xh Ym" format
+	if strings.Contains(timeStr, "h") && strings.Contains(timeStr, "m") {
+		fmt.Sscanf(timeStr, "%dh %dm", &hours, &minutes)
+	} else if strings.Contains(timeStr, "h") {
+		// Just hours
+		fmt.Sscanf(timeStr, "%dh", &hours)
+	} else if strings.Contains(timeStr, "m") {
+		// Just minutes
+		fmt.Sscanf(timeStr, "%dm", &minutes)
+	}
+
+	return hours*3600 + minutes*60
+}
+
+// getColorIndicator returns emoji and formatting based on percentage
+func getColorIndicator(percentage float64) (string, string, bool) {
+	var emoji, description string
+	var isBold bool
+
+	switch {
+	case percentage == 0:
+		emoji = "⚫" // Black circle
+		description = "0% used"
+	case percentage > 0 && percentage <= 25:
+		emoji = "🟢" // Green circle
+		description = fmt.Sprintf("%.0f%% used", percentage)
+	case percentage > 25 && percentage <= 50:
+		emoji = "🟡" // Yellow circle
+		description = fmt.Sprintf("%.0f%% used", percentage)
+	case percentage > 50 && percentage < 100:
+		emoji = "🟠" // Orange circle
+		description = fmt.Sprintf("%.0f%% used", percentage)
+	case percentage == 100:
+		emoji = "🔴" // Red circle
+		description = "100% used"
+	case percentage > 100:
+		emoji = "🔴" // Red circle
+		description = fmt.Sprintf("**%.0f%% OVER**", percentage)
+		isBold = true
+	default:
+		emoji = "⚫"
+		description = "unknown"
+	}
+
+	return emoji, description, isBold
+}
+
+// generateProgressBar creates a visual progress bar for the percentage
+func generateProgressBar(percentage float64) string {
+	const barLength = 10
+	filledBars := int((percentage / 100) * float64(barLength))
+
+	if filledBars > barLength {
+		filledBars = barLength
+	}
+
+	var bar strings.Builder
+	for i := 0; i < filledBars; i++ {
+		bar.WriteString("█")
+	}
+	for i := filledBars; i < barLength; i++ {
+		bar.WriteString("░")
+	}
+
+	return bar.String()
 }

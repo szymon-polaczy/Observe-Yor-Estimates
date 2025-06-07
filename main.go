@@ -28,10 +28,11 @@ type Payload struct {
 }
 
 type Block struct {
-	Type     string    `json:"type"`
-	Text     *Text     `json:"text,omitempty"`
-	Fields   []Field   `json:"fields,omitempty"`
-	Elements []Element `json:"elements,omitempty"`
+	Type      string     `json:"type"`
+	Text      *Text      `json:"text,omitempty"`
+	Fields    []Field    `json:"fields,omitempty"`
+	Elements  []Element  `json:"elements,omitempty"`
+	Accessory *Accessory `json:"accessory,omitempty"`
 }
 
 type Text struct {
@@ -84,9 +85,13 @@ func main() {
 			}
 			logger.Info("Tasks sync completed successfully")
 			return
+		case "test-colors":
+			logger.Info("Running color indicator tests")
+			runTests()
+			return
 		default:
 			logger.Warnf("Unknown command line argument: %s", os.Args[1])
-			logger.Info("Available commands: daily-update, sync-time-entries, sync-tasks")
+			logger.Info("Available commands: daily-update, sync-time-entries, sync-tasks, test-colors")
 			return
 		}
 	}
