@@ -222,6 +222,10 @@ func main() {
 		case <-interrupt:
 			logger.Info("Received interrupt signal, shutting down gracefully...")
 
+			// Stop the cron scheduler first
+			logger.Info("Stopping cron scheduler...")
+			cronScheduler.Stop()
+
 			// Cleanly close the connection by sending a close message and then
 			// waiting (with timeout) for the server to close the connection.
 			err := conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
