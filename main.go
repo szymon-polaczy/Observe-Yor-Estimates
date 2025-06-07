@@ -102,9 +102,24 @@ func main() {
 	// Set up cron scheduler
 	cronScheduler := cron.New()
 
-	// Schedule SyncTasksToDatabase to run every 5 minutes
-	// Using "*/5 * * * *" to run at :00, :05, :10, :15, :20, etc.
-	_, err = cronScheduler.AddFunc("*/5 * * * *", func() {
+	// Get cron schedules from environment variables or use defaults
+	taskSyncSchedule := os.Getenv("TASK_SYNC_SCHEDULE")
+	if taskSyncSchedule == "" {
+		taskSyncSchedule = "*/5 * * * *" // default: every 5 minutes
+	}
+
+	timeEntriesSyncSchedule := os.Getenv("TIME_ENTRIES_SYNC_SCHEDULE")
+	if timeEntriesSyncSchedule == "" {
+		timeEntriesSyncSchedule = "*/10 * * * *" // default: every 10 minutes
+	}
+
+	dailyUpdateSchedule := os.Getenv("DAILY_UPDATE_SCHEDULE")
+	if dailyUpdateSchedule == "" {
+		dailyUpdateSchedule = "0 6 * * *" // default: 6 AM daily
+	}
+
+	// Schedule SyncTasksToDatabase to run based on configured schedule
+	_, err = cronScheduler.AddFunc(taskSyncSchedule, func() {
 		logger.Debug("Running scheduled task sync")
 		if err := SyncTasksToDatabase(); err != nil {
 			logger.Errorf("Scheduled task sync failed: %v", err)
@@ -114,9 +129,8 @@ func main() {
 		logger.Fatalf("Critical error: Failed to schedule task sync cron job: %v", err)
 	}
 
-	// Schedule SyncTimeEntriesToDatabase to run every 10 minutes
-	// Using "*/10 * * * *" to run at :00, :10, :20, :30, :40, :50
-	_, err = cronScheduler.AddFunc("*/10 * * * *", func() {
+	// Schedule SyncTimeEntriesToDatabase to run based on configured schedule
+	_, err = cronScheduler.AddFunc(timeEntriesSyncSchedule, func() {
 		logger.Debug("Running scheduled time entries sync")
 		if err := SyncTimeEntriesToDatabase(); err != nil {
 			logger.Errorf("Scheduled time entries sync failed: %v", err)
@@ -126,8 +140,8 @@ func main() {
 		logger.Fatalf("Critical error: Failed to schedule time entries sync cron job: %v", err)
 	}
 
-	// Schedule daily Slack update to run at 6 AM every day
-	_, err = cronScheduler.AddFunc("0 6 * * *", func() {
+	// Schedule daily Slack update to run based on configured schedule
+	_, err = cronScheduler.AddFunc(dailyUpdateSchedule, func() {
 		logger.Debug("Running scheduled daily Slack update")
 		SendDailySlackUpdate()
 	})
@@ -243,7 +257,11 @@ func main() {
 func getSlackSocketURL() (string, error) {
 	logger := NewLogger()
 
-	slackURL := "https://slack.com/api/apps.connections.open"
+	// Get Slack API URL from environment variable or use default
+	slackURL := os.Getenv("SLACK_API_URL")
+	if slackURL == "" {
+		slackURL = "https://slack.com/api/apps.connections.open"
+	}
 
 	// Validate Slack token exists
 	slackToken := os.Getenv("SLACK_TOKEN")

@@ -173,8 +173,7 @@ func formatSlackMessage(taskInfos []TaskTimeInfo) SlackMessage {
 			percentage, _, err := calculateTimeUsagePercentage(task)
 			if err == nil {
 				emoji, description, _ := getColorIndicator(percentage)
-				progressBar := generateProgressBar(percentage)
-				messageText.WriteString(fmt.Sprintf("\n• Usage: %s %s %s", emoji, description, progressBar))
+				messageText.WriteString(fmt.Sprintf("\n• Usage: %s %s %s", emoji, description))
 			}
 			messageText.WriteString("\n")
 		}
@@ -459,24 +458,4 @@ func getColorIndicator(percentage float64) (string, string, bool) {
 	}
 
 	return emoji, description, isBold
-}
-
-// generateProgressBar creates a visual progress bar for the percentage
-func generateProgressBar(percentage float64) string {
-	const barLength = 10
-	filledBars := int((percentage / 100) * float64(barLength))
-
-	if filledBars > barLength {
-		filledBars = barLength
-	}
-
-	var bar strings.Builder
-	for i := 0; i < filledBars; i++ {
-		bar.WriteString("█")
-	}
-	for i := filledBars; i < barLength; i++ {
-		bar.WriteString("░")
-	}
-
-	return bar.String()
 }

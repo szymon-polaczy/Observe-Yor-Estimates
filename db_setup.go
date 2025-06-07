@@ -3,16 +3,24 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"os"
 
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const dbPath = "./oye.db"
+// getDBPath returns the database path from environment variable or default
+func getDBPath() string {
+	if path := os.Getenv("DATABASE_PATH"); path != "" {
+		return path
+	}
+	return "./oye.db" // default path
+}
 
 // GetDB opens a connection to the SQLite database, creates or migrates tables as needed, and returns the DB handle.
 func GetDB() (*sql.DB, error) {
 	logger := NewLogger()
 
+	dbPath := getDBPath()
 	logger.Debugf("Opening database connection to: %s", dbPath)
 
 	db, err := sql.Open("sqlite3", dbPath)

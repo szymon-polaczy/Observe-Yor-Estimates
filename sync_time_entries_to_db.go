@@ -207,7 +207,11 @@ func SyncTimeEntriesToDatabase() error {
 func getTimeCampTimeEntries(fromDate, toDate string) ([]JsonTimeEntry, error) {
 	logger := NewLogger()
 
-	timecampAPIURL := "https://app.timecamp.com/third_party/api"
+	// Get TimeCamp API URL from environment variable or use default
+	timecampAPIURL := os.Getenv("TIMECAMP_API_URL")
+	if timecampAPIURL == "" {
+		timecampAPIURL = "https://app.timecamp.com/third_party/api"
+	}
 	getTimeEntriesURL := fmt.Sprintf("%s/entries", timecampAPIURL)
 
 	// Validate API key exists

@@ -7,7 +7,13 @@ import (
 
 // validateRequiredEnvVars checks that all required environment variables are set
 func validateRequiredEnvVars() error {
-	required := []string{"SLACK_TOKEN", "SLACK_WEBHOOK_URL", "TIMECAMP_API_KEY"}
+	required := []string{
+		"SLACK_TOKEN",
+		"SLACK_WEBHOOK_URL",
+		"TIMECAMP_API_KEY",
+		// Optional but recommended environment variables
+		// "DATABASE_PATH", "SLACK_API_URL", "TIMECAMP_API_URL" - these have defaults
+	}
 	var missing []string
 
 	for _, env := range required {
