@@ -85,17 +85,21 @@ For detailed information about the application's architecture and error handling
 
 - **[Error Handling Summary](Documentation/ERROR_HANDLING_SUMMARY.md)** - Comprehensive overview of error handling patterns and best practices implemented in the application
 - **[Close Error Handling](Documentation/CLOSE_ERROR_HANDLING.md)** - Detailed guide on resource cleanup patterns and close error handling strategies
+- **[Time Entries Implementation](Documentation/TIME_ENTRIES_IMPLEMENTATION.md)** - Detailed documentation of the TimeCamp time entries integration, API handling, and database synchronization
+- **[Time Entries Implementation](Documentation/TIME_ENTRIES_IMPLEMENTATION.md)** - Details about the TimeCamp time entries integration and real-time data synchronization
 
 ## Project Structure
 /home/haven/Documents/Observe-Yor-Estimates/
 ├── Documentation/
 │   ├── ERROR_HANDLING_SUMMARY.md
-│   └── CLOSE_ERROR_HANDLING.md
+│   ├── CLOSE_ERROR_HANDLING.md
+│   └── TIME_ENTRIES_IMPLEMENTATION.md
 ├── error_handling_utils.go        # Centralized error handling utilities
 ├── logger.go                      # Structured logging system
 ├── main.go                        # Main application with WebSocket handling
 ├── sync_tasks_to_db.go           # Task synchronization with proper error handling
-├── daily_slack_update.go         # Slack notifications with error handling
+├── sync_time_entries_to_db.go    # Time entries synchronization with TimeCamp API
+├── daily_slack_update.go         # Slack notifications with real time data
 ├── db-setup.go                   # Database operations with error handling
 └── README.md                     # Updated with documentation links
 

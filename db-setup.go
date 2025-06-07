@@ -36,6 +36,11 @@ func GetDB() (*sql.DB, error) {
 		return nil, fmt.Errorf("failed to migrate task_history table: %w", err)
 	}
 
+	if err := migrateTimeEntriesTable(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to migrate time_entries table: %w", err)
+	}
+
 	logger.Debug("Database connection established and tables migrated successfully")
 	return db, nil
 }
@@ -125,5 +130,54 @@ func createTaskHistoryTable(db *sql.DB) error {
 	}
 
 	logger.Info("Task history table created successfully")
+	return nil
+}
+
+// migrateTimeEntriesTable ensures the time_entries table exists and matches the desired schema.
+func migrateTimeEntriesTable(db *sql.DB) error {
+	logger := NewLogger()
+
+	// Check if table exists
+	row := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='time_entries';")
+	var name string
+	err := row.Scan(&name)
+	if err == sql.ErrNoRows {
+		// Table does not exist, create it
+		logger.Info("Time entries table does not exist, creating it")
+		return createTimeEntriesTable(db)
+	} else if err != nil {
+		return fmt.Errorf("error checking if time_entries table exists: %w", err)
+	}
+
+	logger.Debug("Time entries table already exists")
+	// Table exists, for now we don't do migration logic,
+	// but we could add checks for schema changes in the future.
+	return nil
+}
+
+func createTimeEntriesTable(db *sql.DB) error {
+	logger := NewLogger()
+
+	createTableSQL := `CREATE TABLE time_entries (
+		id INTEGER PRIMARY KEY,
+		task_id INTEGER NOT NULL,
+		user_id INTEGER NOT NULL,
+		date TEXT NOT NULL,
+		start_time TEXT,
+		end_time TEXT,
+		duration INTEGER NOT NULL,
+		description TEXT,
+		billable INTEGER DEFAULT 0,
+		locked INTEGER DEFAULT 0,
+		modify_time TEXT,
+		FOREIGN KEY (task_id) REFERENCES tasks(task_id)
+	);`
+
+	_, err := db.Exec(createTableSQL)
+	if err != nil {
+		return fmt.Errorf("failed to create time_entries table: %w", err)
+	}
+
+	logger.Info("Time entries table created successfully")
 	return nil
 }

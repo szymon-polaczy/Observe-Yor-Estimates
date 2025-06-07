@@ -68,8 +68,26 @@ func main() {
 			logger.Info("Running daily update command")
 			SendDailySlackUpdate()
 			return
+		case "sync-time-entries":
+			logger.Info("Running time entries sync command")
+			if err := SyncTimeEntriesToDatabase(); err != nil {
+				logger.Errorf("Time entries sync failed: %v", err)
+				os.Exit(1)
+			}
+			logger.Info("Time entries sync completed successfully")
+			return
+		case "sync-tasks":
+			logger.Info("Running tasks sync command")
+			if err := SyncTasksToDatabase(); err != nil {
+				logger.Errorf("Tasks sync failed: %v", err)
+				os.Exit(1)
+			}
+			logger.Info("Tasks sync completed successfully")
+			return
 		default:
 			logger.Warnf("Unknown command line argument: %s", os.Args[1])
+			logger.Info("Available commands: daily-update, sync-time-entries, sync-tasks")
+			return
 		}
 	}
 
@@ -93,6 +111,18 @@ func main() {
 	})
 	if err != nil {
 		logger.Fatalf("Critical error: Failed to schedule task sync cron job: %v", err)
+	}
+
+	// Schedule SyncTimeEntriesToDatabase to run every 10 minutes
+	// Using "*/10 * * * *" to run at :00, :10, :20, :30, :40, :50
+	_, err = cronScheduler.AddFunc("*/10 * * * *", func() {
+		logger.Debug("Running scheduled time entries sync")
+		if err := SyncTimeEntriesToDatabase(); err != nil {
+			logger.Errorf("Scheduled time entries sync failed: %v", err)
+		}
+	})
+	if err != nil {
+		logger.Fatalf("Critical error: Failed to schedule time entries sync cron job: %v", err)
 	}
 
 	// Schedule daily Slack update to run at 6 AM every day

@@ -86,61 +86,10 @@ func SendDailySlackUpdate() {
 func getTaskTimeChanges(db *sql.DB) ([]TaskTimeInfo, error) {
 	logger := NewLogger()
 
-	// For this example, we'll simulate task time data since we don't have actual time tracking
-	// In a real scenario, you'd query your time tracking data
-	query := `
-		SELECT t.task_id, t.name 
-		FROM tasks t 
-		WHERE t.task_id IN (
-			SELECT DISTINCT task_id 
-			FROM task_history 
-			WHERE DATE(timestamp) >= DATE('now', '-1 day')
-		)
-		LIMIT 10
-	`
+	// Get actual time entries data from the database
+	logger.Debug("Querying tasks with recent time entries")
 
-	logger.Debug("Querying tasks with recent changes")
-
-	rows, err := db.Query(query)
-	if err != nil {
-		return nil, fmt.Errorf("error querying tasks with recent changes: %w", err)
-	}
-	defer CloseWithErrorLog(rows, "database rows")
-
-	var taskInfos []TaskTimeInfo
-	errorCount := 0
-
-	for rows.Next() {
-		var taskInfo TaskTimeInfo
-		err := rows.Scan(&taskInfo.TaskID, &taskInfo.Name)
-		if err != nil {
-			logger.Errorf("Error scanning task row: %v", err)
-			errorCount++
-			continue
-		}
-
-		// Extract estimation information from task name
-		taskInfo.EstimationInfo, taskInfo.EstimationStatus = parseEstimation(taskInfo.Name)
-
-		// Simulate time data (in a real app, you'd get this from your time tracking system)
-		taskInfo.YesterdayTime = simulateTimeData("yesterday")
-		taskInfo.TodayTime = simulateTimeData("today")
-		taskInfo.StartTime = simulateTimeData("start")
-
-		taskInfos = append(taskInfos, taskInfo)
-	}
-
-	// Check for iteration errors
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error during rows iteration: %w", err)
-	}
-
-	if errorCount > 0 {
-		logger.Warnf("Encountered %d errors while processing task rows", errorCount)
-	}
-
-	logger.Debugf("Successfully retrieved %d task changes", len(taskInfos))
-	return taskInfos, nil
+	return GetTaskTimeEntries(db)
 }
 
 // parseEstimation extracts estimation information from task name
@@ -171,34 +120,9 @@ func parseEstimation(taskName string) (string, string) {
 		return fmt.Sprintf("Estimation: %d-%d hours", optimistic, pessimistic), "broken estimation (optimistic > pessimistic)"
 	}
 
-	// Calculate percentage used (simulated with random values for now)
-	// In real implementation, you'd calculate based on actual time spent
-	percentageUsed := simulatePercentageUsed()
+	logger.Debugf("Parsed estimation for task '%s': %d-%d hours", taskName, optimistic, pessimistic)
 
-	logger.Debugf("Parsed estimation for task '%s': %d-%d hours, %d%% used",
-		taskName, optimistic, pessimistic, percentageUsed)
-
-	return fmt.Sprintf("Estimation: %d-%d hours (%d%% used)", optimistic, pessimistic, percentageUsed), ""
-}
-
-// simulateTimeData simulates time tracking data for demonstration
-func simulateTimeData(timeType string) string {
-	switch timeType {
-	case "yesterday":
-		return "2h 30m"
-	case "today":
-		return "1h 45m"
-	case "start":
-		return time.Now().AddDate(0, 0, -3).Format("2006-01-02 15:04")
-	default:
-		return "0h 0m"
-	}
-}
-
-// simulatePercentageUsed simulates percentage calculation for estimation usage
-func simulatePercentageUsed() int {
-	// In real implementation, calculate: (actualTimeSpent / estimatedTime) * 100
-	return 35 // Simulated value
+	return fmt.Sprintf("Estimation: %d-%d hours", optimistic, pessimistic), ""
 }
 
 // formatSlackMessage formats the task information into a Slack message
