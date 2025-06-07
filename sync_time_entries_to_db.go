@@ -56,7 +56,7 @@ type TimeEntryInfo struct {
 // processTimeEntry validates and converts a JsonTimeEntry to ProcessedTimeEntry
 func processTimeEntry(entry JsonTimeEntry, logger interface{ Warnf(string, ...interface{}) }) (ProcessedTimeEntry, error) {
 	var processed ProcessedTimeEntry
-	
+
 	// Parse ID with scientific notation support
 	idFloat, err := strconv.ParseFloat(entry.ID, 64)
 	if err != nil {
