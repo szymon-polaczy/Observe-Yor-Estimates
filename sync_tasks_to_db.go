@@ -31,12 +31,12 @@ func SyncTasksToDatabase() error {
 
 	logger.Debug("Starting task synchronization with TimeCamp")
 
-	timecamp_tasks, err := get_timecamp_tasks()
+	timecampTasks, err := getTimecampTasks()
 	if err != nil {
 		return fmt.Errorf("failed to fetch tasks from TimeCamp: %w", err)
 	}
 
-	if len(timecamp_tasks) == 0 {
+	if len(timecampTasks) == 0 {
 		logger.Warn("No tasks received from TimeCamp API")
 		return nil // Not an error, just no data
 	}
@@ -48,15 +48,15 @@ func SyncTasksToDatabase() error {
 	defer CloseWithErrorLog(db, "database connection")
 
 	// Use INSERT OR IGNORE to handle existing tasks
-	insert_statement, err := db.Prepare("INSERT OR IGNORE INTO tasks values(?, ?, ?, ?, ?, ?)")
+	insertStatement, err := db.Prepare("INSERT OR IGNORE INTO tasks values(?, ?, ?, ?, ?, ?)")
 	if err != nil {
 		return fmt.Errorf("failed to prepare insert statement: %w", err)
 	}
-	defer CloseWithErrorLog(insert_statement, "prepared statement")
+	defer CloseWithErrorLog(insertStatement, "prepared statement")
 
 	index := 0
 	errorCount := 0
-	for _, task := range timecamp_tasks {
+	for _, task := range timecampTasks {
 		// Check if task already exists to track changes
 		var existingName string
 		checkQuery := "SELECT name FROM tasks WHERE task_id = ?"
@@ -64,7 +64,7 @@ func SyncTasksToDatabase() error {
 
 		if err == sql.ErrNoRows {
 			// New task
-			_, err := insert_statement.Exec(task.TaskID, task.ParentID, task.AssignedBy, task.Name, task.Level, task.RootGroupID)
+			_, err := insertStatement.Exec(task.TaskID, task.ParentID, task.AssignedBy, task.Name, task.Level, task.RootGroupID)
 			if err != nil {
 				logger.Errorf("Failed to insert task %d (%s): %v", task.TaskID, task.Name, err)
 				errorCount++
@@ -97,7 +97,7 @@ func SyncTasksToDatabase() error {
 
 	logger.Infof("Task sync completed: %d tasks processed, %d errors encountered", index, errorCount)
 
-	if errorCount > 0 && errorCount == len(timecamp_tasks) {
+	if errorCount > 0 && errorCount == len(timecampTasks) {
 		return fmt.Errorf("all task operations failed during sync")
 	}
 
@@ -136,11 +136,11 @@ func TrackTaskChange(db *sql.DB, taskID int, taskName, changeType, previousValue
 	return nil
 }
 
-func get_timecamp_tasks() ([]JsonTask, error) {
+func getTimecampTasks() ([]JsonTask, error) {
 	logger := NewLogger()
 
-	timecamp_api_url := "https://app.timecamp.com/third_party/api"
-	get_all_tasks_url := timecamp_api_url + "/tasks"
+	timecampAPIURL := "https://app.timecamp.com/third_party/api"
+	getAllTasksURL := timecampAPIURL + "/tasks"
 
 	// Validate API key exists
 	apiKey := os.Getenv("TIMECAMP_API_KEY")
@@ -148,17 +148,17 @@ func get_timecamp_tasks() ([]JsonTask, error) {
 		return nil, fmt.Errorf("TIMECAMP_API_KEY environment variable not set")
 	}
 
-	auth_bearer := "Bearer " + apiKey
+	authBearer := "Bearer " + apiKey
 
-	request, err := http.NewRequest("GET", get_all_tasks_url, nil)
+	request, err := http.NewRequest("GET", getAllTasksURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
 	}
 
-	request.Header.Add("Authorization", auth_bearer)
+	request.Header.Add("Authorization", authBearer)
 	request.Header.Add("Accept", "application/json")
 
-	logger.Debugf("Fetching tasks from TimeCamp API: %s", get_all_tasks_url)
+	logger.Debugf("Fetching tasks from TimeCamp API: %s", getAllTasksURL)
 
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {

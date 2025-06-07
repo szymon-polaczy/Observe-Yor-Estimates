@@ -14,12 +14,12 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-type SOCKET_URL_RESPONSE struct {
+type SocketURLResponse struct {
 	Ok  bool   `json:"ok"`
 	Url string `json:"url"`
 }
 
-type TEST_SLACK_PAYLOAD struct {
+type TestSlackPayload struct {
 	EnvelopeID string `json:"envelope_id"`
 }
 
@@ -40,7 +40,7 @@ type Text struct {
 	Text string `json:"text"`
 }
 
-type TEST_SLACK_PAYLOAD_RESPONSE struct {
+type TestSlackPayloadResponse struct {
 	EnvelopeID string  `json:"envelope_id"`
 	Payload    Payload `json:"payload"`
 }
@@ -145,14 +145,14 @@ func main() {
 	signal.Notify(interrupt, os.Interrupt)
 
 	// Get Slack socket URL with proper error handling
-	new_socket_url, err := get_slack_socket_url()
+	newSocketURL, err := getSlackSocketURL()
 	if err != nil {
 		logger.Fatalf("Critical error: Failed to get Slack socket URL: %v", err)
 	}
 
-	logger.Infof("Connecting to Slack WebSocket: %s", new_socket_url)
+	logger.Infof("Connecting to Slack WebSocket: %s", newSocketURL)
 
-	conn, _, err := websocket.DefaultDialer.Dial(new_socket_url, nil)
+	conn, _, err := websocket.DefaultDialer.Dial(newSocketURL, nil)
 	if err != nil {
 		logger.Fatalf("Critical error: Failed to establish WebSocket connection: %v", err)
 	}
@@ -175,16 +175,16 @@ func main() {
 			}
 			logger.Debugf("Received WebSocket message: %s", string(message))
 
-			var test_payload TEST_SLACK_PAYLOAD
+			var testPayload TestSlackPayload
 
-			if err := json.Unmarshal(message, &test_payload); err != nil {
+			if err := json.Unmarshal(message, &testPayload); err != nil {
 				logger.Errorf("Failed to unmarshal Slack payload: %v", err)
 				continue // Don't crash, just skip this message
 			}
 
-			if len(test_payload.EnvelopeID) != 0 {
-				response := TEST_SLACK_PAYLOAD_RESPONSE{
-					EnvelopeID: test_payload.EnvelopeID,
+			if len(testPayload.EnvelopeID) != 0 {
+				response := TestSlackPayloadResponse{
+					EnvelopeID: testPayload.EnvelopeID,
 					Payload: Payload{
 						[]Block{
 							Block{
@@ -198,19 +198,19 @@ func main() {
 					},
 				}
 
-				json_response, err := json.Marshal(response)
+				jsonResponse, err := json.Marshal(response)
 				if err != nil {
 					logger.Errorf("Failed to marshal response: %v", err)
 					continue
 				}
 
-				err = conn.WriteMessage(websocket.TextMessage, []byte(json_response))
+				err = conn.WriteMessage(websocket.TextMessage, []byte(jsonResponse))
 				if err != nil {
 					logger.Errorf("WebSocket write error: %v", err)
 					return
 				}
 
-				logger.Debugf("Sent WebSocket response: %s", string(json_response))
+				logger.Debugf("Sent WebSocket response: %s", string(jsonResponse))
 			}
 		}
 	}()
@@ -236,10 +236,10 @@ func main() {
 
 }
 
-func get_slack_socket_url() (string, error) {
+func getSlackSocketURL() (string, error) {
 	logger := NewLogger()
 
-	slack_url := "https://slack.com/api/apps.connections.open"
+	slackURL := "https://slack.com/api/apps.connections.open"
 
 	// Validate Slack token exists
 	slackToken := os.Getenv("SLACK_TOKEN")
@@ -247,7 +247,7 @@ func get_slack_socket_url() (string, error) {
 		return "", fmt.Errorf("SLACK_TOKEN environment variable not set")
 	}
 
-	request, err := http.NewRequest("POST", slack_url, nil)
+	request, err := http.NewRequest("POST", slackURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create HTTP request: %w", err)
 	}
@@ -255,7 +255,7 @@ func get_slack_socket_url() (string, error) {
 	request.Header.Add("Authorization", "Bearer "+slackToken)
 	request.Header.Add("Content-type", "application/x-www-form-urlencoded")
 
-	logger.Debugf("Requesting Slack socket URL from: %s", slack_url)
+	logger.Debugf("Requesting Slack socket URL from: %s", slackURL)
 
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
@@ -278,20 +278,20 @@ func get_slack_socket_url() (string, error) {
 		return "", fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	var socket_url_response SOCKET_URL_RESPONSE
+	var socketURLResponse SocketURLResponse
 
-	if err := json.Unmarshal(body, &socket_url_response); err != nil {
+	if err := json.Unmarshal(body, &socketURLResponse); err != nil {
 		return "", fmt.Errorf("failed to parse JSON response from Slack: %w", err)
 	}
 
-	if !socket_url_response.Ok {
+	if !socketURLResponse.Ok {
 		return "", fmt.Errorf("Slack API returned error: response marked as not OK")
 	}
 
-	if socket_url_response.Url == "" {
+	if socketURLResponse.Url == "" {
 		return "", fmt.Errorf("Slack API returned empty socket URL")
 	}
 
 	logger.Debugf("Successfully obtained Slack socket URL")
-	return socket_url_response.Url, nil
+	return socketURLResponse.Url, nil
 }
