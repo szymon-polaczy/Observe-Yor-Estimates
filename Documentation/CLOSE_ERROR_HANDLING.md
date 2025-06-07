@@ -150,3 +150,9 @@ defer CloseWithErrorLog(resource, "descriptive name")
 4. **Maintainability**: Centralized the logging logic
 
 The key insight is that **close errors are usually about resource management and debugging, not business logic failures**. Handle them appropriately based on the criticality of the operation.
+
+## Related Documentation
+
+- [Error Handling Summary](ERROR_HANDLING_SUMMARY.md) - Overview of all error handling patterns in the application
+- [Environment Variables Configuration](ENVIRONMENT_VARIABLES.md) - Configurable settings that affect error handling behavior
+- [Time Entries Implementation](TIME_ENTRIES_IMPLEMENTATION.md) - Specific examples of close error handling in API integrations

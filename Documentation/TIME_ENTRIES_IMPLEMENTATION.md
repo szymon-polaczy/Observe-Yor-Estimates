@@ -96,23 +96,56 @@ All functions use the project's standard Logger for consistent error reporting:
 ## Usage Examples
 
 ```bash
+# Run application with automatic sync (recommended)
+./observe-yor-estimates
+
 # Sync time entries manually
 ./observe-yor-estimates sync-time-entries
 
-# Sync tasks manually
-./observe-yor-estimates sync-tasks
-
 # Send daily update manually
 ./observe-yor-estimates daily-update
-
-# Show available commands
-./observe-yor-estimates help
 ```
 
-## Environment Variables Required
+## Integration Benefits
 
+1. **Real-time Data**: No more sample/simulated data - all information comes directly from TimeCamp
+2. **Accurate Time Tracking**: Precise start times, durations, and daily totals
+3. **Automatic Synchronization**: Continuous updates without manual intervention
+4. **Estimation Analysis**: Real usage percentage calculations based on actual time entries
+5. **Configurable Schedules**: Customize sync frequency based on your needs
+6. **Error Resilience**: Robust error handling ensures continuous operation
+
+## Environment Variables
+
+### Required Variables
 ```env
 TIMECAMP_API_KEY=your_timecamp_api_key
 SLACK_WEBHOOK_URL=your_slack_webhook_url
 SLACK_TOKEN=your_slack_app_token
 ```
+
+### Optional Variables (with defaults)
+```env
+# API Configuration
+TIMECAMP_API_URL=https://app.timecamp.com/third_party/api
+SLACK_API_URL=https://slack.com/api/apps.connections.open
+
+# Database Configuration
+DATABASE_PATH=./oye.db
+
+# Sync Schedules (cron format)
+TASK_SYNC_SCHEDULE=*/5 * * * *
+TIME_ENTRIES_SYNC_SCHEDULE=*/10 * * * *
+DAILY_UPDATE_SCHEDULE=0 6 * * *
+
+# UI Configuration
+PROGRESS_BAR_LENGTH=10
+MID_POINT=50
+HIGH_POINT=90
+```
+
+## Related Documentation
+
+- [Environment Variables Configuration](ENVIRONMENT_VARIABLES.md) - Complete guide to configurable settings
+- [Error Handling Summary](ERROR_HANDLING_SUMMARY.md) - Error handling patterns used in time entries sync
+- [Close Error Handling](CLOSE_ERROR_HANDLING.md) - Resource cleanup patterns for HTTP and database connections
