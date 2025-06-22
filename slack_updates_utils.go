@@ -31,6 +31,21 @@ type SlackMessage struct {
 	Blocks []Block `json:"blocks"`
 }
 
+// Block represents a block in Slack blocks
+type Block struct {
+	Type      string     `json:"type"`
+	Text      *Text      `json:"text,omitempty"`
+	Fields    []Field    `json:"fields,omitempty"`
+	Elements  []Element  `json:"elements,omitempty"`
+	Accessory *Accessory `json:"accessory,omitempty"`
+}
+
+// Text represents text in Slack blocks
+type Text struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
 // Field represents a field in Slack blocks
 type Field struct {
 	Type string `json:"type"`

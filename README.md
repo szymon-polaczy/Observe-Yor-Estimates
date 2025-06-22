@@ -7,6 +7,7 @@ This application provides daily, weekly, and monthly Slack updates for task chan
 - **Daily Slack Updates**: Automatically sends daily reports at 6 AM (configurable) showing task progress
 - **Weekly Slack Updates**: Automatically sends weekly summaries on Mondays at 8 AM (configurable) showing week-over-week progress
 - **Monthly Slack Updates**: Automatically sends monthly summaries on the 1st at 9 AM (configurable) showing month-over-month progress
+- **Slack Slash Commands**: REST API endpoints for `/daily-update`, `/weekly-update`, and `/monthly-update` commands
 - **Real-Time TimeCamp Integration**: Syncs tasks and time entries from TimeCamp API
 - **Estimation Analysis**: Parses task names for estimation patterns like `[8-12]` and calculates usage percentage
 - **Time Tracking**: Shows start time, yesterday's time, and today's time for each task using real TimeCamp data
@@ -37,13 +38,13 @@ For first-time users:
    ```
 
 2. **Required Environment Variables**:
-   - `SLACK_TOKEN`: Your Slack bot token
    - `SLACK_WEBHOOK_URL`: Slack webhook URL for notifications  
    - `TIMECAMP_API_KEY`: Your TimeCamp API key
 
 3. **Optional Environment Variables** (with defaults):
    - `DATABASE_PATH`: Database file path (default: `./oye.db`)
-   - `SLACK_API_URL`: Slack API endpoint (default: `https://slack.com/api/apps.connections.open`)
+   - `SLACK_VERIFICATION_TOKEN`: Slack verification token for security (optional)
+   - `PORT`: HTTP server port for Slack commands (default: `8080`)
    - `TIMECAMP_API_URL`: TimeCamp API base URL (default: `https://app.timecamp.com/third_party/api`)
    - `TASK_SYNC_SCHEDULE`: Task sync cron schedule (default: `*/5 * * * *` - every 5 minutes)
    - `TIME_ENTRIES_SYNC_SCHEDULE`: Time entries sync schedule (default: `*/10 * * * *` - every 10 minutes)
@@ -58,6 +59,87 @@ For first-time users:
    ```bash
    go build
    ```
+
+## Deployment
+
+This project includes a comprehensive deployment script (`deploy.sh`) that handles database management, versioning, and synchronization. It's designed to work seamlessly with Netlify.
+
+### Quick Deployment
+
+**For Netlify:**
+1. Connect your repository to Netlify
+2. Set the required environment variables in Netlify's dashboard:
+   - `TIMECAMP_API_KEY`
+   - `SLACK_WEBHOOK_URL`
+3. Deploy! The `deploy.sh` script will automatically:
+   - Build the application
+   - Check/create the database
+   - Perform full synchronization if needed
+   - Set up the appropriate version tracking
+
+**For other platforms:**
+```bash
+# Set your environment variables first
+export TIMECAMP_API_KEY="your_api_key"
+export SLACK_WEBHOOK_URL="your_webhook_url"
+
+# Run the deployment script
+./deploy.sh
+```
+
+### Deployment Script Features
+
+The `deploy.sh` script provides:
+
+- **Database Versioning**: Automatic database recreation when schema changes
+- **Smart Sync Detection**: Only performs full sync when database is empty or outdated
+- **Environment Validation**: Checks all required environment variables
+- **Build Management**: Handles Go compilation and dependency management
+- **Error Recovery**: Comprehensive error handling and logging
+
+**Available Commands:**
+```bash
+./deploy.sh              # Full deployment process
+./deploy.sh --build-only  # Only build the application
+./deploy.sh --force-sync  # Force database recreation and full sync
+./deploy.sh --test        # Test database and environment
+./deploy.sh --help        # Show help information
+```
+
+### Database Versioning System
+
+The deployment script uses a versioning system to manage database schema changes:
+
+- **Version File**: `.db_version` tracks the current database version
+- **Automatic Recreation**: When `DATABASE_VERSION` in the script is incremented, the database is automatically recreated
+- **Data Preservation**: Full synchronization ensures no data loss during recreation
+- **Version Control**: Easy rollback and upgrade management
+
+**To force a database recreation:**
+1. Increment `DATABASE_VERSION` in `deploy.sh`
+2. Deploy the application
+3. The script will automatically remove the old database and create a new one with fresh data
+
+### Environment Variables for Deployment
+
+**Required:**
+- `TIMECAMP_API_KEY`: Your TimeCamp API key
+- `SLACK_WEBHOOK_URL`: Slack webhook URL for notifications
+
+**Optional Deployment Configuration:**
+- `DATABASE_VERSION`: Override the default database version (forces recreation)
+- `DATABASE_PATH`: Custom database file path
+- `PORT`: HTTP server port (default: 8080)
+
+### Netlify Configuration
+
+The project includes `netlify.toml` with optimized settings:
+- Automatic build command setup
+- Go version specification  
+- Function routing for health checks and Slack commands
+- Clean URL redirects
+
+Example Netlify Functions are provided in the `functions/` directory to demonstrate how to integrate with the Go binary for serverless execution.
 
 ## Usage
 
@@ -111,6 +193,26 @@ For testing and manual operations:
 # Full sync of time entries only (last 6 months)
 ./observe-yor-estimates full-sync-time-entries
 ```
+
+### Slack Slash Commands
+
+The application now supports Slack slash commands via REST API endpoints. After setting up your Slack app with the appropriate slash commands, users can trigger updates directly from Slack:
+
+**Available Slack Commands**:
+- `/daily-update` - Trigger an immediate daily update
+- `/weekly-update` - Trigger an immediate weekly summary  
+- `/monthly-update` - Trigger an immediate monthly summary
+
+**Setup Requirements**:
+1. Create a Slack app with slash commands pointing to your server
+2. Configure the slash commands to POST to:
+   - `https://your-server.com/slack/daily-update`
+   - `https://your-server.com/slack/weekly-update`
+   - `https://your-server.com/slack/monthly-update`
+3. Set `SLACK_VERIFICATION_TOKEN` in your `.env` file for security (optional)
+4. Ensure your server is accessible on the configured `PORT` (default: 8080)
+
+**Health Check**: `GET /health` - Returns server status and timestamp
 
 ### When to Use Each Command
 

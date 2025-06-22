@@ -15,6 +15,15 @@ Complete guide to all configurable environment variables, their defaults, and us
 
 ## Implementation Details
 
+### [Socket Mode to REST API Migration](SOCKET_TO_REST_MIGRATION.md)
+Complete documentation of the migration from Slack Socket Mode to REST API for handling slash commands.
+
+**Key Topics:**
+- Migration summary and rationale
+- Removed and added components
+- New Slack app configuration requirements
+- Benefits and architectural improvements
+
 ### [Time Entries Implementation](TIME_ENTRIES_IMPLEMENTATION.md)
 Detailed documentation of the TimeCamp time entries integration, API handling, and database synchronization.
 

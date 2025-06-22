@@ -1,2 +1,13 @@
+# Environment files
 .env
-oye.db
+
+# Database files
+*.db
+.db_version
+
+# Build artifacts
+observe-yor-estimates
+/tmp/
+
+# Netlify
+.netlify/

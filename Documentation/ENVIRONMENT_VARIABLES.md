@@ -73,16 +73,16 @@ This document outlines the environment variables that have been extracted from h
 
 ## Required Environment Variables
 
-The following environment variables are still required (unchanged from before):
-- `SLACK_TOKEN`: Slack bot token
+The following environment variables are required:
 - `SLACK_WEBHOOK_URL`: Slack webhook URL for notifications
 - `TIMECAMP_API_KEY`: TimeCamp API key
 
 ## Optional Environment Variables (with defaults)
 
-All the newly added environment variables are optional and have sensible defaults:
+All the following environment variables are optional and have sensible defaults:
 - `DATABASE_PATH`
-- `SLACK_API_URL`
+- `SLACK_VERIFICATION_TOKEN`: Slack verification token for security  
+- `PORT`: HTTP server port for Slack commands (default: 8080)
 - `TIMECAMP_API_URL`
 - `TASK_SYNC_SCHEDULE`
 - `TIME_ENTRIES_SYNC_SCHEDULE`

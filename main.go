@@ -1,49 +1,17 @@
 package main
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
-	"io"
 	"os"
 	"os/signal"
+	"time"
 
 	"net/http"
 
-	"github.com/gorilla/websocket"
 	"github.com/joho/godotenv"
 	"github.com/robfig/cron/v3"
 )
-
-type SocketURLResponse struct {
-	Ok  bool   `json:"ok"`
-	Url string `json:"url"`
-}
-
-type TestSlackPayload struct {
-	EnvelopeID string `json:"envelope_id"`
-}
-
-type Payload struct {
-	Blocks []Block `json:"blocks"`
-}
-
-type Block struct {
-	Type      string     `json:"type"`
-	Text      *Text      `json:"text,omitempty"`
-	Fields    []Field    `json:"fields,omitempty"`
-	Elements  []Element  `json:"elements,omitempty"`
-	Accessory *Accessory `json:"accessory,omitempty"`
-}
-
-type Text struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
-
-type TestSlackPayloadResponse struct {
-	EnvelopeID string  `json:"envelope_id"`
-	Payload    Payload `json:"payload"`
-}
 
 func main() {
 	// Initialize logger
@@ -242,78 +210,29 @@ func main() {
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)
 
-	// Get Slack socket URL with proper error handling
-	newSocketURL, err := getSlackSocketURL()
-	if err != nil {
-		logger.Fatalf("Critical error: Failed to get Slack socket URL: %v", err)
+	// Setup Slack REST API routes
+	setupSlackRoutes()
+
+	// Get port from environment variable or use default
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
 	}
 
-	logger.Infof("Connecting to Slack WebSocket: %s", newSocketURL)
-
-	conn, _, err := websocket.DefaultDialer.Dial(newSocketURL, nil)
-	if err != nil {
-		logger.Fatalf("Critical error: Failed to establish WebSocket connection: %v", err)
+	// Start HTTP server for Slack commands
+	server := &http.Server{
+		Addr: ":" + port,
 	}
-	defer CloseWithErrorLog(conn, "WebSocket connection")
-
-	logger.Info("WebSocket connection established successfully")
 
 	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logger.Errorf("WebSocket handler panicked: %v", r)
-			}
-		}()
-
-		for {
-			_, message, err := conn.ReadMessage()
-			if err != nil {
-				logger.Errorf("WebSocket read error: %v", err)
-				return
-			}
-			logger.Debugf("Received WebSocket message: %s", string(message))
-
-			var testPayload TestSlackPayload
-
-			if err := json.Unmarshal(message, &testPayload); err != nil {
-				logger.Errorf("Failed to unmarshal Slack payload: %v", err)
-				continue // Don't crash, just skip this message
-			}
-
-			if len(testPayload.EnvelopeID) != 0 {
-				response := TestSlackPayloadResponse{
-					EnvelopeID: testPayload.EnvelopeID,
-					Payload: Payload{
-						[]Block{
-							Block{
-								Type: "section",
-								Text: &Text{
-									Type: "mrkdwn",
-									Text: "**Test text**",
-								},
-							},
-						},
-					},
-				}
-
-				jsonResponse, err := json.Marshal(response)
-				if err != nil {
-					logger.Errorf("Failed to marshal response: %v", err)
-					continue
-				}
-
-				err = conn.WriteMessage(websocket.TextMessage, []byte(jsonResponse))
-				if err != nil {
-					logger.Errorf("WebSocket write error: %v", err)
-					return
-				}
-
-				logger.Debugf("Sent WebSocket response: %s", string(jsonResponse))
-			}
+		logger.Infof("Starting HTTP server on port %s for Slack commands", port)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Errorf("HTTP server error: %v", err)
 		}
 	}()
 
 	logger.Info("Application is running. Press Ctrl+C to stop.")
+	logger.Infof("Slack command endpoints available at http://localhost:%s/slack/*", port)
 
 	for {
 		select {
@@ -332,82 +251,20 @@ func main() {
 				logger.Info("Database connection closed successfully")
 			}
 
-			// Cleanly close the connection by sending a close message and then
-			// waiting (with timeout) for the server to close the connection.
-			err := conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
-			if err != nil {
-				logger.Errorf("Error sending close message: %v", err)
+			// Shutdown HTTP server
+			logger.Info("Shutting down HTTP server...")
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := server.Shutdown(ctx); err != nil {
+				logger.Errorf("Error shutting down HTTP server: %v", err)
 			} else {
-				logger.Info("Sent WebSocket close message")
+				logger.Info("HTTP server shut down successfully")
 			}
+
 			return
 		}
 	}
 
-}
-
-func getSlackSocketURL() (string, error) {
-	logger := NewLogger()
-
-	// Get Slack API URL from environment variable or use default
-	slackURL := os.Getenv("SLACK_API_URL")
-	if slackURL == "" {
-		slackURL = "https://slack.com/api/apps.connections.open"
-	}
-
-	// Validate Slack token exists
-	slackToken := os.Getenv("SLACK_TOKEN")
-	if slackToken == "" {
-		return "", fmt.Errorf("SLACK_TOKEN environment variable not set")
-	}
-
-	request, err := http.NewRequest("POST", slackURL, nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to create HTTP request: %w", err)
-	}
-
-	request.Header.Add("Authorization", "Bearer "+slackToken)
-	request.Header.Add("Content-type", "application/x-www-form-urlencoded")
-
-	logger.Debugf("Requesting Slack socket URL from: %s", slackURL)
-
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		return "", fmt.Errorf("HTTP request to Slack API failed: %w", err)
-	}
-	defer func() {
-		if closeErr := response.Body.Close(); closeErr != nil {
-			logger.Errorf("Error closing response body: %v", closeErr)
-		}
-	}()
-
-	// Check HTTP status code
-	if response.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(response.Body)
-		return "", fmt.Errorf("Slack API returned status %d: %s", response.StatusCode, string(body))
-	}
-
-	body, err := io.ReadAll(response.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read response body: %w", err)
-	}
-
-	var socketURLResponse SocketURLResponse
-
-	if err := json.Unmarshal(body, &socketURLResponse); err != nil {
-		return "", fmt.Errorf("failed to parse JSON response from Slack: %w", err)
-	}
-
-	if !socketURLResponse.Ok {
-		return "", fmt.Errorf("Slack API returned error: response marked as not OK")
-	}
-
-	if socketURLResponse.Url == "" {
-		return "", fmt.Errorf("Slack API returned empty socket URL")
-	}
-
-	logger.Debugf("Successfully obtained Slack socket URL")
-	return socketURLResponse.Url, nil
 }
 
 // showHelp displays usage information for the application
@@ -431,10 +288,19 @@ func showHelp() {
 	fmt.Println("If no command is provided, the application will start in daemon mode")
 	fmt.Println("with scheduled synchronization and Slack updates.")
 	fmt.Println("")
+	fmt.Println("Slack commands are available via REST API endpoints:")
+	fmt.Println("  POST /slack/daily-update   - Trigger daily update")
+	fmt.Println("  POST /slack/weekly-update  - Trigger weekly update")
+	fmt.Println("  POST /slack/monthly-update - Trigger monthly update")
+	fmt.Println("  GET  /health               - Health check endpoint")
+	fmt.Println("")
 	fmt.Println("Required environment variables:")
-	fmt.Println("  SLACK_TOKEN       - Slack bot token")
-	fmt.Println("  SLACK_WEBHOOK_URL - Slack webhook URL for notifications")
-	fmt.Println("  TIMECAMP_API_KEY  - TimeCamp API key")
+	fmt.Println("  SLACK_WEBHOOK_URL         - Slack webhook URL for notifications")
+	fmt.Println("  TIMECAMP_API_KEY          - TimeCamp API key")
+	fmt.Println("")
+	fmt.Println("Optional environment variables:")
+	fmt.Println("  SLACK_VERIFICATION_TOKEN  - Slack verification token for security")
+	fmt.Println("  PORT                      - HTTP server port (default: 8080)")
 	fmt.Println("")
 	fmt.Println("For more information, see the README.md and Documentation/ folder.")
 }

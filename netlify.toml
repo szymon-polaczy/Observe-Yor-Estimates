@@ -1,0 +1,6 @@
+[build]
+  command = "./deploy.sh"
+  publish = "."
+
+[build.environment]
+  GO_VERSION = "1.24"

@@ -88,9 +88,9 @@ The application now includes a robust HTTP retry mechanism that handles temporar
 
 ### **Fatal Errors (Application Exits)**
 - Missing `.env` file
-- Missing required environment variables (`SLACK_TOKEN`, `SLACK_WEBHOOK_URL`, `TIMECAMP_API_KEY`)
+- Missing required environment variables (`SLACK_WEBHOOK_URL`, `TIMECAMP_API_KEY`)
 - Cron scheduler setup failures
-- WebSocket connection failures
+- HTTP server startup failures
 - Database initialization or migration failures
 
 ### **Recoverable Errors (Logged and Continued)**
