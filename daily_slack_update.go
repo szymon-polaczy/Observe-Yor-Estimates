@@ -123,7 +123,16 @@ func formatDailySlackMessage(taskInfos []TaskTimeInfo) SlackMessage {
 				messageText.WriteString(fmt.Sprintf(" | Usage: %s %.0f%% (%s)", emoji, percentage, description))
 			}
 		}
-		messageText.WriteString(fmt.Sprintf("\nStart: %s\n\n", task.StartTime))
+		messageText.WriteString(fmt.Sprintf("\nStart: %s", task.StartTime))
+
+		// Add comments to plain text version
+		if len(task.Comments) > 0 {
+			messageText.WriteString("\nComments:")
+			for _, comment := range task.Comments {
+				messageText.WriteString(fmt.Sprintf("\n• %s", comment))
+			}
+		}
+		messageText.WriteString("\n\n")
 	}
 
 	return SlackMessage{
@@ -162,12 +171,23 @@ func formatDailyTaskBlock(task TaskTimeInfo) []Block {
 		}
 	}
 
+	// Build the main text content
+	mainText := fmt.Sprintf("%s\n%s\n*Start:* %s", titleLine.String(), timeLine.String(), task.StartTime)
+
+	// Add comments if available
+	if len(task.Comments) > 0 {
+		mainText += "\n*Comments:*"
+		for _, comment := range task.Comments {
+			mainText += fmt.Sprintf("\n• %s", comment)
+		}
+	}
+
 	// Create a single compact section block
 	sectionBlock := Block{
 		Type: "section",
 		Text: &Text{
 			Type: "mrkdwn",
-			Text: fmt.Sprintf("%s\n%s\n*Start:* %s", titleLine.String(), timeLine.String(), task.StartTime),
+			Text: mainText,
 		},
 	}
 

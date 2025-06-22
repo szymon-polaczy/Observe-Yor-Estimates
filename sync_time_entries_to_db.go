@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -63,6 +64,7 @@ type WeeklyTaskTimeInfo struct {
 	EstimationInfo   string
 	EstimationStatus string
 	DaysWorked       int
+	Comments         []string
 }
 
 // MonthlyTaskTimeInfo represents aggregated monthly time information for a task
@@ -75,6 +77,7 @@ type MonthlyTaskTimeInfo struct {
 	EstimationInfo   string
 	EstimationStatus string
 	DaysWorked       int
+	Comments         []string
 }
 
 // processTimeEntry validates and converts a JsonTimeEntry to ProcessedTimeEntry
@@ -406,6 +409,14 @@ func GetTaskTimeEntries(db *sql.DB) ([]TaskTimeInfo, error) {
 		// Extract estimation information from task name
 		taskInfo.EstimationInfo, taskInfo.EstimationStatus = parseEstimation(taskInfo.Name)
 
+		// Get comments for this task from both yesterday and today
+		comments, err := getTaskComments(db, taskInfo.TaskID, yesterday, today)
+		if err != nil {
+			logger.Warnf("Failed to get comments for task %d: %v", taskInfo.TaskID, err)
+			comments = []string{} // Empty slice if error
+		}
+		taskInfo.Comments = comments
+
 		taskInfos = append(taskInfos, taskInfo)
 	}
 
@@ -526,6 +537,14 @@ func GetWeeklyTaskTimeEntries(db *sql.DB) ([]WeeklyTaskTimeInfo, error) {
 		// Extract estimation information from task name
 		taskInfo.EstimationInfo, taskInfo.EstimationStatus = parseEstimation(taskInfo.Name)
 
+		// Get comments for this task from both this week and last week
+		comments, err := getTaskComments(db, taskInfo.TaskID, lastWeekStartStr, thisWeekEndStr)
+		if err != nil {
+			logger.Warnf("Failed to get comments for task %d: %v", taskInfo.TaskID, err)
+			comments = []string{} // Empty slice if error
+		}
+		taskInfo.Comments = comments
+
 		taskInfos = append(taskInfos, taskInfo)
 	}
 
@@ -643,6 +662,14 @@ func GetMonthlyTaskTimeEntries(db *sql.DB) ([]MonthlyTaskTimeInfo, error) {
 		// Extract estimation information from task name
 		taskInfo.EstimationInfo, taskInfo.EstimationStatus = parseEstimation(taskInfo.Name)
 
+		// Get comments for this task from both this month and last month
+		comments, err := getTaskComments(db, taskInfo.TaskID, lastMonthStartStr, thisMonthEndStr)
+		if err != nil {
+			logger.Warnf("Failed to get comments for task %d: %v", taskInfo.TaskID, err)
+			comments = []string{} // Empty slice if error
+		}
+		taskInfo.Comments = comments
+
 		taskInfos = append(taskInfos, taskInfo)
 	}
 
@@ -672,4 +699,47 @@ func formatDuration(seconds int) string {
 		return fmt.Sprintf("%dh %dm", hours, minutes)
 	}
 	return fmt.Sprintf("%dm", minutes)
+}
+
+// getTaskComments retrieves unique comments for a task within a specific date range
+func getTaskComments(db *sql.DB, taskID int, fromDate, toDate string) ([]string, error) {
+	logger := NewLogger()
+
+	query := `
+		SELECT DISTINCT description 
+		FROM time_entries 
+		WHERE task_id = ? 
+		AND date BETWEEN ? AND ? 
+		AND description IS NOT NULL 
+		AND TRIM(description) != ''
+		ORDER BY description
+	`
+
+	rows, err := db.Query(query, taskID, fromDate, toDate)
+	if err != nil {
+		return nil, fmt.Errorf("error querying task comments: %w", err)
+	}
+	defer CloseWithErrorLog(rows, "database rows")
+
+	var comments []string
+	for rows.Next() {
+		var comment string
+		err := rows.Scan(&comment)
+		if err != nil {
+			logger.Errorf("Error scanning comment row: %v", err)
+			continue
+		}
+
+		// Only add non-empty comments
+		if strings.TrimSpace(comment) != "" {
+			comments = append(comments, strings.TrimSpace(comment))
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error during comment rows iteration: %w", err)
+	}
+
+	logger.Debugf("Retrieved %d comments for task %d between %s and %s", len(comments), taskID, fromDate, toDate)
+	return comments, nil
 }

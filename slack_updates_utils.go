@@ -22,6 +22,7 @@ type TaskTimeInfo struct {
 	StartTime        string
 	EstimationInfo   string
 	EstimationStatus string
+	Comments         []string
 }
 
 // SlackMessage represents the structure of a Slack message
