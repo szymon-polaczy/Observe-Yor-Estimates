@@ -5,27 +5,15 @@
 [build.environment]
   GO_VERSION = "1.22"
 
-# Redirect all requests to the Go HTTP server
-[[redirects]]
-  from = "/*"
-  to = "http://localhost:8080/:splat"
-  status = 200
-  force = false
+[functions]
+  directory = "functions"
 
-# Health check endpoint
 [[redirects]]
   from = "/health"
-  to = "http://localhost:8080/health"
+  to = "/.netlify/functions/health"
   status = 200
 
-# Slack command endpoints
 [[redirects]]
   from = "/slack/*"
-  to = "http://localhost:8080/slack/:splat"
-  status = 200
-
-# API endpoints
-[[redirects]]
-  from = "/api/*"
-  to = "http://localhost:8080/api/:splat"
+  to = "/.netlify/functions/slack-command"
   status = 200

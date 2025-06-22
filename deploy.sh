@@ -279,58 +279,16 @@ test_database() {
     fi
 }
 
-# Setup for Netlify with Go HTTP Server
+# Setup for Netlify Functions
 setup_netlify() {
     log_section "Netlify Setup"
     
     if is_netlify; then
         log_info "Netlify environment detected"
-        log_info "Setting up Go HTTP server to replace functions"
-        
-        # Start the Go HTTP server in the background
-        start_go_server
-        
-        log_success "Netlify setup complete with Go HTTP server"
+        log_info "Functions are available in ./functions/ directory"
+        log_success "Netlify setup complete"
     else
         log_info "Not running on Netlify - skipping Netlify-specific setup"
-    fi
-}
-
-# Start the Go HTTP server
-start_go_server() {
-    log_info "Starting Go HTTP server..."
-    
-    # Set default port if not specified
-    export PORT="${PORT:-8080}"
-    
-    # Start the server in the background
-    nohup ./"$BINARY_NAME" > server.log 2>&1 &
-    SERVER_PID=$!
-    
-    # Save the PID for potential cleanup
-    echo $SERVER_PID > server.pid
-    
-    # Wait a moment for the server to start
-    sleep 2
-    
-    # Check if server is running
-    if kill -0 $SERVER_PID 2>/dev/null; then
-        log_success "Go HTTP server started successfully (PID: $SERVER_PID)"
-        log_info "Server listening on port $PORT"
-        log_info "Server logs: server.log"
-    else
-        log_error "Failed to start Go HTTP server"
-        return 1
-    fi
-    
-    # Test the server
-    if command -v curl >/dev/null 2>&1; then
-        log_info "Testing server health endpoint..."
-        if timeout 5 curl -f http://localhost:$PORT/health >/dev/null 2>&1; then
-            log_success "Health check passed"
-        else
-            log_warning "Health check failed - server may still be starting"
-        fi
     fi
 }
 
@@ -405,13 +363,12 @@ main() {
     
     if is_netlify; then
         log_info "Netlify deployment complete"
-        log_info "Go HTTP server deployed and running on port ${PORT:-8080}"
-        log_info "Health check: /health"
+        log_info "Functions deployed: health, slack-command"
+        log_info "Health check: /.netlify/functions/health"
         log_info "Slack commands: /slack/{daily-update,weekly-update,monthly-update}"
-        log_info "API endpoints: /api/{daily-update,weekly-update,monthly-update,sync-tasks,sync-time-entries,full-sync}"
         log_info ""
         log_info "Note: Set TIMECAMP_API_KEY and SLACK_WEBHOOK_URL in Netlify site settings"
-        log_info "for the server to work properly at runtime."
+        log_info "for the functions to work properly at runtime."
     else
         log_info "Database: $(get_db_path)"
         log_info "Version: $DATABASE_VERSION"
