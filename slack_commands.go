@@ -372,8 +372,65 @@ func handleFullSyncCommand(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		logger.Info("Starting full sync operation via slash command")
 
+		// Pre-flight checks for Netlify environment
+		apiKey := os.Getenv("TIMECAMP_API_KEY")
+		if apiKey == "" {
+			logger.Error("TIMECAMP_API_KEY environment variable not set")
+			sendDelayedResponse(req.ResponseURL, SlackMessage{
+				Text: "❌ Configuration Error: Missing API key",
+				Blocks: []Block{
+					{
+						Type: "section",
+						Text: &Text{
+							Type: "mrkdwn",
+							Text: "❌ *Configuration Error*\n\n`TIMECAMP_API_KEY` environment variable is not set in Netlify deployment.\n\n*Action Required:*\n• Set `TIMECAMP_API_KEY` in Netlify environment variables\n• Redeploy the application\n• Contact administrator if issue persists",
+						},
+					},
+				},
+			})
+			return
+		}
+
+		// Test database connection
+		_, err := GetDB()
+		if err != nil {
+			logger.Errorf("Database connection failed: %v", err)
+			sendDelayedResponse(req.ResponseURL, SlackMessage{
+				Text: "❌ Database Error: Cannot connect to database",
+				Blocks: []Block{
+					{
+						Type: "section",
+						Text: &Text{
+							Type: "mrkdwn",
+							Text: fmt.Sprintf("❌ *Database Connection Failed*\n\nError: `%v`\n\n*Possible Causes:*\n• Database file missing from deployment\n• Insufficient permissions\n• Storage quota exceeded\n\n*Time:* %s", err, time.Now().Format("2006-01-02 15:04:05")),
+						},
+					},
+				},
+			})
+			return
+		}
+
 		if err := FullSyncAll(); err != nil {
 			logger.Errorf("Full sync failed: %v", err)
+
+			// Provide more specific error messages based on error content
+			var errorText string
+			var troubleshootingText string
+
+			if strings.Contains(err.Error(), "TIMECAMP_API_KEY") {
+				errorText = "❌ *API Configuration Error*"
+				troubleshootingText = "*Action Required:*\n• Verify `TIMECAMP_API_KEY` is set in Netlify environment variables\n• Ensure the API key is valid and has proper permissions\n• Check TimeCamp account status"
+			} else if strings.Contains(err.Error(), "all task operations failed") {
+				errorText = "❌ *Task Sync Failed*"
+				troubleshootingText = "*Possible Causes:*\n• Invalid or expired API key\n• TimeCamp API rate limiting\n• Network connectivity issues\n• Database permission problems\n• TimeCamp service unavailable"
+			} else if strings.Contains(err.Error(), "HTTP request") || strings.Contains(err.Error(), "failed after retries") {
+				errorText = "❌ *Network Error*"
+				troubleshootingText = "*Possible Causes:*\n• TimeCamp API is temporarily unavailable\n• Network connectivity issues in Netlify\n• API rate limiting\n• Firewall or security restrictions"
+			} else {
+				errorText = "❌ *Full Sync Failed*"
+				troubleshootingText = "*Troubleshooting:*\n• Check Netlify function logs for detailed errors\n• Verify all environment variables are set\n• Try again in a few minutes\n• Contact administrator if issue persists"
+			}
+
 			sendDelayedResponse(req.ResponseURL, SlackMessage{
 				Text: "❌ Error: Full synchronization failed",
 				Blocks: []Block{
@@ -381,7 +438,7 @@ func handleFullSyncCommand(w http.ResponseWriter, r *http.Request) {
 						Type: "section",
 						Text: &Text{
 							Type: "mrkdwn",
-							Text: fmt.Sprintf("❌ *Full Sync Failed*\n\nError: `%v`\n*Time:* %s", err, time.Now().Format("2006-01-02 15:04:05")),
+							Text: fmt.Sprintf("%s\n\nError: `%v`\n\n%s\n\n*Time:* %s", errorText, err, troubleshootingText, time.Now().Format("2006-01-02 15:04:05")),
 						},
 					},
 				},

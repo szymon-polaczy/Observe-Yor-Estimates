@@ -291,23 +291,9 @@ Daily updates include:
   - Estimation information with usage percentage or status
   - Color-coded progress indicators (green/yellow/red based on thresholds)
 
-## Documentation
-
-For detailed information about the application's architecture and configuration:
-
-- **[Environment Variables Configuration](Documentation/ENVIRONMENT_VARIABLES.md)** - Complete guide to all configurable environment variables, their defaults, and usage examples
-- **[Error Handling Summary](Documentation/ERROR_HANDLING_SUMMARY.md)** - Comprehensive overview of error handling patterns and best practices implemented in the application
-- **[Close Error Handling](Documentation/CLOSE_ERROR_HANDLING.md)** - Detailed guide on resource cleanup patterns and close error handling strategies
-- **[Time Entries Implementation](Documentation/TIME_ENTRIES_IMPLEMENTATION.md)** - Detailed documentation of the TimeCamp time entries integration, API handling, and database synchronization
-
 ## Project Structure
 ```
 /home/haven/Documents/Observe-Yor-Estimates/
-├── Documentation/
-│   ├── ENVIRONMENT_VARIABLES.md      # Environment configuration guide
-│   ├── ERROR_HANDLING_SUMMARY.md     # Error handling best practices
-│   ├── CLOSE_ERROR_HANDLING.md       # Resource cleanup patterns
-│   └── TIME_ENTRIES_IMPLEMENTATION.md # TimeCamp integration details
 ├── error_handling_utils.go           # Centralized error handling utilities
 ├── logger.go                         # Structured logging system
 ├── main.go                           # Main application with WebSocket handling

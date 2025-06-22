@@ -24,6 +24,13 @@ func FullSyncTasksToDatabase() error {
 
 	logger.Debug("Starting FULL task synchronization with TimeCamp")
 
+	// Validate required environment variables before proceeding
+	apiKey := os.Getenv("TIMECAMP_API_KEY")
+	if apiKey == "" {
+		return fmt.Errorf("TIMECAMP_API_KEY environment variable not set - cannot proceed with sync")
+	}
+	logger.Debug("TimeCamp API key is configured")
+
 	timecampTasks, err := getTimecampTasksFull()
 	if err != nil {
 		return fmt.Errorf("failed to fetch tasks from TimeCamp: %w", err)
@@ -51,12 +58,17 @@ func FullSyncTasksToDatabase() error {
 	// Process all tasks
 	errorCount := 0
 	successCount := 0
+	var firstError error // Capture the first error for better diagnostics
 
 	for _, task := range timecampTasks {
 		_, err = insertStatement.Exec(task.TaskID, task.ParentID, task.AssignedBy, task.Name, task.Level, task.RootGroupID)
 		if err != nil {
 			logger.Errorf("Failed to insert task %d (%s): %v", task.TaskID, task.Name, err)
 			errorCount++
+			// Capture the first error for detailed reporting
+			if firstError == nil {
+				firstError = err
+			}
 			continue
 		}
 
@@ -71,7 +83,8 @@ func FullSyncTasksToDatabase() error {
 	logger.Infof("Full task sync completed: %d tasks processed successfully, %d errors encountered", successCount, errorCount)
 
 	if errorCount > 0 && successCount == 0 {
-		return fmt.Errorf("all task operations failed during full sync")
+		// Provide more detailed error information for diagnosis
+		return fmt.Errorf("all task operations failed during full sync - first error: %v (total tasks attempted: %d, all failed)", firstError, len(timecampTasks))
 	}
 
 	return nil
@@ -210,14 +223,28 @@ func getTimecampTasksFull() ([]JsonTask, error) {
 	retryConfig := DefaultRetryConfig()
 	response, err := DoHTTPWithRetry(http.DefaultClient, request, retryConfig)
 	if err != nil {
-		return nil, fmt.Errorf("HTTP request to TimeCamp API failed after retries: %w", err)
+		return nil, fmt.Errorf("HTTP request to TimeCamp API failed after retries (URL: %s): %w", getAllTasksURL, err)
 	}
 	defer CloseWithErrorLog(response.Body, "HTTP response body")
 
 	// Check HTTP status code
 	if response.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(response.Body)
-		return nil, fmt.Errorf("TimeCamp API returned status %d: %s", response.StatusCode, string(body))
+		logger.Errorf("TimeCamp API returned status %d for tasks endpoint. Response body: %s", response.StatusCode, string(body))
+
+		// Provide more specific error messages based on status code
+		switch response.StatusCode {
+		case 401:
+			return nil, fmt.Errorf("TimeCamp API authentication failed (status 401) - check if TIMECAMP_API_KEY is valid")
+		case 403:
+			return nil, fmt.Errorf("TimeCamp API access forbidden (status 403) - check API key permissions")
+		case 429:
+			return nil, fmt.Errorf("TimeCamp API rate limit exceeded (status 429) - try again later")
+		case 500, 502, 503, 504:
+			return nil, fmt.Errorf("TimeCamp API server error (status %d) - service may be temporarily unavailable", response.StatusCode)
+		default:
+			return nil, fmt.Errorf("TimeCamp API returned status %d: %s", response.StatusCode, string(body))
+		}
 	}
 
 	body, err := io.ReadAll(response.Body)
@@ -424,7 +451,7 @@ func SendFullSyncWithResponseURL(responseURL string) {
 
 	if err := FullSyncAll(); err != nil {
 		logger.Errorf("Full sync failed: %v", err)
-		sendDelayedResponseToURL(responseURL, SlackMessage{
+		errorMessage := SlackMessage{
 			Text: "❌ Error: Full synchronization failed",
 			Blocks: []Block{
 				{
@@ -435,7 +462,8 @@ func SendFullSyncWithResponseURL(responseURL string) {
 					},
 				},
 			},
-		})
+		}
+		sendDelayedResponseToURL(responseURL, errorMessage)
 		return
 	}
 
