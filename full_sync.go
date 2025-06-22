@@ -205,9 +205,11 @@ func getTimecampTasksFull() ([]JsonTask, error) {
 
 	logger.Debugf("Fetching ALL tasks from TimeCamp API: %s", getAllTasksURL)
 
-	response, err := http.DefaultClient.Do(request)
+	// Use retry mechanism for API calls
+	retryConfig := DefaultRetryConfig()
+	response, err := DoHTTPWithRetry(http.DefaultClient, request, retryConfig)
 	if err != nil {
-		return nil, fmt.Errorf("HTTP request to TimeCamp API failed: %w", err)
+		return nil, fmt.Errorf("HTTP request to TimeCamp API failed after retries: %w", err)
 	}
 	defer CloseWithErrorLog(response.Body, "HTTP response body")
 
@@ -280,9 +282,11 @@ func getTimeCampTimeEntriesFull(fromDate, toDate string) ([]JsonTimeEntry, error
 
 	logger.Debugf("Fetching ALL time entries from TimeCamp API: %s", request.URL.String())
 
-	response, err := http.DefaultClient.Do(request)
+	// Use retry mechanism for API calls
+	retryConfig := DefaultRetryConfig()
+	response, err := DoHTTPWithRetry(http.DefaultClient, request, retryConfig)
 	if err != nil {
-		return nil, fmt.Errorf("HTTP request to TimeCamp API failed: %w", err)
+		return nil, fmt.Errorf("HTTP request to TimeCamp API failed after retries: %w", err)
 	}
 	defer CloseWithErrorLog(response.Body, "HTTP response body")
 

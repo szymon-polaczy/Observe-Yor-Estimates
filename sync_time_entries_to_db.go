@@ -65,6 +65,18 @@ type WeeklyTaskTimeInfo struct {
 	DaysWorked       int
 }
 
+// MonthlyTaskTimeInfo represents aggregated monthly time information for a task
+type MonthlyTaskTimeInfo struct {
+	TaskID           int
+	Name             string
+	MonthlyTime      string
+	LastMonthTime    string
+	StartTime        string
+	EstimationInfo   string
+	EstimationStatus string
+	DaysWorked       int
+}
+
 // processTimeEntry validates and converts a JsonTimeEntry to ProcessedTimeEntry
 func processTimeEntry(entry JsonTimeEntry, logger interface{ Warnf(string, ...interface{}) }) (ProcessedTimeEntry, error) {
 	var processed ProcessedTimeEntry
@@ -252,9 +264,11 @@ func getTimeCampTimeEntries(fromDate, toDate string) ([]JsonTimeEntry, error) {
 
 	logger.Debugf("Fetching time entries from TimeCamp API: %s", request.URL.String())
 
-	response, err := http.DefaultClient.Do(request)
+	// Use retry mechanism for API calls
+	retryConfig := DefaultRetryConfig()
+	response, err := DoHTTPWithRetry(http.DefaultClient, request, retryConfig)
 	if err != nil {
-		return nil, fmt.Errorf("HTTP request to TimeCamp API failed: %w", err)
+		return nil, fmt.Errorf("HTTP request to TimeCamp API failed after retries: %w", err)
 	}
 	defer CloseWithErrorLog(response.Body, "HTTP response body")
 
@@ -525,6 +539,123 @@ func GetWeeklyTaskTimeEntries(db *sql.DB) ([]WeeklyTaskTimeInfo, error) {
 	}
 
 	logger.Debugf("Successfully retrieved %d weekly task time entries", len(taskInfos))
+	return taskInfos, nil
+}
+
+// GetMonthlyTaskTimeEntries retrieves time entry information for tasks for the past month vs previous month
+func GetMonthlyTaskTimeEntries(db *sql.DB) ([]MonthlyTaskTimeInfo, error) {
+	logger := NewLogger()
+
+	// Calculate date ranges for current and previous month
+	now := time.Now()
+
+	// Start of current month (1st day)
+	thisMonthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	thisMonthEnd := thisMonthStart.AddDate(0, 1, -1) // Last day of current month
+
+	// Previous month
+	lastMonthStart := thisMonthStart.AddDate(0, -1, 0)
+	lastMonthEnd := thisMonthStart.AddDate(0, 0, -1) // Day before current month start
+
+	thisMonthStartStr := thisMonthStart.Format("2006-01-02")
+	thisMonthEndStr := thisMonthEnd.Format("2006-01-02")
+	lastMonthStartStr := lastMonthStart.Format("2006-01-02")
+	lastMonthEndStr := lastMonthEnd.Format("2006-01-02")
+
+	query := `
+		WITH monthly_task_data AS (
+			SELECT 
+				t.task_id,
+				t.name,
+				COALESCE(SUM(CASE WHEN te.date BETWEEN ? AND ? THEN te.duration ELSE 0 END), 0) as thismonth_seconds,
+				COALESCE(SUM(CASE WHEN te.date BETWEEN ? AND ? THEN te.duration ELSE 0 END), 0) as lastmonth_seconds,
+				MIN(te.start_time) as first_entry_time,
+				COUNT(DISTINCT CASE WHEN te.date BETWEEN ? AND ? THEN te.date END) as days_worked
+			FROM tasks t
+			LEFT JOIN time_entries te ON t.task_id = te.task_id 
+				AND te.date BETWEEN ? AND ?
+			WHERE te.task_id IS NOT NULL
+			GROUP BY t.task_id, t.name
+			HAVING thismonth_seconds > 0 OR lastmonth_seconds > 0
+		)
+		SELECT 
+			task_id,
+			name,
+			thismonth_seconds,
+			lastmonth_seconds,
+			first_entry_time,
+			days_worked
+		FROM monthly_task_data
+		ORDER BY (thismonth_seconds + lastmonth_seconds) DESC
+		LIMIT 10
+	`
+
+	logger.Debugf("Querying monthly time entries: this month (%s to %s), last month (%s to %s)",
+		thisMonthStartStr, thisMonthEndStr, lastMonthStartStr, lastMonthEndStr)
+
+	rows, err := db.Query(query,
+		thisMonthStartStr, thisMonthEndStr, // this month range
+		lastMonthStartStr, lastMonthEndStr, // last month range
+		thisMonthStartStr, thisMonthEndStr, // this month range for days_worked count
+		lastMonthStartStr, thisMonthEndStr) // extended range for all entries
+	if err != nil {
+		return nil, fmt.Errorf("error querying monthly time entries: %w", err)
+	}
+	defer CloseWithErrorLog(rows, "database rows")
+
+	var taskInfos []MonthlyTaskTimeInfo
+	errorCount := 0
+
+	for rows.Next() {
+		var taskInfo MonthlyTaskTimeInfo
+		var thisMonthSeconds, lastMonthSeconds int
+		var firstEntryTimeStr sql.NullString
+
+		err := rows.Scan(
+			&taskInfo.TaskID,
+			&taskInfo.Name,
+			&thisMonthSeconds,
+			&lastMonthSeconds,
+			&firstEntryTimeStr,
+			&taskInfo.DaysWorked,
+		)
+		if err != nil {
+			logger.Errorf("Error scanning monthly time entry row: %v", err)
+			errorCount++
+			continue
+		}
+
+		// Convert seconds to duration strings
+		taskInfo.MonthlyTime = formatDuration(thisMonthSeconds)
+		taskInfo.LastMonthTime = formatDuration(lastMonthSeconds)
+
+		// Handle start time
+		if firstEntryTimeStr.Valid {
+			if parsedTime, parseErr := time.Parse("15:04:05", firstEntryTimeStr.String); parseErr == nil {
+				taskInfo.StartTime = parsedTime.Format("15:04")
+			} else {
+				taskInfo.StartTime = firstEntryTimeStr.String
+			}
+		} else {
+			taskInfo.StartTime = "N/A"
+		}
+
+		// Extract estimation information from task name
+		taskInfo.EstimationInfo, taskInfo.EstimationStatus = parseEstimation(taskInfo.Name)
+
+		taskInfos = append(taskInfos, taskInfo)
+	}
+
+	// Check for iteration errors
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error during monthly rows iteration: %w", err)
+	}
+
+	if errorCount > 0 {
+		logger.Warnf("Encountered %d errors while processing monthly time entry rows", errorCount)
+	}
+
+	logger.Debugf("Successfully retrieved %d monthly task time entries", len(taskInfos))
 	return taskInfos, nil
 }
 

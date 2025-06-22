@@ -44,7 +44,28 @@ This document outlines the environment variables that have been extracted from h
 - **File**: `main.go`
 - **Description**: Cron schedule for weekly Slack updates
 
-### 4. UI Configuration
+### 4. TimeCamp API Retry Configuration
+- **Variable**: `TIMECAMP_API_MAX_RETRIES`
+- **Default**: `3`
+- **File**: `error_handling_utils.go`
+- **Description**: Maximum number of retry attempts for TimeCamp API failures
+
+- **Variable**: `TIMECAMP_API_INITIAL_WAIT_MS`
+- **Default**: `1000` (1 second)
+- **File**: `error_handling_utils.go`
+- **Description**: Initial wait time in milliseconds before first retry
+
+- **Variable**: `TIMECAMP_API_MAX_WAIT_MS`
+- **Default**: `30000` (30 seconds)
+- **File**: `error_handling_utils.go`
+- **Description**: Maximum wait time in milliseconds between retry attempts
+
+- **Variable**: `TIMECAMP_API_RETRY_MULTIPLIER`
+- **Default**: `2.0`
+- **File**: `error_handling_utils.go`
+- **Description**: Multiplier for exponential backoff (e.g., 2.0 means 1s → 2s → 4s)
+
+### 5. UI Configuration
 - **Variable**: `PROGRESS_BAR_LENGTH`
 - **Default**: `10`
 - **File**: `daily_slack_update.go`
@@ -68,6 +89,10 @@ All the newly added environment variables are optional and have sensible default
 - `DAILY_UPDATE_SCHEDULE`
 - `WEEKLY_UPDATE_SCHEDULE`
 - `PROGRESS_BAR_LENGTH`
+- `TIMECAMP_API_MAX_RETRIES`
+- `TIMECAMP_API_INITIAL_WAIT_MS`
+- `TIMECAMP_API_MAX_WAIT_MS`
+- `TIMECAMP_API_RETRY_MULTIPLIER`
 
 ## Previously Configurable Variables
 
@@ -93,6 +118,12 @@ export DATABASE_PATH="/data/production.db"
 export TIMECAMP_API_URL="https://api-proxy.company.com/timecamp"
 export SLACK_API_URL="https://api-proxy.company.com/slack/apps.connections.open"
 
+# Custom TimeCamp API retry settings for unreliable connections
+export TIMECAMP_API_MAX_RETRIES="5"           # More retries for flaky connections
+export TIMECAMP_API_INITIAL_WAIT_MS="2000"    # Start with 2-second wait
+export TIMECAMP_API_MAX_WAIT_MS="60000"       # Allow up to 1-minute waits
+export TIMECAMP_API_RETRY_MULTIPLIER="1.5"    # Slower backoff progression
+
 # Custom sync schedules
 export TASK_SYNC_SCHEDULE="*/2 * * * *"  # Every 2 minutes
 export TIME_ENTRIES_SYNC_SCHEDULE="*/15 * * * *"  # Every 15 minutes
@@ -100,6 +131,12 @@ export DAILY_UPDATE_SCHEDULE="0 8 * * *"  # 8 AM instead of 6 AM
 
 # Custom UI
 export PROGRESS_BAR_LENGTH="20"  # Longer progress bars
+
+# TimeCamp API retry configuration
+export TIMECAMP_API_MAX_RETRIES="5"
+export TIMECAMP_API_INITIAL_WAIT_MS="2000"
+export TIMECAMP_API_MAX_WAIT_MS="60000"
+export TIMECAMP_API_RETRY_MULTIPLIER="1.5"
 
 # Run the application
 ./observe-yor-estimates

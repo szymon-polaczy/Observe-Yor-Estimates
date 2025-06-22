@@ -1,11 +1,12 @@
-# Observe Your Estimates - Daily & Weekly Slack Updates
+# Observe Your Estimates - Daily, Weekly & Monthly Slack Updates
 
-This application provides daily and weekly Slack updates for task changes and time tracking with estimation analysis, integrating with TimeCamp API for real-time data synchronization.
+This application provides daily, weekly, and monthly Slack updates for task changes and time tracking with estimation analysis, integrating with TimeCamp API for real-time data synchronization.
 
 ## Features
 
 - **Daily Slack Updates**: Automatically sends daily reports at 6 AM (configurable) showing task progress
 - **Weekly Slack Updates**: Automatically sends weekly summaries on Mondays at 8 AM (configurable) showing week-over-week progress
+- **Monthly Slack Updates**: Automatically sends monthly summaries on the 1st at 9 AM (configurable) showing month-over-month progress
 - **Real-Time TimeCamp Integration**: Syncs tasks and time entries from TimeCamp API
 - **Estimation Analysis**: Parses task names for estimation patterns like `[8-12]` and calculates usage percentage
 - **Time Tracking**: Shows start time, yesterday's time, and today's time for each task using real TimeCamp data
@@ -48,6 +49,7 @@ For first-time users:
    - `TIME_ENTRIES_SYNC_SCHEDULE`: Time entries sync schedule (default: `*/10 * * * *` - every 10 minutes)
    - `DAILY_UPDATE_SCHEDULE`: Daily update schedule (default: `0 6 * * *` - 6 AM daily)
    - `WEEKLY_UPDATE_SCHEDULE`: Weekly update schedule (default: `0 8 * * 1` - 8 AM on Mondays)
+   - `MONTHLY_UPDATE_SCHEDULE`: Monthly update schedule (default: `0 9 1 * *` - 9 AM on the 1st of each month)
    - `PROGRESS_BAR_LENGTH`: Progress bar length in Slack messages (default: `10`)
    - `MID_POINT`: Color threshold percentage (default: `50`)
    - `HIGH_POINT`: Color threshold percentage (default: `90`)
@@ -69,6 +71,7 @@ This will:
 - Sync time entries from TimeCamp every 10 minutes (configurable)  
 - Send daily Slack updates at 6 AM (configurable)
 - Send weekly Slack summaries on Mondays at 8 AM (configurable)
+- Send monthly Slack summaries on the 1st at 9 AM (configurable)
 
 ### Manual Commands
 For testing and manual operations:
@@ -81,6 +84,11 @@ For testing and manual operations:
 **Manual Weekly Update**:
 ```bash
 ./observe-yor-estimates weekly-update
+```
+
+**Manual Monthly Update**:
+```bash
+./observe-yor-estimates monthly-update
 ```
 
 **Manual Recent Sync (Incremental)**:
@@ -196,7 +204,9 @@ For detailed information about the application's architecture and configuration:
 ├── sync_tasks_to_db.go              # Task synchronization with TimeCamp API
 ├── sync_time_entries_to_db.go       # Recent time entries synchronization
 ├── full_sync.go                     # Full historical data synchronization
-├── daily_slack_update.go            # Slack notifications with real-time data
+├── daily_slack_update.go            # Daily Slack notifications with real-time data
+├── weekly_slack_update.go           # Weekly Slack summaries
+├── monthly_slack_update.go          # Monthly Slack summaries
 ├── db_setup.go                      # Database operations with error handling
 ├── .env.example                     # Environment variables template
 ├── go.mod                           # Go module dependencies
@@ -206,12 +216,13 @@ For detailed information about the application's architecture and configuration:
 
 ## Synchronization Schedules
 
-The application runs four main synchronization processes:
+The application runs five main synchronization processes:
 
 - **Task Sync**: Every 5 minutes (`*/5 * * * *`) - Syncs all tasks from TimeCamp API
 - **Time Entries Sync**: Every 10 minutes (`*/10 * * * *`) - Syncs recent time entries (last day) from TimeCamp API  
 - **Daily Updates**: Every day at 6 AM (`0 6 * * *`) - Sends daily Slack notifications
 - **Weekly Updates**: Every Monday at 8 AM (`0 8 * * 1`) - Sends weekly Slack summaries
+- **Monthly Updates**: Every 1st of the month at 9 AM (`0 9 1 * *`) - Sends monthly Slack summaries
 
 All schedules are configurable via environment variables using standard cron format.
 

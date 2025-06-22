@@ -89,6 +89,10 @@ func main() {
 			logger.Info("Running weekly update command")
 			SendWeeklySlackUpdate()
 			return
+		case "monthly-update":
+			logger.Info("Running monthly update command")
+			SendMonthlySlackUpdate()
+			return
 		case "sync-time-entries":
 			logger.Info("Running time entries sync command")
 			if err := SyncTimeEntriesToDatabase(); err != nil {
@@ -134,6 +138,7 @@ func main() {
 			logger.Info("Available commands:")
 			logger.Info("  daily-update             - Send daily Slack update")
 			logger.Info("  weekly-update            - Send weekly Slack update")
+			logger.Info("  monthly-update           - Send monthly Slack update")
 			logger.Info("  sync-time-entries        - Sync recent time entries (last day)")
 			logger.Info("  sync-tasks               - Sync all tasks")
 			logger.Info("  full-sync                - Full sync of all tasks and time entries")
@@ -174,6 +179,11 @@ func main() {
 		weeklyUpdateSchedule = "0 8 * * 1" // default: 8 AM on Mondays
 	}
 
+	monthlyUpdateSchedule := os.Getenv("MONTHLY_UPDATE_SCHEDULE")
+	if monthlyUpdateSchedule == "" {
+		monthlyUpdateSchedule = "0 9 1 * *" // default: 9 AM on the 1st of each month
+	}
+
 	// Schedule SyncTasksToDatabase to run based on configured schedule
 	_, err = cronScheduler.AddFunc(taskSyncSchedule, func() {
 		logger.Debug("Running scheduled task sync")
@@ -212,6 +222,15 @@ func main() {
 	})
 	if err != nil {
 		logger.Fatalf("Critical error: Failed to schedule weekly Slack update: %v", err)
+	}
+
+	// Schedule monthly Slack update to run based on configured schedule
+	_, err = cronScheduler.AddFunc(monthlyUpdateSchedule, func() {
+		logger.Debug("Running scheduled monthly Slack update")
+		SendMonthlySlackUpdate()
+	})
+	if err != nil {
+		logger.Fatalf("Critical error: Failed to schedule monthly Slack update: %v", err)
 	}
 
 	// Start the cron scheduler
@@ -401,6 +420,7 @@ func showHelp() {
 	fmt.Println("Available commands:")
 	fmt.Println("  daily-update             - Send daily Slack update")
 	fmt.Println("  weekly-update            - Send weekly Slack update")
+	fmt.Println("  monthly-update           - Send monthly Slack update")
 	fmt.Println("  sync-time-entries        - Sync recent time entries (last day)")
 	fmt.Println("  sync-tasks               - Sync all tasks")
 	fmt.Println("  full-sync                - Full sync of all tasks and time entries")

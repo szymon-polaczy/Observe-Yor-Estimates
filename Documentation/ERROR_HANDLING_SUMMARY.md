@@ -24,11 +24,14 @@
 - Added proper resource cleanup with deferred close operations
 - Configurable database path via environment variables
 
-### 5. **HTTP API Error Handling** (`sync_tasks_to_db.go`, `sync_time_entries_to_db.go`, `main.go`)
-- Added HTTP status code checking
-- Improved error messages for API failures
+### 5. **HTTP API Error Handling with Retry Mechanism** (`error_handling_utils.go`, `sync_tasks_to_db.go`, `sync_time_entries_to_db.go`, `full_sync.go`)
+- **NEW: HTTP Retry Logic** - Added exponential backoff retry mechanism for temporary API failures
+- **NEW: Retryable Error Detection** - Automatically identifies and retries on 500, 502, 503, 504, and 429 HTTP errors
+- **NEW: Configurable Retry Parameters** - Default: 3 retries with 1s initial wait, 30s max wait, 2x multiplier
+- Added HTTP status code checking and improved error messages for API failures
 - Added request validation and response validation
 - Configurable API endpoints for different environments
+- **Resilient to TimeCamp API Outages** - Application now handles temporary server issues gracefully
 
 ### 6. **WebSocket Error Handling** (`main.go`)
 - Added panic recovery in WebSocket goroutine
@@ -49,7 +52,37 @@
 ### 9. **Resource Management**
 - Added deferred cleanup for database connections, prepared statements, and HTTP responses
 - Proper error handling in cleanup operations
-- Prevention of resource leaks
+
+## New Retry Mechanism Details
+
+The application now includes a robust HTTP retry mechanism that handles temporary API failures:
+
+### **Retryable Conditions:**
+- HTTP 500 (Internal Server Error)
+- HTTP 502 (Bad Gateway) 
+- HTTP 503 (Service Unavailable)
+- HTTP 504 (Gateway Timeout)
+- HTTP 429 (Too Many Requests)
+- Network connectivity issues
+
+### **Retry Behavior:**
+- **Max Retries:** 3 attempts (configurable)
+- **Initial Wait:** 1 second
+- **Max Wait:** 30 seconds
+- **Backoff:** Exponential (2x multiplier)
+- **Example:** 1s → 2s → 4s → fail
+
+### **Logging:**
+- Debug logs for each attempt
+- Warning logs for retry attempts
+- Info logs when requests succeed after retries
+- Error logs only after all retries are exhausted
+
+### **Benefits:**
+- **Resilience:** Handles temporary TimeCamp API outages
+- **Reliability:** Reduces false failures from transient issues
+- **Observability:** Clear logging shows when retries are happening
+- **Performance:** Exponential backoff prevents overwhelming failing services
 
 ## Error Classification
 

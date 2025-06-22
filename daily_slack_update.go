@@ -102,26 +102,28 @@ func formatDailySlackMessage(taskInfos []TaskTimeInfo) SlackMessage {
 		taskBlock := formatDailyTaskBlock(task)
 		blocks = append(blocks, taskBlock...)
 
-		// Add to plain text version too
-		messageText.WriteString(fmt.Sprintf("*%s*\n", task.Name))
-		messageText.WriteString(fmt.Sprintf("• Start: %s\n", task.StartTime))
-		messageText.WriteString(fmt.Sprintf("• Yesterday: %s\n", task.YesterdayTime))
-		messageText.WriteString(fmt.Sprintf("• Today: %s\n", task.TodayTime))
+		// Add to plain text version too - compact format
+		messageText.WriteString(fmt.Sprintf("*%s*", task.Name))
 		if task.EstimationInfo != "" {
-			messageText.WriteString(fmt.Sprintf("• %s", task.EstimationInfo))
+			estimationText := task.EstimationInfo
 			if task.EstimationStatus != "" {
-				messageText.WriteString(fmt.Sprintf(" (%s)", task.EstimationStatus))
+				estimationText += fmt.Sprintf(" (%s)", task.EstimationStatus)
 			}
+			messageText.WriteString(fmt.Sprintf(" | %s", estimationText))
+		} else {
+			messageText.WriteString(" | _no estimation given_")
+		}
+		messageText.WriteString("\n")
 
-			// Add color indicator to plain text version
+		messageText.WriteString(fmt.Sprintf("Time worked: Yesterday %s, Today %s", task.YesterdayTime, task.TodayTime))
+		if task.EstimationInfo != "" {
 			percentage, _, err := calculateTimeUsagePercentage(task)
 			if err == nil {
 				emoji, description, _ := getColorIndicator(percentage)
-				messageText.WriteString(fmt.Sprintf("\n• Usage: %s %s", emoji, description))
+				messageText.WriteString(fmt.Sprintf(" | Usage: %s %.0f%% (%s)", emoji, percentage, description))
 			}
-			messageText.WriteString("\n")
 		}
-		messageText.WriteString("\n")
+		messageText.WriteString(fmt.Sprintf("\nStart: %s\n\n", task.StartTime))
 	}
 
 	return SlackMessage{
@@ -132,74 +134,45 @@ func formatDailySlackMessage(taskInfos []TaskTimeInfo) SlackMessage {
 
 // formatDailyTaskBlock formats a single task into Slack blocks
 func formatDailyTaskBlock(task TaskTimeInfo) []Block {
-	var fields []Field
+	// Build compact formatting with name and estimation on one line
+	var titleLine strings.Builder
+	titleLine.WriteString(fmt.Sprintf("*%s*", task.Name))
 
-	fields = append(fields, Field{
-		Type: "mrkdwn",
-		Text: fmt.Sprintf("*Start Time:*\n%s", task.StartTime),
-	})
-
-	fields = append(fields, Field{
-		Type: "mrkdwn",
-		Text: fmt.Sprintf("*Yesterday:*\n%s", task.YesterdayTime),
-	})
-
-	fields = append(fields, Field{
-		Type: "mrkdwn",
-		Text: fmt.Sprintf("*Today:*\n%s", task.TodayTime),
-	})
-
-	// Calculate percentage and get color indicator
-	var accessory *Accessory
-	estimationText := ""
-
+	// Add estimation info to the same line if available
 	if task.EstimationInfo != "" {
-		estimationText = task.EstimationInfo
+		estimationText := task.EstimationInfo
 		if task.EstimationStatus != "" {
-			estimationText += fmt.Sprintf("\n_(%s)_", task.EstimationStatus)
+			estimationText += fmt.Sprintf(" (%s)", task.EstimationStatus)
 		}
-
-		// Try to calculate percentage usage
-		percentage, _, err := calculateTimeUsagePercentage(task)
-		if err == nil {
-			emoji, _, _ := getColorIndicator(percentage)
-
-			accessory = &Accessory{
-				Type: "button",
-				Text: &Text{
-					Type: "plain_text",
-					Text: fmt.Sprintf("%s %.0f%%", emoji, percentage),
-				},
-			}
-		}
-
-		fields = append(fields, Field{
-			Type: "mrkdwn",
-			Text: fmt.Sprintf("*Estimation:*\n%s", estimationText),
-		})
+		titleLine.WriteString(fmt.Sprintf(" | %s", estimationText))
 	} else {
-		fields = append(fields, Field{
-			Type: "mrkdwn",
-			Text: "*Estimation:*\n_no estimation given_",
-		})
+		titleLine.WriteString(" | _no estimation given_")
 	}
 
-	// Create the main section block
+	// Build time and percentage line
+	var timeLine strings.Builder
+	timeLine.WriteString(fmt.Sprintf("*Time worked:* Yesterday %s, Today %s", task.YesterdayTime, task.TodayTime))
+
+	// Add percentage if available
+	if task.EstimationInfo != "" {
+		percentage, _, err := calculateTimeUsagePercentage(task)
+		if err == nil {
+			emoji, description, _ := getColorIndicator(percentage)
+			timeLine.WriteString(fmt.Sprintf(" | *Usage:* %s %.0f%% (%s)", emoji, percentage, description))
+		}
+	}
+
+	// Create a single compact section block
 	sectionBlock := Block{
 		Type: "section",
 		Text: &Text{
 			Type: "mrkdwn",
-			Text: fmt.Sprintf("*%s*", task.Name),
+			Text: fmt.Sprintf("%s\n%s\n*Start:* %s", titleLine.String(), timeLine.String(), task.StartTime),
 		},
-		Accessory: accessory,
 	}
 
 	return []Block{
 		sectionBlock,
-		{
-			Type:   "section",
-			Fields: fields,
-		},
 		{
 			Type: "divider",
 		},

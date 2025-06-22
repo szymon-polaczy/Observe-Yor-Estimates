@@ -113,27 +113,28 @@ func formatWeeklySlackMessage(taskInfos []WeeklyTaskTimeInfo) SlackMessage {
 		taskBlock := formatWeeklyTaskBlock(task)
 		blocks = append(blocks, taskBlock...)
 
-		// Add to plain text version too
-		messageText.WriteString(fmt.Sprintf("*%s*\n", task.Name))
-		messageText.WriteString(fmt.Sprintf("• Start: %s\n", task.StartTime))
-		messageText.WriteString(fmt.Sprintf("• This Week: %s\n", task.WeeklyTime))
-		messageText.WriteString(fmt.Sprintf("• Last Week: %s\n", task.LastWeekTime))
-		messageText.WriteString(fmt.Sprintf("• Days Worked: %d\n", task.DaysWorked))
+		// Add to plain text version too - compact format
+		messageText.WriteString(fmt.Sprintf("*%s*", task.Name))
 		if task.EstimationInfo != "" {
-			messageText.WriteString(fmt.Sprintf("• %s", task.EstimationInfo))
+			estimationText := task.EstimationInfo
 			if task.EstimationStatus != "" {
-				messageText.WriteString(fmt.Sprintf(" (%s)", task.EstimationStatus))
+				estimationText += fmt.Sprintf(" (%s)", task.EstimationStatus)
 			}
+			messageText.WriteString(fmt.Sprintf(" | %s", estimationText))
+		} else {
+			messageText.WriteString(" | _no estimation given_")
+		}
+		messageText.WriteString("\n")
 
-			// Add color indicator to plain text version
+		messageText.WriteString(fmt.Sprintf("Time worked: This week %s, Last week %s, Days worked: %d", task.WeeklyTime, task.LastWeekTime, task.DaysWorked))
+		if task.EstimationInfo != "" {
 			percentage, _, err := calculateWeeklyTimeUsagePercentage(task)
 			if err == nil {
 				emoji, description, _ := getColorIndicator(percentage)
-				messageText.WriteString(fmt.Sprintf("\n• Usage: %s %s", emoji, description))
+				messageText.WriteString(fmt.Sprintf(" | Usage: %s %.0f%% (%s)", emoji, percentage, description))
 			}
-			messageText.WriteString("\n")
 		}
-		messageText.WriteString("\n")
+		messageText.WriteString(fmt.Sprintf("\nStart: %s\n\n", task.StartTime))
 	}
 
 	return SlackMessage{
@@ -144,8 +145,6 @@ func formatWeeklySlackMessage(taskInfos []WeeklyTaskTimeInfo) SlackMessage {
 
 // formatWeeklyTaskBlock formats a single weekly task into Slack blocks
 func formatWeeklyTaskBlock(task WeeklyTaskTimeInfo) []Block {
-	var fields []Field
-
 	// Ensure all values are valid and not empty
 	startTime := task.StartTime
 	if startTime == "" {
@@ -162,61 +161,6 @@ func formatWeeklyTaskBlock(task WeeklyTaskTimeInfo) []Block {
 		lastWeekTime = "0h 0m"
 	}
 
-	fields = append(fields, Field{
-		Type: "mrkdwn",
-		Text: fmt.Sprintf("*Start Time:*\n%s", startTime),
-	})
-
-	fields = append(fields, Field{
-		Type: "mrkdwn",
-		Text: fmt.Sprintf("*This Week:*\n%s", weeklyTime),
-	})
-
-	fields = append(fields, Field{
-		Type: "mrkdwn",
-		Text: fmt.Sprintf("*Last Week:*\n%s", lastWeekTime),
-	})
-
-	fields = append(fields, Field{
-		Type: "mrkdwn",
-		Text: fmt.Sprintf("*Days Worked:*\n%d", task.DaysWorked),
-	})
-
-	// Calculate percentage and get color indicator
-	var accessory *Accessory
-	estimationText := ""
-
-	if task.EstimationInfo != "" {
-		estimationText = task.EstimationInfo
-		if task.EstimationStatus != "" {
-			estimationText += fmt.Sprintf("\n_(%s)_", task.EstimationStatus)
-		}
-
-		// Try to calculate percentage usage
-		percentage, _, err := calculateWeeklyTimeUsagePercentage(task)
-		if err == nil {
-			emoji, _, _ := getColorIndicator(percentage)
-
-			accessory = &Accessory{
-				Type: "button",
-				Text: &Text{
-					Type: "plain_text",
-					Text: fmt.Sprintf("%s %.0f%%", emoji, percentage),
-				},
-			}
-		}
-
-		fields = append(fields, Field{
-			Type: "mrkdwn",
-			Text: fmt.Sprintf("*Estimation:*\n%s", estimationText),
-		})
-	} else {
-		fields = append(fields, Field{
-			Type: "mrkdwn",
-			Text: "*Estimation:*\n_no estimation given_",
-		})
-	}
-
 	// Ensure task name is not empty and limit length
 	taskName := task.Name
 	if taskName == "" {
@@ -227,22 +171,45 @@ func formatWeeklyTaskBlock(task WeeklyTaskTimeInfo) []Block {
 		taskName = taskName[:97] + "..."
 	}
 
-	// Create the main section block
+	// Build compact formatting with name and estimation on one line
+	var titleLine strings.Builder
+	titleLine.WriteString(fmt.Sprintf("*%s*", taskName))
+
+	// Add estimation info to the same line if available
+	if task.EstimationInfo != "" {
+		estimationText := task.EstimationInfo
+		if task.EstimationStatus != "" {
+			estimationText += fmt.Sprintf(" (%s)", task.EstimationStatus)
+		}
+		titleLine.WriteString(fmt.Sprintf(" | %s", estimationText))
+	} else {
+		titleLine.WriteString(" | _no estimation given_")
+	}
+
+	// Build time and percentage line
+	var timeLine strings.Builder
+	timeLine.WriteString(fmt.Sprintf("*Time worked:* This week %s, Last week %s, Days worked: %d", weeklyTime, lastWeekTime, task.DaysWorked))
+
+	// Add percentage if available
+	if task.EstimationInfo != "" {
+		percentage, _, err := calculateWeeklyTimeUsagePercentage(task)
+		if err == nil {
+			emoji, description, _ := getColorIndicator(percentage)
+			timeLine.WriteString(fmt.Sprintf(" | *Usage:* %s %.0f%% (%s)", emoji, percentage, description))
+		}
+	}
+
+	// Create a single compact section block
 	sectionBlock := Block{
 		Type: "section",
 		Text: &Text{
 			Type: "mrkdwn",
-			Text: fmt.Sprintf("*%s*", taskName),
+			Text: fmt.Sprintf("%s\n%s\n*Start:* %s", titleLine.String(), timeLine.String(), startTime),
 		},
-		Accessory: accessory,
 	}
 
 	return []Block{
 		sectionBlock,
-		{
-			Type:   "section",
-			Fields: fields,
-		},
 		{
 			Type: "divider",
 		},
