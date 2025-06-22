@@ -66,14 +66,39 @@ async function processSlackCommand(command, responseUrl) {
       
       // Execute the Go binary with the appropriate command
       // Pass --output-json flag to get JSON response instead of sending via response URL
-      const goExecutable = './observe-yor-estimates';
+      
+      // Use absolute path for better reliability in Netlify environment
+      const path = require('path');
+      const goExecutable = path.join(__dirname, '..', 'observe-yor-estimates');
+      
+      console.log(`Attempting to spawn: ${goExecutable} with args: [${command}, --output-json]`);
+      console.log(`Current working directory: ${process.cwd()}`);
+      console.log(`__dirname: ${__dirname}`);
+      
       const child = spawn(goExecutable, [command, '--output-json'], {
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: process.env
+        env: process.env,
+        cwd: path.join(__dirname, '..')  // Ensure working directory is project root
       });
 
       let stdout = '';
       let stderr = '';
+
+      // Add timeout to prevent hanging
+      const timeout = setTimeout(() => {
+        console.error(`Command ${command} timed out after 25 seconds`);
+        child.kill('SIGTERM');
+        resolve({
+          statusCode: 200,
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            response_type: 'ephemeral',
+            text: `❌ Error: ${command.replace('-', ' ')} command timed out`
+          }),
+        });
+      }, 25000); // 25 second timeout
 
       child.stdout.on('data', (data) => {
         stdout += data.toString();
@@ -84,6 +109,8 @@ async function processSlackCommand(command, responseUrl) {
       });
 
       child.on('close', async (code) => {
+        clearTimeout(timeout); // Clear the timeout since process completed
+        
         if (code === 0) {
           console.log(`Successfully executed ${command} command`);
           
@@ -133,7 +160,23 @@ async function processSlackCommand(command, responseUrl) {
       });
 
       child.on('error', async (error) => {
+        clearTimeout(timeout); // Clear the timeout since we got an error
+        
         console.error(`Failed to start command ${command}:`, error);
+        console.error(`Error code: ${error.code}`);
+        console.error(`Error errno: ${error.errno}`);
+        console.error(`Error syscall: ${error.syscall}`);
+        console.error(`Error path: ${error.path}`);
+        console.error(`Attempted to execute: ${goExecutable}`);
+        
+        // Check if binary exists
+        const fs = require('fs');
+        try {
+          const stats = fs.statSync(goExecutable);
+          console.error(`Binary exists, size: ${stats.size}, executable: ${(stats.mode & parseInt('111', 8)) !== 0}`);
+        } catch (fsError) {
+          console.error(`Binary does not exist or cannot be accessed: ${fsError.message}`);
+        }
         
         resolve({
           statusCode: 200,
@@ -142,7 +185,7 @@ async function processSlackCommand(command, responseUrl) {
           },
           body: JSON.stringify({
             response_type: 'ephemeral',
-            text: `❌ Error: Failed to start ${command.replace('-', ' ')} command`
+            text: `❌ Error: Failed to start ${command.replace('-', ' ')} command. Error: ${error.message}`
           }),
         });
       });
