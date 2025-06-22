@@ -17,7 +17,7 @@ exports.handler = async (event, context) => {
   try {
     // Parse the command from the URL path
     const command = event.path.split('/').pop(); // Gets 'daily-update', 'weekly-update', etc.
-    const validCommands = ['daily-update', 'weekly-update', 'monthly-update'];
+    const validCommands = ['daily-update', 'weekly-update', 'monthly-update', 'full-sync'];
     
     if (!validCommands.includes(command)) {
       return {

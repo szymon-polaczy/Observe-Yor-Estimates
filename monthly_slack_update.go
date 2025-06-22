@@ -89,7 +89,7 @@ func getMonthlyTaskChanges(db *sql.DB) ([]MonthlyTaskTimeInfo, error) {
 				EstimationInfo:   "",
 				EstimationStatus: "",
 				DaysWorked:       0,
-				Comments:         []string{
+				Comments: []string{
 					"Database is empty and requires initial synchronization",
 					"Please ensure TIMECAMP_API_KEY is set in Netlify environment variables",
 					"Contact administrator to complete the setup",
@@ -103,7 +103,7 @@ func getMonthlyTaskChanges(db *sql.DB) ([]MonthlyTaskTimeInfo, error) {
 		// Trigger full sync to populate the database
 		if err := FullSyncAll(); err != nil {
 			logger.Errorf("Full sync failed: %v", err)
-			
+
 			// Return a helpful error message instead of crashing
 			syncInfo := MonthlyTaskTimeInfo{
 				TaskID:           0,
@@ -114,7 +114,7 @@ func getMonthlyTaskChanges(db *sql.DB) ([]MonthlyTaskTimeInfo, error) {
 				EstimationInfo:   "",
 				EstimationStatus: "",
 				DaysWorked:       0,
-				Comments:         []string{
+				Comments: []string{
 					fmt.Sprintf("Sync error: %v", err),
 					"Please check TimeCamp API key and connectivity",
 					"Contact administrator if this persists",

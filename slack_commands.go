@@ -36,6 +36,7 @@ func setupSlackRoutes() {
 	http.HandleFunc("/slack/daily-update", handleDailyUpdateCommand)
 	http.HandleFunc("/slack/weekly-update", handleWeeklyUpdateCommand)
 	http.HandleFunc("/slack/monthly-update", handleMonthlyUpdateCommand)
+	http.HandleFunc("/slack/full-sync", handleFullSyncCommand)
 	http.HandleFunc("/health", handleHealthCheck)
 }
 
@@ -336,6 +337,83 @@ func handleMonthlyUpdateCommand(w http.ResponseWriter, r *http.Request) {
 			logger.Errorf("Failed to send delayed response: %v", err)
 		} else {
 			logger.Info("Successfully sent monthly update via slash command")
+		}
+	}()
+}
+
+// handleFullSyncCommand handles the /full-sync slash command
+func handleFullSyncCommand(w http.ResponseWriter, r *http.Request) {
+	logger := GetGlobalLogger()
+
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	req, err := parseSlackCommand(r)
+	if err != nil {
+		logger.Errorf("Failed to parse slash command: %v", err)
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	if err := verifySlackRequest(req); err != nil {
+		logger.Errorf("Failed to verify Slack request: %v", err)
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	logger.Infof("Received /full-sync command from user %s in channel %s", req.UserName, req.ChannelName)
+
+	// Send immediate acknowledgment
+	sendImmediateResponse(w, "⏳ Starting full synchronization... This may take up to 60 seconds.", "ephemeral")
+
+	// Process the command asynchronously
+	go func() {
+		logger.Info("Starting full sync operation via slash command")
+
+		if err := FullSyncAll(); err != nil {
+			logger.Errorf("Full sync failed: %v", err)
+			sendDelayedResponse(req.ResponseURL, SlackMessage{
+				Text: "❌ Error: Full synchronization failed",
+				Blocks: []Block{
+					{
+						Type: "section",
+						Text: &Text{
+							Type: "mrkdwn",
+							Text: fmt.Sprintf("❌ *Full Sync Failed*\n\nError: `%v`\n*Time:* %s", err, time.Now().Format("2006-01-02 15:04:05")),
+						},
+					},
+				},
+			})
+			return
+		}
+
+		// Send success message
+		message := SlackMessage{
+			Text: "✅ Full synchronization completed successfully",
+			Blocks: []Block{
+				{
+					Type: "header",
+					Text: &Text{
+						Type: "plain_text",
+						Text: "✅ Full Sync Complete",
+					},
+				},
+				{
+					Type: "section",
+					Text: &Text{
+						Type: "mrkdwn",
+						Text: fmt.Sprintf("*Full synchronization completed successfully*\n\n• All tasks synced from TimeCamp\n• Time entries synced (last 6 months)\n• Database is now up to date\n\n*Completed at:* %s", time.Now().Format("2006-01-02 15:04:05")),
+					},
+				},
+			},
+		}
+
+		if err := sendDelayedResponse(req.ResponseURL, message); err != nil {
+			logger.Errorf("Failed to send delayed response: %v", err)
+		} else {
+			logger.Info("Successfully sent full sync completion message via slash command")
 		}
 	}()
 }

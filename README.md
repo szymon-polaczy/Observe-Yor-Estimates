@@ -202,6 +202,7 @@ The application now supports Slack slash commands via REST API endpoints. After 
 - `/daily-update` - Trigger an immediate daily update
 - `/weekly-update` - Trigger an immediate weekly summary  
 - `/monthly-update` - Trigger an immediate monthly summary
+- `/full-sync` - Trigger a complete synchronization of all data
 
 **Setup Requirements**:
 1. Create a Slack app with slash commands pointing to your server
@@ -209,6 +210,7 @@ The application now supports Slack slash commands via REST API endpoints. After 
    - `https://your-server.com/slack/daily-update`
    - `https://your-server.com/slack/weekly-update`
    - `https://your-server.com/slack/monthly-update`
+   - `https://your-server.com/slack/full-sync`
 3. Set `SLACK_VERIFICATION_TOKEN` in your `.env` file for security (optional)
 4. Ensure your server is accessible on the configured `PORT` (default: 8080)
 
@@ -225,6 +227,12 @@ The application now supports Slack slash commands via REST API endpoints. After 
 - `full-sync` - Complete synchronization, use when setting up for the first time
 - `full-sync-time-entries` - Get 6 months of historical time entries
 - `full-sync-tasks` - Same as regular task sync but with clearer intent
+
+**For Slack Commands**:
+- `/daily-update` - Trigger daily update from Slack
+- `/weekly-update` - Trigger weekly summary from Slack
+- `/monthly-update` - Trigger monthly summary from Slack
+- `/full-sync` - Trigger complete synchronization from Slack (⚠️ takes 30-60 seconds)
 
 **Performance Impact**:
 - Regular sync: ~1-2 seconds for time entries, ~30 seconds for all tasks

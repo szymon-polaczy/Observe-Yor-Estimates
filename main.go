@@ -145,11 +145,19 @@ func main() {
 			return
 		case "full-sync":
 			logger.Info("Running full synchronization command")
-			if err := FullSyncAll(); err != nil {
-				logger.Errorf("Full sync failed: %v", err)
-				os.Exit(1)
+			responseURL := getResponseURL()
+			outputJSON := getOutputJSON()
+			if outputJSON {
+				SendFullSyncJSON()
+			} else if responseURL != "" {
+				SendFullSyncWithResponseURL(responseURL)
+			} else {
+				if err := FullSyncAll(); err != nil {
+					logger.Errorf("Full sync failed: %v", err)
+					os.Exit(1)
+				}
+				logger.Info("Full synchronization completed successfully")
 			}
-			logger.Info("Full synchronization completed successfully")
 			return
 		case "full-sync-tasks":
 			logger.Info("Running full tasks sync command")
@@ -364,6 +372,7 @@ func showHelp() {
 	fmt.Println("  POST /slack/daily-update   - Trigger daily update")
 	fmt.Println("  POST /slack/weekly-update  - Trigger weekly update")
 	fmt.Println("  POST /slack/monthly-update - Trigger monthly update")
+	fmt.Println("  POST /slack/full-sync      - Trigger full synchronization")
 	fmt.Println("  GET  /health               - Health check endpoint")
 	fmt.Println("")
 	fmt.Println("Required environment variables:")

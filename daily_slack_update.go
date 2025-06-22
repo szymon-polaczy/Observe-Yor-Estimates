@@ -86,7 +86,7 @@ func getTaskTimeChanges(db *sql.DB) ([]TaskTimeInfo, error) {
 				StartTime:        time.Now().Format("15:04"),
 				EstimationInfo:   "",
 				EstimationStatus: "",
-				Comments:         []string{
+				Comments: []string{
 					"Database is empty and requires initial synchronization",
 					"Please ensure TIMECAMP_API_KEY is set in Netlify environment variables",
 					"Contact administrator to complete the setup",
@@ -100,7 +100,7 @@ func getTaskTimeChanges(db *sql.DB) ([]TaskTimeInfo, error) {
 		// Trigger full sync to populate the database
 		if err := FullSyncAll(); err != nil {
 			logger.Errorf("Full sync failed: %v", err)
-			
+
 			// Return a helpful error message instead of crashing
 			syncInfo := TaskTimeInfo{
 				TaskID:           0,
@@ -110,7 +110,7 @@ func getTaskTimeChanges(db *sql.DB) ([]TaskTimeInfo, error) {
 				StartTime:        time.Now().Format("15:04"),
 				EstimationInfo:   "",
 				EstimationStatus: "",
-				Comments:         []string{
+				Comments: []string{
 					fmt.Sprintf("Sync error: %v", err),
 					"Please check TimeCamp API key and connectivity",
 					"Contact administrator if this persists",
