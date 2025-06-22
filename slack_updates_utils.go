@@ -66,7 +66,7 @@ type Accessory struct {
 
 // parseEstimation extracts estimation information from task name
 func parseEstimation(taskName string) (string, string) {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 
 	// Regex to match patterns like [7-13] or [13-29]
 	re := regexp.MustCompile(`\[(\d+)-(\d+)\]`)
@@ -225,7 +225,7 @@ func getColorIndicator(percentage float64) (string, string, bool) {
 
 // calculateTimeUsagePercentage calculates the percentage of estimation used based on total time spent (daily)
 func calculateTimeUsagePercentage(task TaskTimeInfo) (float64, int, error) {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 
 	// Parse the pessimistic (maximum) estimation from task name
 	re := regexp.MustCompile(`\[(\d+)-(\d+)\]`)

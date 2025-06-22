@@ -12,7 +12,7 @@ import (
 
 // SendWeeklySlackUpdate sends a weekly update to Slack with task changes over the past week
 func SendWeeklySlackUpdate() {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 	logger.Info("Starting weekly Slack update")
 
 	db, err := GetDB()
@@ -63,7 +63,7 @@ func SendWeeklySlackUpdate() {
 
 // getWeeklyTaskChanges retrieves task time changes for the past week
 func getWeeklyTaskChanges(db *sql.DB) ([]WeeklyTaskTimeInfo, error) {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 
 	// Get actual time entries data from the database for the past week
 	logger.Debug("Querying tasks with weekly time entries")
@@ -105,7 +105,7 @@ func formatWeeklySlackMessage(taskInfos []WeeklyTaskTimeInfo) SlackMessage {
 	maxTasks := 10
 	if len(taskInfos) > maxTasks {
 		taskInfos = taskInfos[:maxTasks]
-		logger := NewLogger()
+		logger := GetGlobalLogger()
 		logger.Infof("Limiting weekly report to %d tasks to fit within Slack limits", maxTasks)
 	}
 
@@ -262,7 +262,7 @@ func sendNoWeeklyChangesNotification() error {
 
 // calculateWeeklyTimeUsagePercentage calculates the percentage of estimation used based on weekly total time spent
 func calculateWeeklyTimeUsagePercentage(task WeeklyTaskTimeInfo) (float64, int, error) {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 
 	// Parse the pessimistic (maximum) estimation from task name
 	re := regexp.MustCompile(`\[(\d+)-(\d+)\]`)
@@ -294,7 +294,7 @@ func calculateWeeklyTimeUsagePercentage(task WeeklyTaskTimeInfo) (float64, int, 
 
 // SendWeeklySlackUpdateWithResponseURL sends a weekly update to Slack using a response URL
 func SendWeeklySlackUpdateWithResponseURL(responseURL string) {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 	logger.Info("Starting weekly Slack update with response URL")
 
 	db, err := GetDB()
@@ -346,7 +346,7 @@ func SendWeeklySlackUpdateWithResponseURL(responseURL string) {
 
 // SendWeeklySlackUpdateJSON generates a weekly update and outputs it as JSON to stdout
 func SendWeeklySlackUpdateJSON() {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 	logger.Info("Starting weekly Slack update JSON output")
 
 	db, err := GetDB()

@@ -12,7 +12,7 @@ import (
 
 // SendMonthlySlackUpdate sends a monthly update to Slack with task changes over the past month
 func SendMonthlySlackUpdate() {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 	logger.Info("Starting monthly Slack update")
 
 	db, err := GetDB()
@@ -63,7 +63,7 @@ func SendMonthlySlackUpdate() {
 
 // getMonthlyTaskChanges retrieves task time changes for the past month
 func getMonthlyTaskChanges(db *sql.DB) ([]MonthlyTaskTimeInfo, error) {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 
 	// Get actual time entries data from the database for the past month
 	logger.Debug("Querying tasks with monthly time entries")
@@ -105,7 +105,7 @@ func formatMonthlySlackMessage(taskInfos []MonthlyTaskTimeInfo) SlackMessage {
 	maxTasks := 10
 	if len(taskInfos) > maxTasks {
 		taskInfos = taskInfos[:maxTasks]
-		logger := NewLogger()
+		logger := GetGlobalLogger()
 		logger.Infof("Limiting monthly report to %d tasks to fit within Slack limits", maxTasks)
 	}
 
@@ -262,7 +262,7 @@ func sendNoMonthlyChangesNotification() error {
 
 // SendMonthlySlackUpdateWithResponseURL sends a monthly update to Slack using a response URL
 func SendMonthlySlackUpdateWithResponseURL(responseURL string) {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 	logger.Info("Starting monthly Slack update with response URL")
 
 	db, err := GetDB()
@@ -314,7 +314,7 @@ func SendMonthlySlackUpdateWithResponseURL(responseURL string) {
 
 // SendMonthlySlackUpdateJSON generates a monthly update and outputs it as JSON to stdout
 func SendMonthlySlackUpdateJSON() {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 	logger.Info("Starting monthly Slack update JSON output")
 
 	db, err := GetDB()
@@ -361,7 +361,7 @@ func SendMonthlySlackUpdateJSON() {
 
 // calculateMonthlyTimeUsagePercentage calculates the percentage of estimation used based on monthly total time spent
 func calculateMonthlyTimeUsagePercentage(task MonthlyTaskTimeInfo) (float64, int, error) {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 
 	// Parse the pessimistic (maximum) estimation from task name
 	re := regexp.MustCompile(`\[(\d+)-(\d+)\]`)

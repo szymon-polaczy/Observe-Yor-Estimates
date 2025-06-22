@@ -10,7 +10,7 @@ import (
 
 // SendDailySlackUpdate sends a daily update to Slack with task changes
 func SendDailySlackUpdate() {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 	logger.Info("Starting daily Slack update")
 
 	db, err := GetDB()
@@ -61,7 +61,7 @@ func SendDailySlackUpdate() {
 
 // getTaskTimeChanges retrieves task time changes between yesterday and today
 func getTaskTimeChanges(db *sql.DB) ([]TaskTimeInfo, error) {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 
 	// Get actual time entries data from the database
 	logger.Debug("Querying tasks with recent time entries")
@@ -225,7 +225,7 @@ func sendNoChangesNotification() error {
 
 // SendDailySlackUpdateWithResponseURL sends a daily update to Slack using a response URL
 func SendDailySlackUpdateWithResponseURL(responseURL string) {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 	logger.Info("Starting daily Slack update with response URL")
 
 	db, err := GetDB()
@@ -277,7 +277,7 @@ func SendDailySlackUpdateWithResponseURL(responseURL string) {
 
 // SendDailySlackUpdateJSON generates a daily update and outputs it as JSON to stdout
 func SendDailySlackUpdateJSON() {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 	logger.Info("Starting daily Slack update JSON output")
 
 	db, err := GetDB()

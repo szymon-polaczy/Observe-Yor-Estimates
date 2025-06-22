@@ -24,7 +24,7 @@ type JsonTask struct {
 // Note: Tasks are synced completely each time since the TimeCamp API doesn't support
 // filtering by modification date and the task list is relatively small
 func SyncTasksToDatabase() error {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 
 	// Load environment variables - but don't panic here since main already validated them
 	err := godotenv.Load()

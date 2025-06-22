@@ -69,11 +69,44 @@ async function processSlackCommand(command, responseUrl) {
       
       // Use absolute path for better reliability in Netlify environment
       const path = require('path');
-      const goExecutable = path.join(__dirname, '..', 'observe-yor-estimates');
+      const fs = require('fs');
+      
+      // In Netlify, the binary should be in the same directory as the project root
+      // Try multiple possible locations
+      const possiblePaths = [
+        path.join(__dirname, '..', 'observe-yor-estimates'),  // Original path
+        path.join(process.cwd(), 'observe-yor-estimates'),    // Working directory
+        './observe-yor-estimates',                             // Relative to cwd
+        'observe-yor-estimates',                               // Just the binary name
+        '/var/task/observe-yor-estimates',                     // Lambda task root
+        path.join(process.env.LAMBDA_TASK_ROOT || '/var/task', 'observe-yor-estimates') // Using env var
+      ];
+      
+      let goExecutable = null;
+      for (const possiblePath of possiblePaths) {
+        try {
+          if (fs.existsSync(possiblePath)) {
+            goExecutable = possiblePath;
+            break;
+          }
+        } catch (error) {
+          // Continue to next path
+        }
+      }
+      
+      if (!goExecutable) {
+        goExecutable = possiblePaths[0]; // Fallback to original path for error reporting
+      }
       
       console.log(`Attempting to spawn: ${goExecutable} with args: [${command}, --output-json]`);
       console.log(`Current working directory: ${process.cwd()}`);
       console.log(`__dirname: ${__dirname}`);
+      console.log(`process.env.NETLIFY: ${process.env.NETLIFY}`);
+      console.log(`process.env.LAMBDA_TASK_ROOT: ${process.env.LAMBDA_TASK_ROOT}`);
+      
+      // Log which path was selected
+      console.log(`Selected executable path: ${goExecutable}`);
+      console.log(`Available paths checked:`, possiblePaths);
       
       const child = spawn(goExecutable, [command, '--output-json'], {
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -168,14 +201,17 @@ async function processSlackCommand(command, responseUrl) {
         console.error(`Error syscall: ${error.syscall}`);
         console.error(`Error path: ${error.path}`);
         console.error(`Attempted to execute: ${goExecutable}`);
+        console.error(`Tried paths:`, possiblePaths);
         
-        // Check if binary exists
-        const fs = require('fs');
-        try {
-          const stats = fs.statSync(goExecutable);
-          console.error(`Binary exists, size: ${stats.size}, executable: ${(stats.mode & parseInt('111', 8)) !== 0}`);
-        } catch (fsError) {
-          console.error(`Binary does not exist or cannot be accessed: ${fsError.message}`);
+        // Check if binary exists at each possible path
+        console.error('Path existence check:');
+        for (const possiblePath of possiblePaths) {
+          try {
+            const stats = fs.statSync(possiblePath);
+            console.error(`  ${possiblePath}: EXISTS, size: ${stats.size}, executable: ${(stats.mode & parseInt('111', 8)) !== 0}`);
+          } catch (fsError) {
+            console.error(`  ${possiblePath}: NOT FOUND (${fsError.message})`);
+          }
         }
         
         resolve({

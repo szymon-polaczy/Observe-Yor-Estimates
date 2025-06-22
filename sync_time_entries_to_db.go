@@ -139,7 +139,7 @@ func safeStringConvert(value interface{}) string {
 // SyncTimeEntriesToDatabase fetches recent time entries from TimeCamp and stores them in the database
 // This function is optimized for regular cron jobs and only syncs the last day's entries
 func SyncTimeEntriesToDatabase() error {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 
 	// Load environment variables - but don't panic here since main already validated them
 	err := godotenv.Load()
@@ -233,7 +233,7 @@ func SyncTimeEntriesToDatabase() error {
 
 // getTimeCampTimeEntries fetches time entries from TimeCamp API
 func getTimeCampTimeEntries(fromDate, toDate string) ([]JsonTimeEntry, error) {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 
 	// Get TimeCamp API URL from environment variable or use default
 	timecampAPIURL := os.Getenv("TIMECAMP_API_URL")
@@ -331,7 +331,7 @@ func getTimeCampTimeEntries(fromDate, toDate string) ([]JsonTimeEntry, error) {
 
 // GetTaskTimeEntries retrieves time entry information for tasks, aggregated by date
 func GetTaskTimeEntries(db *sql.DB) ([]TaskTimeInfo, error) {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 
 	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
 	today := time.Now().Format("2006-01-02")
@@ -435,7 +435,7 @@ func GetTaskTimeEntries(db *sql.DB) ([]TaskTimeInfo, error) {
 
 // GetWeeklyTaskTimeEntries retrieves time entry information for tasks for the past week vs previous week
 func GetWeeklyTaskTimeEntries(db *sql.DB) ([]WeeklyTaskTimeInfo, error) {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 
 	// Calculate date ranges for current and previous week
 	now := time.Now()
@@ -563,7 +563,7 @@ func GetWeeklyTaskTimeEntries(db *sql.DB) ([]WeeklyTaskTimeInfo, error) {
 
 // GetMonthlyTaskTimeEntries retrieves time entry information for tasks for the past month vs previous month
 func GetMonthlyTaskTimeEntries(db *sql.DB) ([]MonthlyTaskTimeInfo, error) {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 
 	// Calculate date ranges for current and previous month
 	now := time.Now()
@@ -703,7 +703,7 @@ func formatDuration(seconds int) string {
 
 // getTaskComments retrieves unique comments for a task within a specific date range
 func getTaskComments(db *sql.DB, taskID int, fromDate, toDate string) ([]string, error) {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 
 	query := `
 		SELECT DISTINCT description 

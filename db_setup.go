@@ -28,7 +28,7 @@ func getDBPath() string {
 // GetDB returns a shared connection to the SQLite database, creating it once if needed
 func GetDB() (*sql.DB, error) {
 	dbOnce.Do(func() {
-		logger := NewLogger()
+		logger := GetGlobalLogger()
 		dbPath := getDBPath()
 		logger.Debugf("Initializing database connection to: %s", dbPath)
 
@@ -99,7 +99,7 @@ func CloseDB() error {
 
 // migrateTasksTable ensures the tasks table exists and matches the desired schema.
 func migrateTasksTable(db *sql.DB) error {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 
 	// Check if table exists
 	row := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='tasks';")
@@ -120,7 +120,7 @@ func migrateTasksTable(db *sql.DB) error {
 }
 
 func createTasksTable(db *sql.DB) error {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 
 	createTableSQL := `CREATE TABLE tasks (
 task_id INTEGER PRIMARY KEY,
@@ -142,7 +142,7 @@ root_group_id INT NOT NULL
 
 // migrateTaskHistoryTable ensures the task_history table exists and matches the desired schema.
 func migrateTaskHistoryTable(db *sql.DB) error {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 
 	// Check if table exists
 	row := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='task_history';")
@@ -163,7 +163,7 @@ func migrateTaskHistoryTable(db *sql.DB) error {
 }
 
 func createTaskHistoryTable(db *sql.DB) error {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 
 	createTableSQL := `CREATE TABLE task_history (
 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -187,7 +187,7 @@ FOREIGN KEY (task_id) REFERENCES tasks(task_id)
 
 // migrateTimeEntriesTable ensures the time_entries table exists and matches the desired schema.
 func migrateTimeEntriesTable(db *sql.DB) error {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 
 	// Check if table exists
 	row := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='time_entries';")
@@ -208,7 +208,7 @@ func migrateTimeEntriesTable(db *sql.DB) error {
 }
 
 func createTimeEntriesTable(db *sql.DB) error {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 
 	createTableSQL := `CREATE TABLE time_entries (
 id INTEGER PRIMARY KEY,

@@ -147,12 +147,25 @@ build_application() {
     
     # Build the application
     log_info "Building application..."
-    go build -o "$BINARY_NAME" .
+    
+    # For Netlify deployments, ensure we build for Linux
+    if is_netlify; then
+        log_info "Netlify environment detected - building for Linux"
+        GOOS=linux GOARCH=amd64 go build -o "$BINARY_NAME" .
+    else
+        # For local development, build for current platform
+        go build -o "$BINARY_NAME" .
+    fi
     
     if [[ -f "$BINARY_NAME" ]]; then
         log_success "Application built successfully: $BINARY_NAME"
         # Make it executable
         chmod +x "$BINARY_NAME"
+        
+        # Show binary info for debugging
+        if command -v file >/dev/null 2>&1; then
+            log_info "Binary info: $(file "$BINARY_NAME")"
+        fi
     else
         log_error "Failed to build application"
         return 1

@@ -36,6 +36,12 @@ func NewLoggerForJSON() *Logger {
 // Global logger instance
 var appLogger = NewLogger()
 
+// GetGlobalLogger returns the current global logger instance
+// This ensures that JSON output mode is respected throughout the application
+func GetGlobalLogger() *Logger {
+	return appLogger
+}
+
 // Info logs informational messages
 func (l *Logger) Info(v ...interface{}) {
 	l.InfoLogger.Println(v...)
