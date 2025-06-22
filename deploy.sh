@@ -285,6 +285,29 @@ setup_netlify() {
     
     if is_netlify; then
         log_info "Netlify environment detected"
+        
+        # Ensure binary is in the right location for Functions
+        if [[ -f "$BINARY_NAME" ]]; then
+            log_info "Binary found: $BINARY_NAME"
+            # Make sure it's executable
+            chmod +x "$BINARY_NAME"
+            
+            # Show binary info for debugging
+            if command -v file >/dev/null 2>&1; then
+                log_info "Binary info: $(file "$BINARY_NAME")"
+            fi
+            
+            # Check if binary can execute basic commands
+            if ./"$BINARY_NAME" --build-test >/dev/null 2>&1; then
+                log_success "Binary test passed - ready for Netlify Functions"
+            else
+                log_warning "Binary test failed - functions may not work properly"
+            fi
+        else
+            log_error "Binary not found - Netlify Functions will fail"
+            return 1
+        fi
+        
         log_info "Functions are available in ./functions/ directory"
         log_success "Netlify setup complete"
     else

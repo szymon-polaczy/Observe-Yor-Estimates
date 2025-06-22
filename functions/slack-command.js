@@ -71,31 +71,72 @@ async function processSlackCommand(command, responseUrl) {
       const path = require('path');
       const fs = require('fs');
       
-      // In Netlify, the binary should be in the same directory as the project root
-      // Try multiple possible locations
+      // In Netlify, the binary should be in the project root directory
+      // Netlify Functions run from the site root, so we need to go up from functions/ directory
       const possiblePaths = [
-        path.join(__dirname, '..', 'observe-yor-estimates'),  // Original path
-        path.join(process.cwd(), 'observe-yor-estimates'),    // Working directory
-        './observe-yor-estimates',                             // Relative to cwd
-        'observe-yor-estimates',                               // Just the binary name
-        '/var/task/observe-yor-estimates',                     // Lambda task root
-        path.join(process.env.LAMBDA_TASK_ROOT || '/var/task', 'observe-yor-estimates') // Using env var
+        path.resolve(__dirname, '..', 'observe-yor-estimates'), // Project root (most likely)
+        path.resolve(process.cwd(), 'observe-yor-estimates'),   // Current working directory
+        path.resolve(__dirname, 'observe-yor-estimates'),       // Functions directory (unlikely)
+        './observe-yor-estimates',                              // Relative to cwd
+        'observe-yor-estimates',                                // Just the binary name
+        '/var/task/observe-yor-estimates',                      // Lambda task root (for AWS)
+        path.join(process.env.LAMBDA_TASK_ROOT || '/var/task', 'observe-yor-estimates'), // Using env var
+        path.join(process.env.NETLIFY_BUILD_BASE || '/opt/build/repo', 'observe-yor-estimates') // Netlify build base
       ];
       
       let goExecutable = null;
+      console.log('Checking binary paths in Netlify environment...');
+      
       for (const possiblePath of possiblePaths) {
         try {
+          console.log(`Checking: ${possiblePath}`);
           if (fs.existsSync(possiblePath)) {
+            const stats = fs.statSync(possiblePath);
+            const isExecutable = (stats.mode & parseInt('111', 8)) !== 0;
+            console.log(`✓ Found binary at: ${possiblePath} (size: ${stats.size}, executable: ${isExecutable})`);
             goExecutable = possiblePath;
             break;
+          } else {
+            console.log(`✗ Not found: ${possiblePath}`);
           }
         } catch (error) {
-          // Continue to next path
+          console.log(`✗ Error checking ${possiblePath}: ${error.message}`);
         }
       }
       
       if (!goExecutable) {
-        goExecutable = possiblePaths[0]; // Fallback to original path for error reporting
+        console.error('Binary not found in any expected location!');
+        console.error('Environment information:');
+        console.error(`- process.cwd(): ${process.cwd()}`);
+        console.error(`- __dirname: ${__dirname}`);
+        console.error(`- NETLIFY: ${process.env.NETLIFY}`);
+        console.error(`- LAMBDA_TASK_ROOT: ${process.env.LAMBDA_TASK_ROOT}`);
+        console.error(`- NETLIFY_BUILD_BASE: ${process.env.NETLIFY_BUILD_BASE}`);
+        
+        // List all files in the current directory and parent directory for debugging
+        try {
+          console.error('Files in current directory:');
+          const currentFiles = fs.readdirSync(process.cwd());
+          currentFiles.forEach(file => {
+            const filePath = path.join(process.cwd(), file);
+            const stats = fs.statSync(filePath);
+            console.error(`  ${file} ${stats.isDirectory() ? '(dir)' : `(${stats.size} bytes)`}`);
+          });
+          
+          console.error('Files in parent directory:');
+          const parentDir = path.join(__dirname, '..');
+          const parentFiles = fs.readdirSync(parentDir);
+          parentFiles.forEach(file => {
+            const filePath = path.join(parentDir, file);
+            const stats = fs.statSync(filePath);
+            console.error(`  ${file} ${stats.isDirectory() ? '(dir)' : `(${stats.size} bytes)`}`);
+          });
+        } catch (listError) {
+          console.error('Error listing files:', listError.message);
+        }
+        
+        // Use the most likely path for error reporting
+        goExecutable = path.resolve(__dirname, '..', 'observe-yor-estimates');
       }
       
       console.log(`Attempting to spawn: ${goExecutable} with args: [${command}, --output-json]`);
@@ -214,6 +255,11 @@ async function processSlackCommand(command, responseUrl) {
           }
         }
         
+        // Provide a helpful error message for Slack
+        const errorMessage = error.code === 'ENOENT' 
+          ? `❌ Error: Binary not found in Netlify environment. This indicates a deployment issue.`
+          : `❌ Error: Failed to execute ${command.replace('-', ' ')} command. Error: ${error.message}`;
+        
         resolve({
           statusCode: 200,
           headers: {
@@ -221,7 +267,14 @@ async function processSlackCommand(command, responseUrl) {
           },
           body: JSON.stringify({
             response_type: 'ephemeral',
-            text: `❌ Error: Failed to start ${command.replace('-', ' ')} command. Error: ${error.message}`
+            text: errorMessage,
+            blocks: [{
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text: `${errorMessage}\n\n*Troubleshooting:*\n• Check that the binary was included in the Netlify deployment\n• Verify environment variables are set in Netlify dashboard\n• Contact administrator if this persists`
+              }
+            }]
           }),
         });
       });

@@ -1,16 +1,32 @@
 [build]
-  command = "./deploy.sh"
+  command = "./deploy.sh && ./.netlify-build-hook.sh"
   publish = "."
-
+  # Force include files that might be in .gitignore
+  ignore = "git diff --quiet $CACHED_COMMIT_REF $COMMIT_REF . ':!observe-yor-estimates'"
+  
 [build.environment]
   GO_VERSION = "1.22"
 
+# Ensure the binary is included in the deployment
+[build.processing]
+  skip_processing = false
+
 [functions]
   directory = "functions"
+  # Include binary files in function deployment
+  included_files = ["observe-yor-estimates", "*.db"]
+  # Increase timeout for potentially slow operations
+  [functions.slack-command]
+    timeout = 30
 
 [[redirects]]
   from = "/health"
   to = "/.netlify/functions/health"
+  status = 200
+
+[[redirects]]
+  from = "/debug"
+  to = "/.netlify/functions/debug"
   status = 200
 
 [[redirects]]

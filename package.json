@@ -1,0 +1,16 @@
+{
+  "name": "observe-yor-estimates-functions",
+  "version": "1.0.0",
+  "description": "Netlify Functions for Observe Your Estimates",
+  "main": "functions/slack-command.js",
+  "scripts": {
+    "test": "node test-netlify-function.js",
+    "test-binary": "node test-binary-paths.js",
+    "test-debug": "node test-debug-function.js"
+  },
+  "dependencies": {},
+  "devDependencies": {},
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
