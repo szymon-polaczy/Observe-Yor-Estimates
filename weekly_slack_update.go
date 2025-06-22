@@ -73,22 +73,64 @@ func getWeeklyTaskChanges(db *sql.DB) ([]WeeklyTaskTimeInfo, error) {
 	}
 
 	if !hasTasks {
-		logger.Info("Database is empty (no tasks found) - triggering full sync")
-		
+		logger.Info("Database is empty (no tasks found) - checking if full sync is possible")
+
+		// Check if API key is available for full sync
+		apiKey := os.Getenv("TIMECAMP_API_KEY")
+		if apiKey == "" {
+			logger.Warn("TIMECAMP_API_KEY not available - cannot perform full sync")
+			// Return a helpful message explaining the situation
+			syncInfo := WeeklyTaskTimeInfo{
+				TaskID:           0,
+				Name:             "⚠️ Database Setup Required",
+				WeeklyTime:       "Database is empty and API key not available for sync",
+				LastWeekTime:     "",
+				StartTime:        time.Now().Format("15:04"),
+				EstimationInfo:   "",
+				EstimationStatus: "",
+				DaysWorked:       0,
+				Comments:         []string{
+					"Database is empty and requires initial synchronization",
+					"Please ensure TIMECAMP_API_KEY is set in Netlify environment variables",
+					"Contact administrator to complete the setup",
+				},
+			}
+			return []WeeklyTaskTimeInfo{syncInfo}, nil
+		}
+
+		logger.Info("API key available - triggering full sync")
+
 		// Trigger full sync to populate the database
 		if err := FullSyncAll(); err != nil {
 			logger.Errorf("Full sync failed: %v", err)
-			return nil, fmt.Errorf("full sync failed after detecting empty database: %w", err)
+			
+			// Return a helpful error message instead of crashing
+			syncInfo := WeeklyTaskTimeInfo{
+				TaskID:           0,
+				Name:             "❌ Sync Failed",
+				WeeklyTime:       "Failed to synchronize data from TimeCamp",
+				LastWeekTime:     "",
+				StartTime:        time.Now().Format("15:04"),
+				EstimationInfo:   "",
+				EstimationStatus: "",
+				DaysWorked:       0,
+				Comments:         []string{
+					fmt.Sprintf("Sync error: %v", err),
+					"Please check TimeCamp API key and connectivity",
+					"Contact administrator if this persists",
+				},
+			}
+			return []WeeklyTaskTimeInfo{syncInfo}, nil
 		}
-		
+
 		logger.Info("Full sync completed successfully - retrying weekly task query")
-		
+
 		// After successful sync, try again to get the data
 		taskInfos, err := GetWeeklyTaskTimeEntries(db)
 		if err != nil {
 			return nil, err
 		}
-		
+
 		// If still no data after sync, create a special message about the sync
 		if len(taskInfos) == 0 {
 			// Create a dummy task info to indicate that sync was performed
@@ -105,7 +147,7 @@ func getWeeklyTaskChanges(db *sql.DB) ([]WeeklyTaskTimeInfo, error) {
 			}
 			return []WeeklyTaskTimeInfo{syncInfo}, nil
 		}
-		
+
 		return taskInfos, nil
 	}
 
