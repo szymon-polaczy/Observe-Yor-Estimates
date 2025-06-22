@@ -256,3 +256,39 @@ func calculateTimeUsagePercentage(task TaskTimeInfo) (float64, int, error) {
 
 	return percentage, pessimisticSeconds, nil
 }
+
+// sendDelayedResponseToURL sends a delayed response to Slack using a response URL
+// This is used when the application is called from Netlify functions with a response URL parameter
+func sendDelayedResponseToURL(responseURL string, message SlackMessage) error {
+	logger := NewLogger()
+
+	// Convert SlackMessage to SlackCommandResponse format for consistency with slash commands
+	response := struct {
+		ResponseType string  `json:"response_type"`
+		Text         string  `json:"text"`
+		Blocks       []Block `json:"blocks,omitempty"`
+	}{
+		ResponseType: "in_channel", // Visible to everyone in the channel
+		Text:         message.Text,
+		Blocks:       message.Blocks,
+	}
+
+	jsonData, err := json.Marshal(response)
+	if err != nil {
+		return fmt.Errorf("error marshaling response: %w", err)
+	}
+
+	resp, err := http.Post(responseURL, "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("error sending delayed response: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("slack API returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	logger.Debug("Successfully sent delayed response to Slack via response URL")
+	return nil
+}

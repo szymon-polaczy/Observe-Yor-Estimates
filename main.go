@@ -3,11 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
-
-	"net/http"
 
 	"github.com/joho/godotenv"
 	"github.com/robfig/cron/v3"
@@ -63,15 +63,30 @@ func main() {
 		switch os.Args[1] {
 		case "daily-update":
 			logger.Info("Running daily update command")
-			SendDailySlackUpdate()
+			responseURL := getResponseURL()
+			if responseURL != "" {
+				SendDailySlackUpdateWithResponseURL(responseURL)
+			} else {
+				SendDailySlackUpdate()
+			}
 			return
 		case "weekly-update":
 			logger.Info("Running weekly update command")
-			SendWeeklySlackUpdate()
+			responseURL := getResponseURL()
+			if responseURL != "" {
+				SendWeeklySlackUpdateWithResponseURL(responseURL)
+			} else {
+				SendWeeklySlackUpdate()
+			}
 			return
 		case "monthly-update":
 			logger.Info("Running monthly update command")
-			SendMonthlySlackUpdate()
+			responseURL := getResponseURL()
+			if responseURL != "" {
+				SendMonthlySlackUpdateWithResponseURL(responseURL)
+			} else {
+				SendMonthlySlackUpdate()
+			}
 			return
 		case "sync-time-entries":
 			logger.Info("Running time entries sync command")
@@ -299,6 +314,9 @@ func showHelp() {
 	fmt.Println("  --build-test, build-test - Test that the binary is working (for builds)")
 	fmt.Println("  --help, -h, help         - Show this help message")
 	fmt.Println("")
+	fmt.Println("Command options:")
+	fmt.Println("  --response-url=<url>     - Send response to Slack response URL (for slash commands)")
+	fmt.Println("")
 	fmt.Println("If no command is provided, the application will start in daemon mode")
 	fmt.Println("with scheduled synchronization and Slack updates.")
 	fmt.Println("")
@@ -317,4 +335,15 @@ func showHelp() {
 	fmt.Println("  PORT                      - HTTP server port (default: 8080)")
 	fmt.Println("")
 	fmt.Println("For more information, see the README.md and Documentation/ folder.")
+}
+
+// getResponseURL extracts the response URL from command line arguments
+// Looks for --response-url=<url> argument
+func getResponseURL() string {
+	for _, arg := range os.Args {
+		if strings.HasPrefix(arg, "--response-url=") {
+			return strings.TrimPrefix(arg, "--response-url=")
+		}
+	}
+	return ""
 }

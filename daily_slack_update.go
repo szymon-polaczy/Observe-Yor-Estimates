@@ -222,3 +222,51 @@ func sendNoChangesNotification() error {
 
 	return sendSlackMessage(message)
 }
+
+// SendDailySlackUpdateWithResponseURL sends a daily update to Slack using a response URL
+func SendDailySlackUpdateWithResponseURL(responseURL string) {
+	logger := NewLogger()
+	logger.Info("Starting daily Slack update with response URL")
+
+	db, err := GetDB()
+	if err != nil {
+		logger.Errorf("Failed to open database connection: %v", err)
+		sendDelayedResponseToURL(responseURL, SlackMessage{
+			Text: "❌ Error: Failed to connect to database",
+		})
+		return
+	}
+
+	taskInfos, err := getTaskTimeChanges(db)
+	if err != nil {
+		logger.Errorf("Failed to get task time changes: %v", err)
+		sendDelayedResponseToURL(responseURL, SlackMessage{
+			Text: "❌ Error: Failed to retrieve task changes",
+		})
+		return
+	}
+
+	if len(taskInfos) == 0 {
+		message := SlackMessage{
+			Text: "📊 No task changes to report today",
+			Blocks: []Block{
+				{
+					Type: "section",
+					Text: &Text{
+						Type: "mrkdwn",
+						Text: "📊 *Daily Task Update*\n\nNo task changes to report today. System is working normally.",
+					},
+				},
+			},
+		}
+		sendDelayedResponseToURL(responseURL, message)
+		return
+	}
+
+	message := formatDailySlackMessage(taskInfos)
+	if err := sendDelayedResponseToURL(responseURL, message); err != nil {
+		logger.Errorf("Failed to send delayed response: %v", err)
+	} else {
+		logger.Info("Successfully sent daily update via response URL")
+	}
+}

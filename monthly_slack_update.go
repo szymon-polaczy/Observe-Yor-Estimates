@@ -260,6 +260,54 @@ func sendNoMonthlyChangesNotification() error {
 	return sendSlackMessage(message)
 }
 
+// SendMonthlySlackUpdateWithResponseURL sends a monthly update to Slack using a response URL
+func SendMonthlySlackUpdateWithResponseURL(responseURL string) {
+	logger := NewLogger()
+	logger.Info("Starting monthly Slack update with response URL")
+
+	db, err := GetDB()
+	if err != nil {
+		logger.Errorf("Failed to open database connection: %v", err)
+		sendDelayedResponseToURL(responseURL, SlackMessage{
+			Text: "❌ Error: Failed to connect to database",
+		})
+		return
+	}
+
+	taskInfos, err := getMonthlyTaskChanges(db)
+	if err != nil {
+		logger.Errorf("Failed to get monthly task changes: %v", err)
+		sendDelayedResponseToURL(responseURL, SlackMessage{
+			Text: "❌ Error: Failed to retrieve monthly task changes",
+		})
+		return
+	}
+
+	if len(taskInfos) == 0 {
+		message := SlackMessage{
+			Text: "📅 No task changes to report this month",
+			Blocks: []Block{
+				{
+					Type: "section",
+					Text: &Text{
+						Type: "mrkdwn",
+						Text: "📅 *Monthly Task Summary*\n\nNo task changes to report this month. System is working normally.",
+					},
+				},
+			},
+		}
+		sendDelayedResponseToURL(responseURL, message)
+		return
+	}
+
+	message := formatMonthlySlackMessage(taskInfos)
+	if err := sendDelayedResponseToURL(responseURL, message); err != nil {
+		logger.Errorf("Failed to send delayed response: %v", err)
+	} else {
+		logger.Info("Successfully sent monthly update via response URL")
+	}
+}
+
 // calculateMonthlyTimeUsagePercentage calculates the percentage of estimation used based on monthly total time spent
 func calculateMonthlyTimeUsagePercentage(task MonthlyTaskTimeInfo) (float64, int, error) {
 	logger := NewLogger()
