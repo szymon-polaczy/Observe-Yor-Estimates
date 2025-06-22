@@ -1,0 +1,43 @@
+# Database files - these should not be deployed to Netlify
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+.db_version
+
+# Log files and runtime artifacts
+*.log
+server.log
+error.log
+server.pid
+nohup.out
+
+# Temporary directories
+tmp/
+/tmp/
+
+# Git directory
+.git/
+
+# Environment files (already in .gitignore but being explicit)
+.env
+.env.local
+
+# Build artifacts that shouldn't be deployed
+go.sum.backup
+
+# Documentation that doesn't need to be deployed
+Documentation/
+MIGRATION.md
+CHANGES.md
+DEPLOYMENT.md
+
+# Test files
+test-*.js
+
+# Docker files (not needed for Netlify deployment)
+Dockerfile
+docker-compose.yml
+
+# Service files (for local development only)
+*.service
