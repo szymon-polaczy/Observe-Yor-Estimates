@@ -46,22 +46,8 @@ exports.handler = async (event, context) => {
       };
     }
 
-    // Send immediate response to Slack
-    const immediateResponse = {
-      statusCode: 200,
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        response_type: 'ephemeral',
-        text: `⏳ Generating ${command.replace('-', ' ')}...`
-      }),
-    };
-
-    // Process the command asynchronously by calling the Go binary
-    processSlackCommand(command, responseUrl);
-
-    return immediateResponse;
+    // Process the command synchronously and return the actual result
+    return await processSlackCommand(command, responseUrl);
 
   } catch (error) {
     console.error('Error processing Slack command:', error);
@@ -72,92 +58,104 @@ exports.handler = async (event, context) => {
   }
 };
 
-// Process the Slack command asynchronously
+// Process the Slack command synchronously and return the result
 async function processSlackCommand(command, responseUrl) {
-  try {
-    console.log(`Processing ${command} command...`);
-    
-    // Execute the Go binary with the appropriate command and response URL
-    const goExecutable = './observe-yor-estimates';
-    const child = spawn(goExecutable, [command, `--response-url=${responseUrl}`], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: process.env
-    });
-
-    let stdout = '';
-    let stderr = '';
-
-    child.stdout.on('data', (data) => {
-      stdout += data.toString();
-    });
-
-    child.stderr.on('data', (data) => {
-      stderr += data.toString();
-    });
-
-    child.on('close', async (code) => {
-      if (code === 0) {
-        console.log(`Successfully executed ${command} command`);
-        // The Go binary handled sending the response via the response URL
-      } else {
-        console.error(`Command ${command} failed with code ${code}`);
-        console.error('stderr:', stderr);
-        
-        // Only send error response if the Go binary didn't handle it
-        // (Go binary should handle most errors by sending responses via response URL)
-        await sendDelayedResponse(responseUrl, {
-          response_type: 'in_channel',
-          text: `❌ Error: ${command.replace('-', ' ')} command failed`,
-          blocks: [
-            {
-              type: 'section',
-              text: {
-                type: 'mrkdwn',
-                text: `❌ *${command.replace('-', ' ')} failed*\n\nThe command failed to execute properly. Please check the logs or try again later.`
-              }
-            }
-          ]
-        });
-      }
-    });
-
-    child.on('error', async (error) => {
-      console.error(`Failed to start command ${command}:`, error);
+  return new Promise((resolve, reject) => {
+    try {
+      console.log(`Processing ${command} command...`);
       
-      // Send error response when we can't even start the process
-      await sendDelayedResponse(responseUrl, {
-        response_type: 'in_channel',
-        text: `❌ Error: Failed to start ${command.replace('-', ' ')} command`,
-        blocks: [
-          {
-            type: 'section',
-            text: {
-              type: 'mrkdwn',
-              text: `❌ *Failed to start ${command.replace('-', ' ')}*\n\nError: ${error.message}`
-            }
-          }
-        ]
+      // Execute the Go binary with the appropriate command
+      // Pass --output-json flag to get JSON response instead of sending via response URL
+      const goExecutable = './observe-yor-estimates';
+      const child = spawn(goExecutable, [command, '--output-json'], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: process.env
       });
-    });
 
-  } catch (error) {
-    console.error('Error in processSlackCommand:', error);
-    
-    // Send error response to Slack
-    await sendDelayedResponse(responseUrl, {
-      response_type: 'in_channel',
-      text: `❌ Error: Internal error processing ${command.replace('-', ' ')} command`,
-      blocks: [
-        {
-          type: 'section',
-          text: {
-            type: 'mrkdwn',
-            text: `❌ *Internal error*\n\nSomething went wrong while processing the ${command.replace('-', ' ')} command. Please try again later.`
+      let stdout = '';
+      let stderr = '';
+
+      child.stdout.on('data', (data) => {
+        stdout += data.toString();
+      });
+
+      child.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      child.on('close', async (code) => {
+        if (code === 0) {
+          console.log(`Successfully executed ${command} command`);
+          
+          // Parse the stdout as JSON (Go binary should output the Slack message as JSON)
+          try {
+            const result = JSON.parse(stdout);
+            resolve({
+              statusCode: 200,
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                response_type: 'in_channel',
+                text: result.text,
+                blocks: result.blocks
+              }),
+            });
+          } catch (parseError) {
+            console.error('Failed to parse Go binary output as JSON:', parseError);
+            console.error('stdout:', stdout);
+            resolve({
+              statusCode: 200,
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                response_type: 'ephemeral',
+                text: `✅ ${command.replace('-', ' ')} completed successfully`
+              }),
+            });
           }
+        } else {
+          console.error(`Command ${command} failed with code ${code}`);
+          console.error('stderr:', stderr);
+          
+          resolve({
+            statusCode: 200,
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              response_type: 'ephemeral',
+              text: `❌ Error: ${command.replace('-', ' ')} command failed`
+            }),
+          });
         }
-      ]
-    });
-  }
+      });
+
+      child.on('error', async (error) => {
+        console.error(`Failed to start command ${command}:`, error);
+        
+        resolve({
+          statusCode: 200,
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            response_type: 'ephemeral',
+            text: `❌ Error: Failed to start ${command.replace('-', ' ')} command`
+          }),
+        });
+      });
+
+    } catch (error) {
+      console.error('Error in processSlackCommand:', error);
+      
+      resolve({
+        statusCode: 500,
+        body: JSON.stringify({ error: 'Internal server error' }),
+      });
+    }
+  });
 }
 
 // Send a delayed response to Slack using the response_url

@@ -23,6 +23,16 @@ func NewLogger() *Logger {
 	}
 }
 
+// NewLoggerForJSON creates a logger that sends all output to stderr (for JSON output mode)
+func NewLoggerForJSON() *Logger {
+	return &Logger{
+		InfoLogger:  log.New(os.Stderr, "INFO: ", log.Ldate|log.Ltime|log.Lshortfile),
+		WarnLogger:  log.New(os.Stderr, "WARN: ", log.Ldate|log.Ltime|log.Lshortfile),
+		ErrorLogger: log.New(os.Stderr, "ERROR: ", log.Ldate|log.Ltime|log.Lshortfile),
+		DebugLogger: log.New(os.Stderr, "DEBUG: ", log.Ldate|log.Ltime|log.Lshortfile),
+	}
+}
+
 // Global logger instance
 var appLogger = NewLogger()
 

@@ -274,3 +274,50 @@ func SendDailySlackUpdateWithResponseURL(responseURL string) {
 		logger.Info("Successfully sent daily update via response URL")
 	}
 }
+
+// SendDailySlackUpdateJSON generates a daily update and outputs it as JSON to stdout
+func SendDailySlackUpdateJSON() {
+	logger := NewLogger()
+	logger.Info("Starting daily Slack update JSON output")
+
+	db, err := GetDB()
+	if err != nil {
+		logger.Errorf("Failed to open database connection: %v", err)
+		errorMessage := SlackMessage{
+			Text: "❌ Error: Failed to connect to database",
+		}
+		outputJSON(errorMessage)
+		return
+	}
+
+	taskInfos, err := getTaskTimeChanges(db)
+	if err != nil {
+		logger.Errorf("Failed to get task time changes: %v", err)
+		errorMessage := SlackMessage{
+			Text: "❌ Error: Failed to retrieve task changes",
+		}
+		outputJSON(errorMessage)
+		return
+	}
+
+	if len(taskInfos) == 0 {
+		message := SlackMessage{
+			Text: "📊 No task changes to report today",
+			Blocks: []Block{
+				{
+					Type: "section",
+					Text: &Text{
+						Type: "mrkdwn",
+						Text: "📊 *Daily Task Update*\n\nNo task changes to report today. System is working normally.",
+					},
+				},
+			},
+		}
+		outputJSON(message)
+		return
+	}
+
+	message := formatDailySlackMessage(taskInfos)
+	outputJSON(message)
+	logger.Info("Successfully generated daily update JSON")
+}

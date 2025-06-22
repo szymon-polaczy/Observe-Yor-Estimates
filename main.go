@@ -14,8 +14,16 @@ import (
 )
 
 func main() {
-	// Initialize logger
-	logger := NewLogger()
+	// Check if we're in JSON output mode first and configure logger accordingly
+	var logger *Logger
+	if getOutputJSON() {
+		// Reinitialize logger to send all output to stderr
+		appLogger = NewLoggerForJSON()
+		logger = appLogger
+	} else {
+		// Initialize logger normally
+		logger = NewLogger()
+	}
 
 	// Check for help arguments first, before any environment validation
 	if len(os.Args) > 1 {
@@ -64,7 +72,10 @@ func main() {
 		case "daily-update":
 			logger.Info("Running daily update command")
 			responseURL := getResponseURL()
-			if responseURL != "" {
+			outputJSON := getOutputJSON()
+			if outputJSON {
+				SendDailySlackUpdateJSON()
+			} else if responseURL != "" {
 				SendDailySlackUpdateWithResponseURL(responseURL)
 			} else {
 				SendDailySlackUpdate()
@@ -73,7 +84,10 @@ func main() {
 		case "weekly-update":
 			logger.Info("Running weekly update command")
 			responseURL := getResponseURL()
-			if responseURL != "" {
+			outputJSON := getOutputJSON()
+			if outputJSON {
+				SendWeeklySlackUpdateJSON()
+			} else if responseURL != "" {
 				SendWeeklySlackUpdateWithResponseURL(responseURL)
 			} else {
 				SendWeeklySlackUpdate()
@@ -82,7 +96,10 @@ func main() {
 		case "monthly-update":
 			logger.Info("Running monthly update command")
 			responseURL := getResponseURL()
-			if responseURL != "" {
+			outputJSON := getOutputJSON()
+			if outputJSON {
+				SendMonthlySlackUpdateJSON()
+			} else if responseURL != "" {
 				SendMonthlySlackUpdateWithResponseURL(responseURL)
 			} else {
 				SendMonthlySlackUpdate()
@@ -346,4 +363,15 @@ func getResponseURL() string {
 		}
 	}
 	return ""
+}
+
+// getOutputJSON checks if the --output-json flag is set
+// This flag indicates that the Go binary should output JSON to stdout instead of sending to Slack
+func getOutputJSON() bool {
+	for _, arg := range os.Args {
+		if arg == "--output-json" {
+			return true
+		}
+	}
+	return false
 }

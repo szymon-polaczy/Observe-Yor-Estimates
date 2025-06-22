@@ -312,6 +312,53 @@ func SendMonthlySlackUpdateWithResponseURL(responseURL string) {
 	}
 }
 
+// SendMonthlySlackUpdateJSON generates a monthly update and outputs it as JSON to stdout
+func SendMonthlySlackUpdateJSON() {
+	logger := NewLogger()
+	logger.Info("Starting monthly Slack update JSON output")
+
+	db, err := GetDB()
+	if err != nil {
+		logger.Errorf("Failed to open database connection: %v", err)
+		errorMessage := SlackMessage{
+			Text: "❌ Error: Failed to connect to database",
+		}
+		outputJSON(errorMessage)
+		return
+	}
+
+	taskInfos, err := getMonthlyTaskChanges(db)
+	if err != nil {
+		logger.Errorf("Failed to get monthly task changes: %v", err)
+		errorMessage := SlackMessage{
+			Text: "❌ Error: Failed to retrieve monthly task changes",
+		}
+		outputJSON(errorMessage)
+		return
+	}
+
+	if len(taskInfos) == 0 {
+		message := SlackMessage{
+			Text: "📅 No task changes to report this month",
+			Blocks: []Block{
+				{
+					Type: "section",
+					Text: &Text{
+						Type: "mrkdwn",
+						Text: "📅 *Monthly Task Summary*\n\nNo task changes to report this month. System is working normally.",
+					},
+				},
+			},
+		}
+		outputJSON(message)
+		return
+	}
+
+	message := formatMonthlySlackMessage(taskInfos)
+	outputJSON(message)
+	logger.Info("Successfully generated monthly update JSON")
+}
+
 // calculateMonthlyTimeUsagePercentage calculates the percentage of estimation used based on monthly total time spent
 func calculateMonthlyTimeUsagePercentage(task MonthlyTaskTimeInfo) (float64, int, error) {
 	logger := NewLogger()

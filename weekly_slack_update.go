@@ -343,3 +343,50 @@ func SendWeeklySlackUpdateWithResponseURL(responseURL string) {
 		logger.Info("Successfully sent weekly update via response URL")
 	}
 }
+
+// SendWeeklySlackUpdateJSON generates a weekly update and outputs it as JSON to stdout
+func SendWeeklySlackUpdateJSON() {
+	logger := NewLogger()
+	logger.Info("Starting weekly Slack update JSON output")
+
+	db, err := GetDB()
+	if err != nil {
+		logger.Errorf("Failed to open database connection: %v", err)
+		errorMessage := SlackMessage{
+			Text: "❌ Error: Failed to connect to database",
+		}
+		outputJSON(errorMessage)
+		return
+	}
+
+	taskInfos, err := getWeeklyTaskChanges(db)
+	if err != nil {
+		logger.Errorf("Failed to get weekly task changes: %v", err)
+		errorMessage := SlackMessage{
+			Text: "❌ Error: Failed to retrieve weekly task changes",
+		}
+		outputJSON(errorMessage)
+		return
+	}
+
+	if len(taskInfos) == 0 {
+		message := SlackMessage{
+			Text: "📈 No task changes to report this week",
+			Blocks: []Block{
+				{
+					Type: "section",
+					Text: &Text{
+						Type: "mrkdwn",
+						Text: "📈 *Weekly Task Summary*\n\nNo task changes to report this week. System is working normally.",
+					},
+				},
+			},
+		}
+		outputJSON(message)
+		return
+	}
+
+	message := formatWeeklySlackMessage(taskInfos)
+	outputJSON(message)
+	logger.Info("Successfully generated weekly update JSON")
+}

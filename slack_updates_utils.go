@@ -292,3 +292,20 @@ func sendDelayedResponseToURL(responseURL string, message SlackMessage) error {
 	logger.Debug("Successfully sent delayed response to Slack via response URL")
 	return nil
 }
+
+// outputJSON outputs a SlackMessage as JSON to stdout for use with Netlify functions
+func outputJSON(message SlackMessage) {
+	jsonData, err := json.Marshal(message)
+	if err != nil {
+		logger := NewLogger()
+		logger.Errorf("Error marshaling SlackMessage to JSON: %v", err)
+		// Fallback to simple error message
+		fallbackMessage := SlackMessage{
+			Text: "❌ Error: Failed to generate response",
+		}
+		fallbackJSON, _ := json.Marshal(fallbackMessage)
+		fmt.Print(string(fallbackJSON))
+		return
+	}
+	fmt.Print(string(jsonData))
+}
