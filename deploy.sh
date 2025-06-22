@@ -210,10 +210,24 @@ validate_environment() {
     
     # Optional variables with defaults
     local optional_vars=(
-        "DATABASE_PATH:$DEFAULT_DB_PATH"
         "TIMECAMP_API_URL:https://app.timecamp.com/third_party/api"
         "SLACK_API_URL:https://slack.com/api/apps.connections.open"
     )
+    
+    # Handle DATABASE_PATH specially for Netlify
+    if [[ -z "${DATABASE_PATH:-}" ]]; then
+        if is_netlify; then
+            # For Netlify, use /tmp to avoid deployment issues
+            export DATABASE_PATH="/tmp/oye.db"
+            log_info "DATABASE_PATH not set, using Netlify-safe path: $DATABASE_PATH"
+        else
+            # For local development, use default path
+            export DATABASE_PATH="$DEFAULT_DB_PATH"
+            log_info "DATABASE_PATH not set, using default: $DATABASE_PATH"
+        fi
+    else
+        log_success "DATABASE_PATH is set: $DATABASE_PATH"
+    fi
     
     for var_default in "${optional_vars[@]}"; do
         var="${var_default%%:*}"
@@ -322,8 +336,15 @@ start_go_server() {
         return 1
     fi
     
-    # Test the server
-    if command -v curl >/dev/null 2>&1; then
+    # For Netlify, do a quick health check but don't wait too long
+    if is_netlify; then
+        log_info "Testing server health endpoint..."
+        if timeout 5 curl -f http://localhost:$PORT/health >/dev/null 2>&1; then
+            log_success "Health check passed"
+        else
+            log_warning "Health check failed - server may still be starting"
+        fi
+    elif command -v curl >/dev/null 2>&1; then
         log_info "Testing server health endpoint..."
         if timeout 5 curl -f http://localhost:$PORT/health >/dev/null 2>&1; then
             log_success "Health check passed"
@@ -359,20 +380,22 @@ main() {
         log_info "Netlify environment - skipping database checks at build time"
         log_info "Cleaning up any local database files to prevent deployment issues..."
         
-        # Remove any existing database files that might interfere with deployment
-        local db_path=$(get_db_path)
-        if [[ -f "$db_path" ]]; then
-            rm -f "$db_path"
-            log_info "Removed local database file: $db_path"
+        # For Netlify, clean up any database files in the build directory only
+        # The runtime database will be in /tmp and won't interfere with deployment
+        if [[ -f "$DEFAULT_DB_PATH" ]]; then
+            rm -f "$DEFAULT_DB_PATH"
+            log_info "Removed local database file from build directory: $DEFAULT_DB_PATH"
         fi
-        if [[ -f "${db_path}-journal" ]]; then
-            rm -f "${db_path}-journal"
-            log_info "Removed database journal file: ${db_path}-journal"
+        if [[ -f "${DEFAULT_DB_PATH}-journal" ]]; then
+            rm -f "${DEFAULT_DB_PATH}-journal"
+            log_info "Removed database journal file from build directory: ${DEFAULT_DB_PATH}-journal"
         fi
         if [[ -f "$VERSION_FILE" ]]; then
             rm -f "$VERSION_FILE"
             log_info "Removed local version file: $VERSION_FILE"
         fi
+        
+        log_info "Runtime database will be created at: $DATABASE_PATH"
         
         needs_db_recreation=false
         needs_full_sync=false
@@ -413,6 +436,15 @@ main() {
     
     # Step 7: Setup Netlify
     setup_netlify
+    
+    # Step 8: Final cleanup for Netlify deployments
+    if is_netlify; then
+        log_info "Performing final cleanup of build directory files before deployment..."
+        # Only clean up files in the build directory, not the runtime database in /tmp
+        rm -f "$DEFAULT_DB_PATH" "${DEFAULT_DB_PATH}-journal" "${DEFAULT_DB_PATH}-shm" "${DEFAULT_DB_PATH}-wal" "$VERSION_FILE" 2>/dev/null || true
+        rm -f server.log server.pid nohup.out 2>/dev/null || true
+        log_info "Final cleanup completed - runtime database preserved at $DATABASE_PATH"
+    fi
     
     # Final status
     log_section "Deployment Complete"
