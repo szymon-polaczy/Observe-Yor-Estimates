@@ -13,6 +13,20 @@ This application provides daily Slack updates for task changes and time tracking
 - **Configurable Environment**: All schedules, API endpoints, and settings are configurable via environment variables
 - **Robust Error Handling**: Comprehensive error handling with structured logging and graceful failure recovery
 
+## Quick Setup
+
+For first-time users:
+
+1. **Configure Environment**: Set up your `.env` file with API keys (see Setup section below)
+2. **Initial Data Sync**: Run full synchronization to populate your database
+   ```bash
+   ./observe-yor-estimates full-sync
+   ```
+3. **Start Automatic Mode**: Run the application continuously
+   ```bash
+   ./observe-yor-estimates
+   ```
+
 ## Setup
 
 1. **Environment Configuration**: Copy `.env.example` to `.env` and configure:
@@ -61,10 +75,42 @@ For testing and manual operations:
 ./observe-yor-estimates daily-update
 ```
 
-**Manual Time Entries Sync**:
+**Manual Recent Sync (Incremental)**:
 ```bash
+# Sync recent time entries (last day only - fast)
 ./observe-yor-estimates sync-time-entries
+
+# Sync all tasks (always complete sync)
+./observe-yor-estimates sync-tasks
 ```
+
+**Manual Full Sync (Initial Setup)**:
+```bash
+# Full sync of everything (for initial setup or recovery)
+./observe-yor-estimates full-sync
+
+# Full sync of tasks only
+./observe-yor-estimates full-sync-tasks
+
+# Full sync of time entries only (last 6 months)
+./observe-yor-estimates full-sync-time-entries
+```
+
+### When to Use Each Command
+
+**For Daily Operations** (Use these regularly):
+- `sync-time-entries` - Fast, only syncs yesterday and today's entries
+- `sync-tasks` - Always syncs all tasks (needed for change detection)
+- `daily-update` - Sends Slack notification with recent changes
+
+**For Initial Setup or Recovery** (Use these occasionally):
+- `full-sync` - Complete synchronization, use when setting up for the first time
+- `full-sync-time-entries` - Get 6 months of historical time entries
+- `full-sync-tasks` - Same as regular task sync but with clearer intent
+
+**Performance Impact**:
+- Regular sync: ~1-2 seconds for time entries, ~30 seconds for all tasks
+- Full sync: ~30 seconds for tasks, ~10 seconds for 6 months of time entries
 
 ## Task Name Estimation Format
 
@@ -140,7 +186,8 @@ For detailed information about the application's architecture and configuration:
 ├── logger.go                         # Structured logging system
 ├── main.go                           # Main application with WebSocket handling
 ├── sync_tasks_to_db.go              # Task synchronization with TimeCamp API
-├── sync_time_entries_to_db.go       # Time entries synchronization with TimeCamp API
+├── sync_time_entries_to_db.go       # Recent time entries synchronization
+├── full_sync.go                     # Full historical data synchronization
 ├── daily_slack_update.go            # Slack notifications with real-time data
 ├── db_setup.go                      # Database operations with error handling
 ├── .env.example                     # Environment variables template
@@ -153,11 +200,15 @@ For detailed information about the application's architecture and configuration:
 
 The application runs three main synchronization processes:
 
-- **Task Sync**: Every 5 minutes (`*/5 * * * *`) - Syncs tasks from TimeCamp API
-- **Time Entries Sync**: Every 10 minutes (`*/10 * * * *`) - Syncs time entries from TimeCamp API  
+- **Task Sync**: Every 5 minutes (`*/5 * * * *`) - Syncs all tasks from TimeCamp API
+- **Time Entries Sync**: Every 10 minutes (`*/10 * * * *`) - Syncs recent time entries (last day) from TimeCamp API  
 - **Daily Updates**: Every day at 6 AM (`0 6 * * *`) - Sends Slack notifications
 
 All schedules are configurable via environment variables using standard cron format.
+
+**Performance Optimization**: 
+- Regular cron jobs only sync recent time entries (last day) for efficiency
+- Use `full-sync` commands for initial setup or when you need to sync historical data
 
 ## Building and Running
 

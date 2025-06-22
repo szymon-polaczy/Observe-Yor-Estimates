@@ -92,9 +92,39 @@ func main() {
 			}
 			logger.Info("Tasks sync completed successfully")
 			return
+		case "full-sync":
+			logger.Info("Running full synchronization command")
+			if err := FullSyncAll(); err != nil {
+				logger.Errorf("Full sync failed: %v", err)
+				os.Exit(1)
+			}
+			logger.Info("Full synchronization completed successfully")
+			return
+		case "full-sync-tasks":
+			logger.Info("Running full tasks sync command")
+			if err := FullSyncTasksToDatabase(); err != nil {
+				logger.Errorf("Full tasks sync failed: %v", err)
+				os.Exit(1)
+			}
+			logger.Info("Full tasks sync completed successfully")
+			return
+		case "full-sync-time-entries":
+			logger.Info("Running full time entries sync command")
+			if err := FullSyncTimeEntriesToDatabase(); err != nil {
+				logger.Errorf("Full time entries sync failed: %v", err)
+				os.Exit(1)
+			}
+			logger.Info("Full time entries sync completed successfully")
+			return
 		default:
 			logger.Warnf("Unknown command line argument: %s", os.Args[1])
-			logger.Info("Available commands: daily-update, sync-time-entries, sync-tasks")
+			logger.Info("Available commands:")
+			logger.Info("  daily-update             - Send daily Slack update")
+			logger.Info("  sync-time-entries        - Sync recent time entries (last day)")
+			logger.Info("  sync-tasks               - Sync all tasks")
+			logger.Info("  full-sync                - Full sync of all tasks and time entries")
+			logger.Info("  full-sync-tasks          - Full sync of all tasks only")
+			logger.Info("  full-sync-time-entries   - Full sync of all time entries only")
 			return
 		}
 	}

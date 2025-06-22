@@ -110,6 +110,7 @@ func safeStringConvert(value interface{}) string {
 }
 
 // SyncTimeEntriesToDatabase fetches recent time entries from TimeCamp and stores them in the database
+// This function is optimized for regular cron jobs and only syncs the last day's entries
 func SyncTimeEntriesToDatabase() error {
 	logger := NewLogger()
 
@@ -121,8 +122,8 @@ func SyncTimeEntriesToDatabase() error {
 
 	logger.Debug("Starting time entries synchronization with TimeCamp")
 
-	// Get time entries from the last 7 days to ensure we capture recent changes
-	fromDate := time.Now().AddDate(0, 0, -7).Format("2006-01-02")
+	// Get time entries from the last day only (optimized for cron jobs)
+	fromDate := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
 	toDate := time.Now().Format("2006-01-02")
 
 	timeEntries, err := getTimeCampTimeEntries(fromDate, toDate)

@@ -1,0 +1,365 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"time"
+
+	"github.com/joho/godotenv"
+)
+
+// FullSyncTasksToDatabase fetches ALL tasks from TimeCamp and stores them in the database
+// This is intended for initial setup or full re-sync operations
+func FullSyncTasksToDatabase() error {
+	logger := NewLogger()
+
+	// Load environment variables
+	err := godotenv.Load()
+	if err != nil {
+		logger.Warnf("Could not reload .env file (continuing with existing env vars): %v", err)
+	}
+
+	logger.Debug("Starting FULL task synchronization with TimeCamp")
+
+	timecampTasks, err := getTimecampTasksFull()
+	if err != nil {
+		return fmt.Errorf("failed to fetch tasks from TimeCamp: %w", err)
+	}
+
+	if len(timecampTasks) == 0 {
+		logger.Warn("No tasks received from TimeCamp API")
+		return nil // Not an error, just no data
+	}
+
+	logger.Infof("Retrieved %d tasks from TimeCamp for full sync", len(timecampTasks))
+
+	db, err := GetDB()
+	if err != nil {
+		return fmt.Errorf("failed to open database connection: %w", err)
+	}
+
+	// Use INSERT OR REPLACE to handle existing tasks during full sync
+	insertStatement, err := db.Prepare("INSERT OR REPLACE INTO tasks values(?, ?, ?, ?, ?, ?)")
+	if err != nil {
+		return fmt.Errorf("failed to prepare insert statement: %w", err)
+	}
+	defer CloseWithErrorLog(insertStatement, "prepared statement")
+
+	// Process all tasks
+	errorCount := 0
+	successCount := 0
+
+	for _, task := range timecampTasks {
+		_, err = insertStatement.Exec(task.TaskID, task.ParentID, task.AssignedBy, task.Name, task.Level, task.RootGroupID)
+		if err != nil {
+			logger.Errorf("Failed to insert task %d (%s): %v", task.TaskID, task.Name, err)
+			errorCount++
+			continue
+		}
+
+		successCount++
+
+		// Track task changes for existing tasks
+		if trackErr := TrackTaskChange(db, task.TaskID, task.Name, "full_sync", "", ""); trackErr != nil {
+			logger.Errorf("Failed to track task change for task %d during full sync: %v", task.TaskID, trackErr)
+		}
+	}
+
+	logger.Infof("Full task sync completed: %d tasks processed successfully, %d errors encountered", successCount, errorCount)
+
+	if errorCount > 0 && successCount == 0 {
+		return fmt.Errorf("all task operations failed during full sync")
+	}
+
+	return nil
+}
+
+// FullSyncTimeEntriesToDatabase fetches ALL time entries from TimeCamp and stores them in the database
+// This is intended for initial setup or full re-sync operations
+func FullSyncTimeEntriesToDatabase() error {
+	logger := NewLogger()
+
+	// Load environment variables
+	err := godotenv.Load()
+	if err != nil {
+		logger.Warnf("Could not reload .env file (continuing with existing env vars): %v", err)
+	}
+
+	logger.Debug("Starting FULL time entries synchronization with TimeCamp")
+
+	// For full sync, get entries from a much longer period (e.g., last 6 months)
+	// You can adjust this timeframe based on your needs
+	fromDate := time.Now().AddDate(0, -6, 0).Format("2006-01-02") // 6 months ago
+	toDate := time.Now().Format("2006-01-02")
+
+	logger.Infof("Full sync: retrieving time entries from %s to %s", fromDate, toDate)
+
+	timeEntries, err := getTimeCampTimeEntriesFull(fromDate, toDate)
+	if err != nil {
+		return fmt.Errorf("failed to fetch time entries from TimeCamp: %w", err)
+	}
+
+	if len(timeEntries) == 0 {
+		logger.Info("No time entries received from TimeCamp API")
+		return nil // Not an error, just no data
+	}
+
+	logger.Infof("Retrieved %d time entries from TimeCamp for full sync", len(timeEntries))
+
+	db, err := GetDB()
+	if err != nil {
+		return fmt.Errorf("failed to open database connection: %w", err)
+	}
+
+	// Ensure time_entries table exists
+	if err := migrateTimeEntriesTable(db); err != nil {
+		return fmt.Errorf("failed to migrate time_entries table: %w", err)
+	}
+
+	// Use INSERT OR REPLACE to handle existing time entries during full sync
+	insertStatement, err := db.Prepare(`INSERT OR REPLACE INTO time_entries 
+		(id, task_id, user_id, date, start_time, end_time, duration, description, billable, locked, modify_time) 
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare insert statement: %w", err)
+	}
+	defer CloseWithErrorLog(insertStatement, "prepared statement")
+
+	// Pre-process entries to validate and convert data types
+	validEntries := make([]ProcessedTimeEntry, 0, len(timeEntries))
+	invalidCount := 0
+
+	for _, entry := range timeEntries {
+		processed, err := processTimeEntry(entry, logger)
+		if err != nil {
+			logger.Warnf("Failed to process time entry %s: %v, skipping", entry.ID, err)
+			invalidCount++
+			continue
+		}
+		validEntries = append(validEntries, processed)
+	}
+
+	if len(validEntries) == 0 {
+		logger.Warnf("No valid time entries to process after validation")
+		return nil
+	}
+
+	logger.Infof("Processing %d valid entries (%d invalid entries skipped) for full sync", len(validEntries), invalidCount)
+
+	// Batch insert valid entries
+	successCount := 0
+	errorCount := 0
+
+	for _, processed := range validEntries {
+		_, err = insertStatement.Exec(
+			processed.ID, processed.TaskID, processed.UserID, processed.Date,
+			processed.Start, processed.End, processed.Duration, processed.Description,
+			processed.Billable, processed.Locked, processed.ModifyTime,
+		)
+		if err != nil {
+			logger.Errorf("Failed to insert time entry %d: %v", processed.ID, err)
+			errorCount++
+			continue
+		}
+		successCount++
+	}
+
+	logger.Infof("Full time entries sync completed: %d entries processed successfully, %d errors encountered", successCount, errorCount)
+
+	if errorCount > 0 && successCount == 0 {
+		return fmt.Errorf("all time entry operations failed during full sync")
+	}
+
+	return nil
+}
+
+// getTimecampTasksFull fetches ALL tasks from TimeCamp API (same as regular getTimecampTasks but with clearer naming)
+func getTimecampTasksFull() ([]JsonTask, error) {
+	logger := NewLogger()
+
+	// Get TimeCamp API URL from environment variable or use default
+	timecampAPIURL := os.Getenv("TIMECAMP_API_URL")
+	if timecampAPIURL == "" {
+		timecampAPIURL = "https://app.timecamp.com/third_party/api"
+	}
+	getAllTasksURL := timecampAPIURL + "/tasks"
+
+	// Validate API key exists
+	apiKey := os.Getenv("TIMECAMP_API_KEY")
+	if apiKey == "" {
+		return nil, fmt.Errorf("TIMECAMP_API_KEY environment variable not set")
+	}
+
+	authBearer := "Bearer " + apiKey
+
+	request, err := http.NewRequest("GET", getAllTasksURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
+	}
+
+	request.Header.Add("Authorization", authBearer)
+	request.Header.Add("Accept", "application/json")
+
+	logger.Debugf("Fetching ALL tasks from TimeCamp API: %s", getAllTasksURL)
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP request to TimeCamp API failed: %w", err)
+	}
+	defer CloseWithErrorLog(response.Body, "HTTP response body")
+
+	// Check HTTP status code
+	if response.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(response.Body)
+		return nil, fmt.Errorf("TimeCamp API returned status %d: %s", response.StatusCode, string(body))
+	}
+
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if len(body) == 0 {
+		logger.Warn("Empty response from TimeCamp API")
+		return []JsonTask{}, nil
+	}
+
+	// Unmarshal into a map first
+	taskMap := make(map[string]JsonTask)
+	if err := json.Unmarshal(body, &taskMap); err != nil {
+		return nil, fmt.Errorf("failed to parse JSON response from TimeCamp: %w", err)
+	}
+
+	// Convert the map to a slice
+	tasks := make([]JsonTask, 0, len(taskMap))
+	for _, task := range taskMap {
+		tasks = append(tasks, task)
+	}
+
+	logger.Debugf("Successfully fetched %d tasks from TimeCamp for full sync", len(tasks))
+
+	return tasks, nil
+}
+
+// getTimeCampTimeEntriesFull fetches time entries from TimeCamp API for the specified date range (same as regular function but with clearer naming)
+func getTimeCampTimeEntriesFull(fromDate, toDate string) ([]JsonTimeEntry, error) {
+	logger := NewLogger()
+
+	// Get TimeCamp API URL from environment variable or use default
+	timecampAPIURL := os.Getenv("TIMECAMP_API_URL")
+	if timecampAPIURL == "" {
+		timecampAPIURL = "https://app.timecamp.com/third_party/api"
+	}
+	getTimeEntriesURL := fmt.Sprintf("%s/entries", timecampAPIURL)
+
+	// Validate API key exists
+	apiKey := os.Getenv("TIMECAMP_API_KEY")
+	if apiKey == "" {
+		return nil, fmt.Errorf("TIMECAMP_API_KEY environment variable not set")
+	}
+
+	authBearer := "Bearer " + apiKey
+
+	request, err := http.NewRequest("GET", getTimeEntriesURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
+	}
+
+	// Add query parameters
+	q := request.URL.Query()
+	q.Add("from", fromDate)
+	q.Add("to", toDate)
+	q.Add("format", "json")
+	request.URL.RawQuery = q.Encode()
+
+	request.Header.Add("Authorization", authBearer)
+	request.Header.Add("Accept", "application/json")
+
+	logger.Debugf("Fetching ALL time entries from TimeCamp API: %s", request.URL.String())
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP request to TimeCamp API failed: %w", err)
+	}
+	defer CloseWithErrorLog(response.Body, "HTTP response body")
+
+	// Check HTTP status code
+	if response.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(response.Body)
+		return nil, fmt.Errorf("TimeCamp API returned status %d: %s", response.StatusCode, string(body))
+	}
+
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if len(body) == 0 {
+		logger.Warn("Empty response from TimeCamp API")
+		return []JsonTimeEntry{}, nil
+	}
+
+	// Try to unmarshal directly to JsonTimeEntry first
+	var timeEntries []JsonTimeEntry
+	if err := json.Unmarshal(body, &timeEntries); err == nil {
+		logger.Debugf("Successfully parsed %d time entries directly for full sync", len(timeEntries))
+		return timeEntries, nil
+	}
+
+	// Fallback to the flexible parsing if direct unmarshaling fails
+	logger.Debug("Direct unmarshaling failed, using flexible parsing for full sync")
+	var timeEntriesRaw []map[string]interface{}
+	if err := json.Unmarshal(body, &timeEntriesRaw); err != nil {
+		return nil, fmt.Errorf("failed to parse JSON response from TimeCamp: %w", err)
+	}
+
+	// Convert the raw data to our structured format
+	timeEntries = make([]JsonTimeEntry, 0, len(timeEntriesRaw))
+	for _, rawEntry := range timeEntriesRaw {
+		entry := JsonTimeEntry{
+			ID:          safeStringConvert(rawEntry["id"]),
+			TaskID:      safeStringConvert(rawEntry["task_id"]),
+			UserID:      safeStringConvert(rawEntry["user_id"]),
+			Date:        safeStringConvert(rawEntry["date"]),
+			Start:       safeStringConvert(rawEntry["start_time"]),
+			End:         safeStringConvert(rawEntry["end_time"]),
+			Duration:    safeStringConvert(rawEntry["duration"]),
+			Description: safeStringConvert(rawEntry["description"]),
+			Billable:    safeStringConvert(rawEntry["billable"]),
+			Locked:      safeStringConvert(rawEntry["locked"]),
+			ModifyTime:  safeStringConvert(rawEntry["modify_time"]),
+		}
+		timeEntries = append(timeEntries, entry)
+	}
+
+	logger.Debugf("Successfully fetched %d time entries from TimeCamp for full sync", len(timeEntries))
+
+	return timeEntries, nil
+}
+
+// FullSyncAll performs both full tasks sync and full time entries sync
+func FullSyncAll() error {
+	logger := NewLogger()
+
+	logger.Info("Starting full synchronization of all data from TimeCamp")
+
+	// Sync tasks first
+	logger.Info("Starting full tasks sync...")
+	if err := FullSyncTasksToDatabase(); err != nil {
+		return fmt.Errorf("full tasks sync failed: %w", err)
+	}
+	logger.Info("Full tasks sync completed successfully")
+
+	// Then sync time entries
+	logger.Info("Starting full time entries sync...")
+	if err := FullSyncTimeEntriesToDatabase(); err != nil {
+		return fmt.Errorf("full time entries sync failed: %w", err)
+	}
+	logger.Info("Full time entries sync completed successfully")
+
+	logger.Info("Full synchronization completed successfully")
+	return nil
+}

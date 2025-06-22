@@ -20,6 +20,9 @@ type JsonTask struct {
 	RootGroupID int    `json:"root_group_id"`
 }
 
+// SyncTasksToDatabase fetches all tasks from TimeCamp and stores them in the database
+// Note: Tasks are synced completely each time since the TimeCamp API doesn't support 
+// filtering by modification date and the task list is relatively small
 func SyncTasksToDatabase() error {
 	logger := NewLogger()
 
