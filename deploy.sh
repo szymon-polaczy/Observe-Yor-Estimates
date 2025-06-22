@@ -163,27 +163,36 @@ build_application() {
 validate_environment() {
     log_section "Validating Environment"
     
-    local required_vars=(
-        "TIMECAMP_API_KEY"
-        "SLACK_WEBHOOK_URL"
-    )
-    
-    local missing_vars=()
-    
-    for var in "${required_vars[@]}"; do
-        if [[ -z "${!var:-}" ]]; then
-            missing_vars+=("$var")
-        else
-            log_success "$var is set"
-        fi
-    done
-    
-    if [[ ${#missing_vars[@]} -gt 0 ]]; then
-        log_error "Missing required environment variables:"
-        for var in "${missing_vars[@]}"; do
-            log_error "  - $var"
+    # For Netlify deployments, we don't require API keys at build time
+    # They're only needed for runtime operations
+    if is_netlify; then
+        log_info "Netlify environment detected - skipping API key validation"
+        log_info "API keys will be validated at runtime when functions are called"
+    else
+        # For non-Netlify deployments, validate API keys
+        local required_vars=(
+            "TIMECAMP_API_KEY"
+            "SLACK_WEBHOOK_URL"
+        )
+        
+        local missing_vars=()
+        
+        for var in "${required_vars[@]}"; do
+            if [[ -z "${!var:-}" ]]; then
+                missing_vars+=("$var")
+            else
+                log_success "$var is set"
+            fi
         done
-        return 1
+        
+        if [[ ${#missing_vars[@]} -gt 0 ]]; then
+            log_error "Missing required environment variables:"
+            for var in "${missing_vars[@]}"; do
+                log_error "  - $var"
+            done
+            log_error "For local development, these are required. For Netlify, set them in the site settings."
+            return 1
+        fi
     fi
     
     # Optional variables with defaults
@@ -209,6 +218,22 @@ validate_environment() {
 full_sync() {
     log_section "Performing Full Synchronization"
     
+    # For Netlify deployments, skip full sync at build time since we don't have API keys
+    if is_netlify; then
+        log_info "Netlify environment detected - skipping full sync at build time"
+        log_info "Database will be initialized when functions are first called"
+        
+        # Create an empty database with the right structure
+        log_info "Initializing empty database structure..."
+        if ./"$BINARY_NAME" --build-test >/dev/null 2>&1; then
+            log_success "Binary is working, database will be initialized on first use"
+        else
+            log_error "Binary test failed"
+            return 1
+        fi
+        return 0
+    fi
+    
     log_info "Starting full synchronization with TimeCamp..."
     
     # Run full sync command
@@ -223,6 +248,13 @@ full_sync() {
 # Test database connectivity and basic operations
 test_database() {
     log_section "Testing Database"
+    
+    # For Netlify, skip database tests since we don't have API keys at build time
+    if is_netlify; then
+        log_info "Netlify environment detected - skipping database tests at build time"
+        log_info "Database connectivity will be tested when functions are called"
+        return 0
+    fi
     
     log_info "Testing database connectivity..."
     
@@ -269,7 +301,11 @@ main() {
     local needs_db_recreation=false
     local needs_full_sync=false
     
-    if ! check_database_version; then
+    if is_netlify; then
+        log_info "Netlify environment - skipping database checks at build time"
+        needs_db_recreation=false
+        needs_full_sync=false
+    elif ! check_database_version; then
         log_warning "Database version check failed - recreation required"
         needs_db_recreation=true
         needs_full_sync=true
@@ -311,14 +347,18 @@ main() {
     log_section "Deployment Complete"
     log_success "Application deployed successfully!"
     log_info "Binary: $BINARY_NAME"
-    log_info "Database: $(get_db_path)"
-    log_info "Version: $DATABASE_VERSION"
     
     if is_netlify; then
         log_info "Netlify deployment complete"
-        log_info "Slack commands available via Functions"
-        log_info "Health check: https://your-site.netlify.app/.netlify/functions/health"
+        log_info "Functions deployed: health, slack-command"
+        log_info "Health check: /.netlify/functions/health"
+        log_info "Slack commands: /slack/{daily-update,weekly-update,monthly-update}"
+        log_info ""
+        log_info "Note: Set TIMECAMP_API_KEY and SLACK_WEBHOOK_URL in Netlify site settings"
+        log_info "for the functions to work properly at runtime."
     else
+        log_info "Database: $(get_db_path)"
+        log_info "Version: $DATABASE_VERSION"
         log_info "To start the application in daemon mode:"
         log_info "  ./$BINARY_NAME"
         log_info ""

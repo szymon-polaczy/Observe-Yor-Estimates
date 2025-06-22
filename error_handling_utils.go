@@ -10,6 +10,11 @@ import (
 
 // validateRequiredEnvVars checks that all required environment variables are set
 func validateRequiredEnvVars() error {
+	// For Netlify builds, skip validation since API keys are set at runtime
+	if isNetlifyBuild() {
+		return nil
+	}
+
 	required := []string{
 		"SLACK_WEBHOOK_URL",
 		"TIMECAMP_API_KEY",
@@ -30,6 +35,11 @@ func validateRequiredEnvVars() error {
 	}
 
 	return nil
+}
+
+// isNetlifyBuild checks if we're running in a Netlify build environment
+func isNetlifyBuild() bool {
+	return os.Getenv("NETLIFY") != "" || os.Getenv("DEPLOY_URL") != "" || os.Getenv("NETLIFY_BUILD_BASE") != ""
 }
 
 // CloseWithErrorLog safely closes a resource and logs any error

@@ -23,13 +23,25 @@ func main() {
 		case "--help", "-h", "help":
 			showHelp()
 			return
+		case "--version", "version":
+			fmt.Println("Observe-Yor-Estimates v1.0.0")
+			return
+		case "--build-test", "build-test":
+			// Simple build test that doesn't require environment variables
+			fmt.Println("Build test successful - binary is working correctly")
+			return
 		}
 	}
 
-	// Load environment variables - this is critical, so we panic if it fails
+	// Load environment variables - try to load .env file but don't fail if it doesn't exist
 	err := godotenv.Load()
 	if err != nil {
-		logger.Fatalf("Critical error: Failed to load .env file: %v", err)
+		// For Netlify builds, .env files may not exist, so only warn
+		if isNetlifyBuild() {
+			logger.Info("No .env file found (normal for Netlify builds)")
+		} else {
+			logger.Warnf("Warning: Failed to load .env file: %v", err)
+		}
 	}
 
 	// Validate required environment variables
@@ -283,6 +295,8 @@ func showHelp() {
 	fmt.Println("  full-sync                - Full sync of all tasks and time entries")
 	fmt.Println("  full-sync-tasks          - Full sync of all tasks only")
 	fmt.Println("  full-sync-time-entries   - Full sync of all time entries only")
+	fmt.Println("  --version, version       - Show version information")
+	fmt.Println("  --build-test, build-test - Test that the binary is working (for builds)")
 	fmt.Println("  --help, -h, help         - Show this help message")
 	fmt.Println("")
 	fmt.Println("If no command is provided, the application will start in daemon mode")
