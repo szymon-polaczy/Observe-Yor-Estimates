@@ -234,14 +234,15 @@ full_sync() {
     # For Netlify deployments, skip full sync at build time since we don't have API keys
     if is_netlify; then
         log_info "Netlify environment detected - skipping full sync at build time"
-        log_info "Database will be initialized when server starts at runtime"
+        log_info "Database will be initialized when functions are first called"
         
-        # Just verify the binary runs without creating any database files
-        log_info "Testing binary execution without database operations..."
-        if ./"$BINARY_NAME" --version >/dev/null 2>&1 || ./"$BINARY_NAME" --help >/dev/null 2>&1; then
-            log_success "Binary is executable and will initialize database on first runtime"
+        # Create an empty database with the right structure
+        log_info "Initializing empty database structure..."
+        if ./"$BINARY_NAME" --build-test >/dev/null 2>&1; then
+            log_success "Binary is working, database will be initialized on first use"
         else
-            log_warning "Binary test inconclusive, but proceeding with deployment"
+            log_error "Binary test failed"
+            return 1
         fi
         return 0
     fi
@@ -357,23 +358,6 @@ main() {
     
     if is_netlify; then
         log_info "Netlify environment - skipping database checks at build time"
-        log_info "Cleaning up any local database files to prevent deployment issues..."
-        
-        # Remove any existing database files that might interfere with deployment
-        local db_path=$(get_db_path)
-        if [[ -f "$db_path" ]]; then
-            rm -f "$db_path"
-            log_info "Removed local database file: $db_path"
-        fi
-        if [[ -f "${db_path}-journal" ]]; then
-            rm -f "${db_path}-journal"
-            log_info "Removed database journal file: ${db_path}-journal"
-        fi
-        if [[ -f "$VERSION_FILE" ]]; then
-            rm -f "$VERSION_FILE"
-            log_info "Removed local version file: $VERSION_FILE"
-        fi
-        
         needs_db_recreation=false
         needs_full_sync=false
     elif ! check_database_version; then
