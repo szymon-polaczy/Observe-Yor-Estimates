@@ -233,3 +233,35 @@ FOREIGN KEY (task_id) REFERENCES tasks(task_id)
 	logger.Info("Time entries table created successfully")
 	return nil
 }
+
+// CheckDatabaseHasTasks returns true if the database has any tasks, false otherwise
+func CheckDatabaseHasTasks() (bool, error) {
+	db, err := GetDB()
+	if err != nil {
+		return false, fmt.Errorf("failed to get database connection: %w", err)
+	}
+
+	var count int
+	err = db.QueryRow("SELECT COUNT(*) FROM tasks").Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("failed to count tasks: %w", err)
+	}
+
+	return count > 0, nil
+}
+
+// CheckDatabaseHasTimeEntries returns true if the database has any time entries, false otherwise
+func CheckDatabaseHasTimeEntries() (bool, error) {
+	db, err := GetDB()
+	if err != nil {
+		return false, fmt.Errorf("failed to get database connection: %w", err)
+	}
+
+	var count int
+	err = db.QueryRow("SELECT COUNT(*) FROM time_entries").Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("failed to count time entries: %w", err)
+	}
+
+	return count > 0, nil
+}

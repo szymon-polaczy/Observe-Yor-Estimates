@@ -63,6 +63,28 @@ func SendDailySlackUpdate() {
 func getTaskTimeChanges(db *sql.DB) ([]TaskTimeInfo, error) {
 	logger := GetGlobalLogger()
 
+	// First check if the database has any tasks at all
+	hasTasks, err := CheckDatabaseHasTasks()
+	if err != nil {
+		logger.Errorf("Failed to check if database has tasks: %v", err)
+		return nil, fmt.Errorf("failed to check database tasks: %w", err)
+	}
+
+	if !hasTasks {
+		logger.Info("Database is empty (no tasks found) - triggering full sync")
+		
+		// Trigger full sync to populate the database
+		if err := FullSyncAll(); err != nil {
+			logger.Errorf("Full sync failed: %v", err)
+			return nil, fmt.Errorf("full sync failed after detecting empty database: %w", err)
+		}
+		
+		logger.Info("Full sync completed successfully - retrying daily task query")
+		
+		// After successful sync, try again to get the data
+		return GetTaskTimeEntries(db)
+	}
+
 	// Get actual time entries data from the database
 	logger.Debug("Querying tasks with recent time entries")
 
