@@ -259,7 +259,11 @@ func SendDailySlackUpdateWithResponseURL(responseURL string) {
 				},
 			},
 		}
-		sendDelayedResponseToURL(responseURL, message)
+		if err := sendDelayedResponseToURL(responseURL, message); err != nil {
+			logger.Errorf("Failed to send 'no changes' response: %v", err)
+		} else {
+			logger.Info("Successfully sent 'no changes' daily update via response URL")
+		}
 		return
 	}
 
