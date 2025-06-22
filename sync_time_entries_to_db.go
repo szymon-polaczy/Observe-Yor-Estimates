@@ -53,6 +53,18 @@ type TimeEntryInfo struct {
 	FirstEntryTime   *time.Time
 }
 
+// WeeklyTaskTimeInfo represents aggregated weekly time information for a task
+type WeeklyTaskTimeInfo struct {
+	TaskID           int
+	Name             string
+	WeeklyTime       string
+	LastWeekTime     string
+	StartTime        string
+	EstimationInfo   string
+	EstimationStatus string
+	DaysWorked       int
+}
+
 // processTimeEntry validates and converts a JsonTimeEntry to ProcessedTimeEntry
 func processTimeEntry(entry JsonTimeEntry, logger interface{ Warnf(string, ...interface{}) }) (ProcessedTimeEntry, error) {
 	var processed ProcessedTimeEntry
@@ -393,6 +405,126 @@ func GetTaskTimeEntries(db *sql.DB) ([]TaskTimeInfo, error) {
 	}
 
 	logger.Debugf("Successfully retrieved %d task time entries", len(taskInfos))
+	return taskInfos, nil
+}
+
+// GetWeeklyTaskTimeEntries retrieves time entry information for tasks for the past week vs previous week
+func GetWeeklyTaskTimeEntries(db *sql.DB) ([]WeeklyTaskTimeInfo, error) {
+	logger := NewLogger()
+
+	// Calculate date ranges for current and previous week
+	now := time.Now()
+
+	// Start of current week (Monday)
+	thisWeekStart := now.AddDate(0, 0, -int(now.Weekday())+1)
+	if now.Weekday() == time.Sunday {
+		thisWeekStart = thisWeekStart.AddDate(0, 0, -7)
+	}
+	thisWeekEnd := thisWeekStart.AddDate(0, 0, 6)
+
+	// Previous week
+	lastWeekStart := thisWeekStart.AddDate(0, 0, -7)
+	lastWeekEnd := thisWeekStart.AddDate(0, 0, -1)
+
+	thisWeekStartStr := thisWeekStart.Format("2006-01-02")
+	thisWeekEndStr := thisWeekEnd.Format("2006-01-02")
+	lastWeekStartStr := lastWeekStart.Format("2006-01-02")
+	lastWeekEndStr := lastWeekEnd.Format("2006-01-02")
+
+	query := `
+		WITH weekly_task_data AS (
+			SELECT 
+				t.task_id,
+				t.name,
+				COALESCE(SUM(CASE WHEN te.date BETWEEN ? AND ? THEN te.duration ELSE 0 END), 0) as thisweek_seconds,
+				COALESCE(SUM(CASE WHEN te.date BETWEEN ? AND ? THEN te.duration ELSE 0 END), 0) as lastweek_seconds,
+				MIN(te.start_time) as first_entry_time,
+				COUNT(DISTINCT CASE WHEN te.date BETWEEN ? AND ? THEN te.date END) as days_worked
+			FROM tasks t
+			LEFT JOIN time_entries te ON t.task_id = te.task_id 
+				AND te.date BETWEEN ? AND ?
+			WHERE te.task_id IS NOT NULL
+			GROUP BY t.task_id, t.name
+			HAVING thisweek_seconds > 0 OR lastweek_seconds > 0
+		)
+		SELECT 
+			task_id,
+			name,
+			thisweek_seconds,
+			lastweek_seconds,
+			first_entry_time,
+			days_worked
+		FROM weekly_task_data
+		ORDER BY (thisweek_seconds + lastweek_seconds) DESC
+		LIMIT 10
+	`
+
+	logger.Debugf("Querying weekly time entries: this week (%s to %s), last week (%s to %s)",
+		thisWeekStartStr, thisWeekEndStr, lastWeekStartStr, lastWeekEndStr)
+
+	rows, err := db.Query(query,
+		thisWeekStartStr, thisWeekEndStr, // this week range
+		lastWeekStartStr, lastWeekEndStr, // last week range
+		thisWeekStartStr, thisWeekEndStr, // this week range for days_worked count
+		lastWeekStartStr, thisWeekEndStr) // extended range for all entries
+	if err != nil {
+		return nil, fmt.Errorf("error querying weekly time entries: %w", err)
+	}
+	defer CloseWithErrorLog(rows, "database rows")
+
+	var taskInfos []WeeklyTaskTimeInfo
+	errorCount := 0
+
+	for rows.Next() {
+		var taskInfo WeeklyTaskTimeInfo
+		var thisWeekSeconds, lastWeekSeconds int
+		var firstEntryTimeStr sql.NullString
+
+		err := rows.Scan(
+			&taskInfo.TaskID,
+			&taskInfo.Name,
+			&thisWeekSeconds,
+			&lastWeekSeconds,
+			&firstEntryTimeStr,
+			&taskInfo.DaysWorked,
+		)
+		if err != nil {
+			logger.Errorf("Error scanning weekly time entry row: %v", err)
+			errorCount++
+			continue
+		}
+
+		// Convert seconds to duration strings
+		taskInfo.WeeklyTime = formatDuration(thisWeekSeconds)
+		taskInfo.LastWeekTime = formatDuration(lastWeekSeconds)
+
+		// Handle start time
+		if firstEntryTimeStr.Valid {
+			if parsedTime, parseErr := time.Parse("15:04:05", firstEntryTimeStr.String); parseErr == nil {
+				taskInfo.StartTime = parsedTime.Format("15:04")
+			} else {
+				taskInfo.StartTime = firstEntryTimeStr.String
+			}
+		} else {
+			taskInfo.StartTime = "N/A"
+		}
+
+		// Extract estimation information from task name
+		taskInfo.EstimationInfo, taskInfo.EstimationStatus = parseEstimation(taskInfo.Name)
+
+		taskInfos = append(taskInfos, taskInfo)
+	}
+
+	// Check for iteration errors
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error during weekly rows iteration: %w", err)
+	}
+
+	if errorCount > 0 {
+		logger.Warnf("Encountered %d errors while processing weekly time entry rows", errorCount)
+	}
+
+	logger.Debugf("Successfully retrieved %d weekly task time entries", len(taskInfos))
 	return taskInfos, nil
 }
 

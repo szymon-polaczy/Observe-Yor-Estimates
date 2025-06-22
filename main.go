@@ -49,6 +49,15 @@ func main() {
 	// Initialize logger
 	logger := NewLogger()
 
+	// Check for help arguments first, before any environment validation
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "--help", "-h", "help":
+			showHelp()
+			return
+		}
+	}
+
 	// Load environment variables - this is critical, so we panic if it fails
 	err := godotenv.Load()
 	if err != nil {
@@ -75,6 +84,10 @@ func main() {
 		case "daily-update":
 			logger.Info("Running daily update command")
 			SendDailySlackUpdate()
+			return
+		case "weekly-update":
+			logger.Info("Running weekly update command")
+			SendWeeklySlackUpdate()
 			return
 		case "sync-time-entries":
 			logger.Info("Running time entries sync command")
@@ -120,6 +133,7 @@ func main() {
 			logger.Warnf("Unknown command line argument: %s", os.Args[1])
 			logger.Info("Available commands:")
 			logger.Info("  daily-update             - Send daily Slack update")
+			logger.Info("  weekly-update            - Send weekly Slack update")
 			logger.Info("  sync-time-entries        - Sync recent time entries (last day)")
 			logger.Info("  sync-tasks               - Sync all tasks")
 			logger.Info("  full-sync                - Full sync of all tasks and time entries")
@@ -155,6 +169,11 @@ func main() {
 		dailyUpdateSchedule = "0 6 * * *" // default: 6 AM daily
 	}
 
+	weeklyUpdateSchedule := os.Getenv("WEEKLY_UPDATE_SCHEDULE")
+	if weeklyUpdateSchedule == "" {
+		weeklyUpdateSchedule = "0 8 * * 1" // default: 8 AM on Mondays
+	}
+
 	// Schedule SyncTasksToDatabase to run based on configured schedule
 	_, err = cronScheduler.AddFunc(taskSyncSchedule, func() {
 		logger.Debug("Running scheduled task sync")
@@ -184,6 +203,15 @@ func main() {
 	})
 	if err != nil {
 		logger.Fatalf("Critical error: Failed to schedule daily Slack update: %v", err)
+	}
+
+	// Schedule weekly Slack update to run based on configured schedule
+	_, err = cronScheduler.AddFunc(weeklyUpdateSchedule, func() {
+		logger.Debug("Running scheduled weekly Slack update")
+		SendWeeklySlackUpdate()
+	})
+	if err != nil {
+		logger.Fatalf("Critical error: Failed to schedule weekly Slack update: %v", err)
 	}
 
 	// Start the cron scheduler
@@ -361,4 +389,32 @@ func getSlackSocketURL() (string, error) {
 
 	logger.Debugf("Successfully obtained Slack socket URL")
 	return socketURLResponse.Url, nil
+}
+
+// showHelp displays usage information for the application
+func showHelp() {
+	fmt.Println("Observe-Yor-Estimates - Task time tracking and Slack notifications")
+	fmt.Println("")
+	fmt.Println("Usage:")
+	fmt.Println("  ./observe-yor-estimates [command]")
+	fmt.Println("")
+	fmt.Println("Available commands:")
+	fmt.Println("  daily-update             - Send daily Slack update")
+	fmt.Println("  weekly-update            - Send weekly Slack update")
+	fmt.Println("  sync-time-entries        - Sync recent time entries (last day)")
+	fmt.Println("  sync-tasks               - Sync all tasks")
+	fmt.Println("  full-sync                - Full sync of all tasks and time entries")
+	fmt.Println("  full-sync-tasks          - Full sync of all tasks only")
+	fmt.Println("  full-sync-time-entries   - Full sync of all time entries only")
+	fmt.Println("  --help, -h, help         - Show this help message")
+	fmt.Println("")
+	fmt.Println("If no command is provided, the application will start in daemon mode")
+	fmt.Println("with scheduled synchronization and Slack updates.")
+	fmt.Println("")
+	fmt.Println("Required environment variables:")
+	fmt.Println("  SLACK_TOKEN       - Slack bot token")
+	fmt.Println("  SLACK_WEBHOOK_URL - Slack webhook URL for notifications")
+	fmt.Println("  TIMECAMP_API_KEY  - TimeCamp API key")
+	fmt.Println("")
+	fmt.Println("For more information, see the README.md and Documentation/ folder.")
 }

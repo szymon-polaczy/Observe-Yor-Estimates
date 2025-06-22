@@ -21,7 +21,7 @@ type JsonTask struct {
 }
 
 // SyncTasksToDatabase fetches all tasks from TimeCamp and stores them in the database
-// Note: Tasks are synced completely each time since the TimeCamp API doesn't support 
+// Note: Tasks are synced completely each time since the TimeCamp API doesn't support
 // filtering by modification date and the task list is relatively small
 func SyncTasksToDatabase() error {
 	logger := NewLogger()

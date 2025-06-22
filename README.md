@@ -1,10 +1,11 @@
-# Observe Your Estimates - Daily Slack Updates
+# Observe Your Estimates - Daily & Weekly Slack Updates
 
-This application provides daily Slack updates for task changes and time tracking with estimation analysis, integrating with TimeCamp API for real-time data synchronization.
+This application provides daily and weekly Slack updates for task changes and time tracking with estimation analysis, integrating with TimeCamp API for real-time data synchronization.
 
 ## Features
 
 - **Daily Slack Updates**: Automatically sends daily reports at 6 AM (configurable) showing task progress
+- **Weekly Slack Updates**: Automatically sends weekly summaries on Mondays at 8 AM (configurable) showing week-over-week progress
 - **Real-Time TimeCamp Integration**: Syncs tasks and time entries from TimeCamp API
 - **Estimation Analysis**: Parses task names for estimation patterns like `[8-12]` and calculates usage percentage
 - **Time Tracking**: Shows start time, yesterday's time, and today's time for each task using real TimeCamp data
@@ -46,6 +47,7 @@ For first-time users:
    - `TASK_SYNC_SCHEDULE`: Task sync cron schedule (default: `*/5 * * * *` - every 5 minutes)
    - `TIME_ENTRIES_SYNC_SCHEDULE`: Time entries sync schedule (default: `*/10 * * * *` - every 10 minutes)
    - `DAILY_UPDATE_SCHEDULE`: Daily update schedule (default: `0 6 * * *` - 6 AM daily)
+   - `WEEKLY_UPDATE_SCHEDULE`: Weekly update schedule (default: `0 8 * * 1` - 8 AM on Mondays)
    - `PROGRESS_BAR_LENGTH`: Progress bar length in Slack messages (default: `10`)
    - `MID_POINT`: Color threshold percentage (default: `50`)
    - `HIGH_POINT`: Color threshold percentage (default: `90`)
@@ -58,7 +60,7 @@ For first-time users:
 ## Usage
 
 ### Automatic Operation (Recommended)
-The application runs continuously with automatic synchronization and daily updates:
+The application runs continuously with automatic synchronization and daily/weekly updates:
 ```bash
 ./observe-yor-estimates
 ```
@@ -66,6 +68,7 @@ This will:
 - Sync tasks from TimeCamp every 5 minutes (configurable)
 - Sync time entries from TimeCamp every 10 minutes (configurable)  
 - Send daily Slack updates at 6 AM (configurable)
+- Send weekly Slack summaries on Mondays at 8 AM (configurable)
 
 ### Manual Commands
 For testing and manual operations:
@@ -73,6 +76,11 @@ For testing and manual operations:
 **Manual Daily Update**:
 ```bash
 ./observe-yor-estimates daily-update
+```
+
+**Manual Weekly Update**:
+```bash
+./observe-yor-estimates weekly-update
 ```
 
 **Manual Recent Sync (Incremental)**:
@@ -198,11 +206,12 @@ For detailed information about the application's architecture and configuration:
 
 ## Synchronization Schedules
 
-The application runs three main synchronization processes:
+The application runs four main synchronization processes:
 
 - **Task Sync**: Every 5 minutes (`*/5 * * * *`) - Syncs all tasks from TimeCamp API
 - **Time Entries Sync**: Every 10 minutes (`*/10 * * * *`) - Syncs recent time entries (last day) from TimeCamp API  
-- **Daily Updates**: Every day at 6 AM (`0 6 * * *`) - Sends Slack notifications
+- **Daily Updates**: Every day at 6 AM (`0 6 * * *`) - Sends daily Slack notifications
+- **Weekly Updates**: Every Monday at 8 AM (`0 8 * * 1`) - Sends weekly Slack summaries
 
 All schedules are configurable via environment variables using standard cron format.
 

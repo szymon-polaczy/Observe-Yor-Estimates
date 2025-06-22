@@ -39,6 +39,11 @@ This document outlines the environment variables that have been extracted from h
 - **File**: `main.go`
 - **Description**: Cron schedule for daily Slack updates
 
+- **Variable**: `WEEKLY_UPDATE_SCHEDULE`
+- **Default**: `0 8 * * 1` (8 AM on Mondays)
+- **File**: `main.go`
+- **Description**: Cron schedule for weekly Slack updates
+
 ### 4. UI Configuration
 - **Variable**: `PROGRESS_BAR_LENGTH`
 - **Default**: `10`
@@ -61,6 +66,7 @@ All the newly added environment variables are optional and have sensible default
 - `TASK_SYNC_SCHEDULE`
 - `TIME_ENTRIES_SYNC_SCHEDULE`
 - `DAILY_UPDATE_SCHEDULE`
+- `WEEKLY_UPDATE_SCHEDULE`
 - `PROGRESS_BAR_LENGTH`
 
 ## Previously Configurable Variables
