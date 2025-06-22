@@ -149,9 +149,33 @@ async function processSlackCommand(command, responseUrl) {
       console.log(`Selected executable path: ${goExecutable}`);
       console.log(`Available paths checked:`, possiblePaths);
       
+      // Set up environment with proper database path for Netlify
+      const envVars = { ...process.env };
+      
+      // Determine the appropriate database path for Netlify environment
+      if (process.env.LAMBDA_TASK_ROOT) {
+        // We're in a Lambda/Netlify function environment
+        const dbPath = path.join(process.env.LAMBDA_TASK_ROOT, 'oye.db');
+        envVars.DATABASE_PATH = dbPath;
+        console.log(`Setting DATABASE_PATH to: ${dbPath}`);
+        
+        // Check if database exists, if not we may need to sync
+        try {
+          if (!fs.existsSync(dbPath)) {
+            console.log(`Database file does not exist at: ${dbPath}`);
+            console.log('This may be a first-time deployment or the database was not included in the deployment.');
+          } else {
+            const dbStats = fs.statSync(dbPath);
+            console.log(`Database file exists: ${dbPath} (size: ${dbStats.size} bytes)`);
+          }
+        } catch (dbCheckError) {
+          console.log(`Error checking database file: ${dbCheckError.message}`);
+        }
+      }
+      
       const child = spawn(goExecutable, [command, '--output-json'], {
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: process.env,
+        env: envVars,
         cwd: path.join(__dirname, '..')  // Ensure working directory is project root
       });
 
@@ -220,6 +244,15 @@ async function processSlackCommand(command, responseUrl) {
           console.error(`Command ${command} failed with code ${code}`);
           console.error('stderr:', stderr);
           
+          // Check if the error is database-related and provide helpful message
+          let errorMessage = `❌ Error: ${command.replace('-', ' ')} command failed`;
+          if (stderr.includes('Failed to initialize database') || stderr.includes('unable to open database file')) {
+            errorMessage = `❌ Database Error: The database file is not accessible in the deployment environment. This indicates the database was not properly included in the Netlify deployment or needs to be initialized.`;
+          } else if (stderr.includes('no such file or directory') && stderr.includes('.env')) {
+            // This is just a warning about missing .env file, not a critical error
+            errorMessage = `❌ Configuration Error: Environment variables are missing. Please check that TIMECAMP_API_KEY and SLACK_WEBHOOK_URL are set in Netlify environment variables.`;
+          }
+          
           resolve({
             statusCode: 200,
             headers: {
@@ -227,7 +260,14 @@ async function processSlackCommand(command, responseUrl) {
             },
             body: JSON.stringify({
               response_type: 'ephemeral',
-              text: `❌ Error: ${command.replace('-', ' ')} command failed`
+              text: errorMessage,
+              blocks: [{
+                type: 'section',
+                text: {
+                  type: 'mrkdwn',
+                  text: `${errorMessage}\n\n*Troubleshooting:*\n• Ensure the database file (\`oye.db\`) is included in the deployment\n• Verify TIMECAMP_API_KEY and SLACK_WEBHOOK_URL are set in Netlify environment variables\n• Check the Netlify build logs for any deployment issues\n• Contact administrator if this persists`
+                }
+              }]
             }),
           });
         }

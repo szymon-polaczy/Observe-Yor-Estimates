@@ -38,6 +38,16 @@ func main() {
 			// Simple build test that doesn't require environment variables
 			fmt.Println("Build test successful - binary is working correctly")
 			return
+		case "--init-db", "init-db":
+			// Initialize database without requiring API keys (for Netlify deployment)
+			// This creates a proper SQLite database file with the correct schema
+			_, err := GetDB()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to initialize database: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println("Database initialized successfully")
+			return
 		}
 	}
 
@@ -329,6 +339,7 @@ func showHelp() {
 	fmt.Println("  full-sync-time-entries   - Full sync of all time entries only")
 	fmt.Println("  --version, version       - Show version information")
 	fmt.Println("  --build-test, build-test - Test that the binary is working (for builds)")
+	fmt.Println("  --init-db, init-db       - Initialize database without API keys (for deployments)")
 	fmt.Println("  --help, -h, help         - Show this help message")
 	fmt.Println("")
 	fmt.Println("Command options:")

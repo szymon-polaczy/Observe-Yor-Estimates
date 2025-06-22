@@ -297,6 +297,30 @@ setup_netlify() {
                 log_info "Binary info: $(file "$BINARY_NAME")"
             fi
             
+            # Create a proper SQLite database file for Netlify deployment
+            # This ensures the database file exists with proper structure in the deployment package
+            local db_path=$(get_db_path)
+            if [[ ! -f "$db_path" ]]; then
+                log_info "Creating SQLite database file for Netlify deployment: $db_path"
+                # Use the new --init-db command to create a proper SQLite database with tables
+                export DATABASE_PATH="$db_path"
+                if ./"$BINARY_NAME" --init-db 2>/dev/null; then
+                    log_success "Database file created and initialized: $db_path"
+                else
+                    log_warning "Failed to initialize database with --init-db, trying build test"
+                    # Fallback to build test and create empty file
+                    if ./"$BINARY_NAME" --build-test 2>/dev/null; then
+                        touch "$db_path"
+                        log_info "Created empty database file as fallback: $db_path"
+                    else
+                        log_error "Both database initialization methods failed"
+                        return 1
+                    fi
+                fi
+            else
+                log_info "Database file already exists: $db_path"
+            fi
+            
             # Check if binary can execute basic commands
             if ./"$BINARY_NAME" --build-test >/dev/null 2>&1; then
                 log_success "Binary test passed - ready for Netlify Functions"
