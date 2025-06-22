@@ -254,8 +254,8 @@ func main() {
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)
 
-	// Setup Slack REST API routes
-	setupSlackRoutes()
+	// Setup HTTP routes
+	setupHTTPRoutes()
 
 	// Get port from environment variable or use default
 	port := os.Getenv("PORT")
@@ -263,20 +263,29 @@ func main() {
 		port = "8080"
 	}
 
-	// Start HTTP server for Slack commands
+	// Start HTTP server
 	server := &http.Server{
-		Addr: ":" + port,
+		Addr:         ":" + port,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 
 	go func() {
-		logger.Infof("Starting HTTP server on port %s for Slack commands", port)
+		logger.Infof("Starting HTTP server on port %s", port)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Errorf("HTTP server error: %v", err)
 		}
 	}()
 
 	logger.Info("Application is running. Press Ctrl+C to stop.")
-	logger.Infof("Slack command endpoints available at http://localhost:%s/slack/*", port)
+	logger.Infof("HTTP server listening on port %s", port)
+	logger.Info("Available endpoints:")
+	logger.Info("  GET  /              - Service information")
+	logger.Info("  GET  /health        - Health check")
+	logger.Info("  GET  /status        - Detailed status")
+	logger.Info("  POST /slack/*       - Slack command endpoints")
+	logger.Info("  POST /api/*         - API trigger endpoints")
 
 	for {
 		select {

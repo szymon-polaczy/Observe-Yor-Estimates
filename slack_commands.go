@@ -31,12 +31,25 @@ type SlackCommandResponse struct {
 	Blocks       []Block `json:"blocks,omitempty"`
 }
 
-// setupSlackRoutes sets up the HTTP routes for Slack slash commands
-func setupSlackRoutes() {
+// setupHTTPRoutes sets up the HTTP routes for the application
+func setupHTTPRoutes() {
+	// Slack slash command routes
 	http.HandleFunc("/slack/daily-update", handleDailyUpdateCommand)
 	http.HandleFunc("/slack/weekly-update", handleWeeklyUpdateCommand)
 	http.HandleFunc("/slack/monthly-update", handleMonthlyUpdateCommand)
+
+	// Manual trigger routes (for admin/testing)
+	http.HandleFunc("/api/daily-update", handleAPITrigger("daily-update"))
+	http.HandleFunc("/api/weekly-update", handleAPITrigger("weekly-update"))
+	http.HandleFunc("/api/monthly-update", handleAPITrigger("monthly-update"))
+	http.HandleFunc("/api/sync-tasks", handleAPITrigger("sync-tasks"))
+	http.HandleFunc("/api/sync-time-entries", handleAPITrigger("sync-time-entries"))
+	http.HandleFunc("/api/full-sync", handleAPITrigger("full-sync"))
+
+	// Health check and status routes
 	http.HandleFunc("/health", handleHealthCheck)
+	http.HandleFunc("/status", handleStatusCheck)
+	http.HandleFunc("/", handleRootRoute)
 }
 
 // parseSlackCommand parses the form data from a Slack slash command
@@ -340,6 +353,86 @@ func handleMonthlyUpdateCommand(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
+// handleAPITrigger returns a handler function for API-triggered commands
+func handleAPITrigger(command string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := NewLogger()
+
+		// Only allow POST requests for triggers
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Set response headers
+		w.Header().Set("Content-Type", "application/json")
+
+		// Execute the command based on the type
+		switch command {
+		case "daily-update":
+			go func() {
+				logger.Info("API triggered daily update")
+				SendDailySlackUpdate()
+			}()
+
+		case "weekly-update":
+			go func() {
+				logger.Info("API triggered weekly update")
+				SendWeeklySlackUpdate()
+			}()
+
+		case "monthly-update":
+			go func() {
+				logger.Info("API triggered monthly update")
+				SendMonthlySlackUpdate()
+			}()
+
+		case "sync-tasks":
+			go func() {
+				logger.Info("API triggered task sync")
+				if err := SyncTasksToDatabase(); err != nil {
+					logger.Errorf("Task sync failed: %v", err)
+				} else {
+					logger.Info("Task sync completed successfully")
+				}
+			}()
+
+		case "sync-time-entries":
+			go func() {
+				logger.Info("API triggered time entries sync")
+				if err := SyncTimeEntriesToDatabase(); err != nil {
+					logger.Errorf("Time entries sync failed: %v", err)
+				} else {
+					logger.Info("Time entries sync completed successfully")
+				}
+			}()
+
+		case "full-sync":
+			go func() {
+				logger.Info("API triggered full sync")
+				if err := FullSyncAll(); err != nil {
+					logger.Errorf("Full sync failed: %v", err)
+				} else {
+					logger.Info("Full sync completed successfully")
+				}
+			}()
+
+		default:
+			http.Error(w, "Unknown command", http.StatusBadRequest)
+			return
+		}
+
+		// Send immediate response
+		response := map[string]interface{}{
+			"status":  "triggered",
+			"command": command,
+			"message": fmt.Sprintf("%s has been triggered and is running in the background", command),
+		}
+
+		json.NewEncoder(w).Encode(response)
+	}
+}
+
 // handleHealthCheck provides a simple health check endpoint
 func handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 	response := map[string]interface{}{
@@ -349,5 +442,71 @@ func handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// handleStatusCheck handles the /status endpoint
+func handleStatusCheck(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	// Check database connection
+	db, err := GetDB()
+	dbStatus := "healthy"
+	if err != nil {
+		dbStatus = "unhealthy: " + err.Error()
+	} else if db == nil {
+		dbStatus = "unhealthy: database connection is nil"
+	}
+
+	response := map[string]interface{}{
+		"status":      "running",
+		"timestamp":   time.Now().UTC().Format(time.RFC3339),
+		"version":     "1.0.0",
+		"database":    dbStatus,
+		"environment": "go-server",
+	}
+
+	json.NewEncoder(w).Encode(response)
+}
+
+// handleRootRoute handles requests to the root path
+func handleRootRoute(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	response := map[string]interface{}{
+		"service": "Observe-Yor-Estimates",
+		"version": "1.0.0",
+		"status":  "running",
+		"endpoints": map[string]string{
+			"/health":                "Health check endpoint",
+			"/status":                "Detailed status information",
+			"/slack/daily-update":    "Slack daily update command",
+			"/slack/weekly-update":   "Slack weekly update command",
+			"/slack/monthly-update":  "Slack monthly update command",
+			"/api/daily-update":      "API trigger for daily update",
+			"/api/weekly-update":     "API trigger for weekly update",
+			"/api/monthly-update":    "API trigger for monthly update",
+			"/api/sync-tasks":        "API trigger for task sync",
+			"/api/sync-time-entries": "API trigger for time entries sync",
+			"/api/full-sync":         "API trigger for full sync",
+		},
+		"documentation": "See README.md for more information",
+	}
+
 	json.NewEncoder(w).Encode(response)
 }
