@@ -125,7 +125,7 @@ func sendSlackMessage(message SlackMessage) error {
 
 // sendFailureNotification sends a notification about system failures
 func sendFailureNotification(operation string, err error) {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 
 	webhookURL := os.Getenv("SLACK_WEBHOOK_URL")
 	if webhookURL == "" {
@@ -260,7 +260,7 @@ func calculateTimeUsagePercentage(task TaskTimeInfo) (float64, int, error) {
 // sendDelayedResponseToURL sends a delayed response to Slack using a response URL
 // This is used when the application is called from Netlify functions with a response URL parameter
 func sendDelayedResponseToURL(responseURL string, message SlackMessage) error {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 
 	// Convert SlackMessage to SlackCommandResponse format for consistency with slash commands
 	response := struct {
@@ -297,7 +297,7 @@ func sendDelayedResponseToURL(responseURL string, message SlackMessage) error {
 func outputJSON(message SlackMessage) {
 	jsonData, err := json.Marshal(message)
 	if err != nil {
-		logger := NewLogger()
+		logger := GetGlobalLogger()
 		logger.Errorf("Error marshaling SlackMessage to JSON: %v", err)
 		// Fallback to simple error message
 		fallbackMessage := SlackMessage{

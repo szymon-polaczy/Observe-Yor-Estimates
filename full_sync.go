@@ -14,7 +14,7 @@ import (
 // FullSyncTasksToDatabase fetches ALL tasks from TimeCamp and stores them in the database
 // This is intended for initial setup or full re-sync operations
 func FullSyncTasksToDatabase() error {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 
 	// Load environment variables
 	err := godotenv.Load()
@@ -80,7 +80,7 @@ func FullSyncTasksToDatabase() error {
 // FullSyncTimeEntriesToDatabase fetches ALL time entries from TimeCamp and stores them in the database
 // This is intended for initial setup or full re-sync operations
 func FullSyncTimeEntriesToDatabase() error {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 
 	// Load environment variables
 	err := godotenv.Load()
@@ -178,7 +178,7 @@ func FullSyncTimeEntriesToDatabase() error {
 
 // getTimecampTasksFull fetches ALL tasks from TimeCamp API (same as regular getTimecampTasks but with clearer naming)
 func getTimecampTasksFull() ([]JsonTask, error) {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 
 	// Get TimeCamp API URL from environment variable or use default
 	timecampAPIURL := os.Getenv("TIMECAMP_API_URL")
@@ -248,7 +248,7 @@ func getTimecampTasksFull() ([]JsonTask, error) {
 
 // getTimeCampTimeEntriesFull fetches time entries from TimeCamp API for the specified date range (same as regular function but with clearer naming)
 func getTimeCampTimeEntriesFull(fromDate, toDate string) ([]JsonTimeEntry, error) {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 
 	// Get TimeCamp API URL from environment variable or use default
 	timecampAPIURL := os.Getenv("TIMECAMP_API_URL")
@@ -346,7 +346,7 @@ func getTimeCampTimeEntriesFull(fromDate, toDate string) ([]JsonTimeEntry, error
 
 // FullSyncAll performs both full tasks sync and full time entries sync
 func FullSyncAll() error {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 
 	logger.Info("Starting full synchronization of all data from TimeCamp")
 

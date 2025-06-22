@@ -84,7 +84,29 @@ func getMonthlyTaskChanges(db *sql.DB) ([]MonthlyTaskTimeInfo, error) {
 		logger.Info("Full sync completed successfully - retrying monthly task query")
 		
 		// After successful sync, try again to get the data
-		return GetMonthlyTaskTimeEntries(db)
+		taskInfos, err := GetMonthlyTaskTimeEntries(db)
+		if err != nil {
+			return nil, err
+		}
+		
+		// If still no data after sync, create a special message about the sync
+		if len(taskInfos) == 0 {
+			// Create a dummy task info to indicate that sync was performed
+			syncInfo := MonthlyTaskTimeInfo{
+				TaskID:           0,
+				Name:             "🔄 Database Sync Completed",
+				MonthlyTime:      "Database was empty and has been populated with tasks from TimeCamp",
+				LastMonthTime:    "",
+				StartTime:        time.Now().Format("15:04"),
+				EstimationInfo:   "",
+				EstimationStatus: "",
+				DaysWorked:       0,
+				Comments:         []string{"Full synchronization completed successfully", "Tasks and time entries are now available for future reports"},
+			}
+			return []MonthlyTaskTimeInfo{syncInfo}, nil
+		}
+		
+		return taskInfos, nil
 	}
 
 	// Get actual time entries data from the database for the past month

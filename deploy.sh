@@ -14,7 +14,7 @@ NC='\033[0m' # No Color
 
 # Script configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DATABASE_VERSION="1.0.0"  # Increment this to force database recreation
+DATABASE_VERSION="1.0.1"  # Increment this to force database recreation
 VERSION_FILE="${SCRIPT_DIR}/.db_version"
 DEFAULT_DB_PATH="${SCRIPT_DIR}/oye.db"
 BINARY_NAME="observe-yor-estimates"

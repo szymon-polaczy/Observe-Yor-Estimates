@@ -93,7 +93,7 @@ func sendImmediateResponse(w http.ResponseWriter, message string, responseType s
 
 // sendDelayedResponse sends a delayed response to Slack using the response URL
 func sendDelayedResponse(responseURL string, message SlackMessage) error {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 
 	// Convert SlackMessage to SlackCommandResponse format
 	response := SlackCommandResponse{
@@ -123,7 +123,7 @@ func sendDelayedResponse(responseURL string, message SlackMessage) error {
 
 // handleDailyUpdateCommand handles the /daily-update slash command
 func handleDailyUpdateCommand(w http.ResponseWriter, r *http.Request) {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -196,7 +196,7 @@ func handleDailyUpdateCommand(w http.ResponseWriter, r *http.Request) {
 
 // handleWeeklyUpdateCommand handles the /weekly-update slash command
 func handleWeeklyUpdateCommand(w http.ResponseWriter, r *http.Request) {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -269,7 +269,7 @@ func handleWeeklyUpdateCommand(w http.ResponseWriter, r *http.Request) {
 
 // handleMonthlyUpdateCommand handles the /monthly-update slash command
 func handleMonthlyUpdateCommand(w http.ResponseWriter, r *http.Request) {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)

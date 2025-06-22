@@ -32,11 +32,19 @@ func main() {
 			showHelp()
 			return
 		case "--version", "version":
-			fmt.Println("Observe-Yor-Estimates v1.0.0")
+			if getOutputJSON() {
+				fmt.Fprintf(os.Stderr, "Observe-Yor-Estimates v1.0.0\n")
+			} else {
+				fmt.Println("Observe-Yor-Estimates v1.0.0")
+			}
 			return
 		case "--build-test", "build-test":
 			// Simple build test that doesn't require environment variables
-			fmt.Println("Build test successful - binary is working correctly")
+			if getOutputJSON() {
+				fmt.Fprintf(os.Stderr, "Build test successful - binary is working correctly\n")
+			} else {
+				fmt.Println("Build test successful - binary is working correctly")
+			}
 			return
 		case "--init-db", "init-db":
 			// Initialize database without requiring API keys (for Netlify deployment)
@@ -46,7 +54,11 @@ func main() {
 				fmt.Fprintf(os.Stderr, "Failed to initialize database: %v\n", err)
 				os.Exit(1)
 			}
-			fmt.Println("Database initialized successfully")
+			if getOutputJSON() {
+				fmt.Fprintf(os.Stderr, "Database initialized successfully\n")
+			} else {
+				fmt.Println("Database initialized successfully")
+			}
 			return
 		}
 	}

@@ -140,7 +140,7 @@ func TrackTaskChange(db *sql.DB, taskID int, taskName, changeType, previousValue
 }
 
 func getTimecampTasks() ([]JsonTask, error) {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 
 	// Get TimeCamp API URL from environment variable or use default
 	timecampAPIURL := os.Getenv("TIMECAMP_API_URL")

@@ -84,7 +84,29 @@ func getWeeklyTaskChanges(db *sql.DB) ([]WeeklyTaskTimeInfo, error) {
 		logger.Info("Full sync completed successfully - retrying weekly task query")
 		
 		// After successful sync, try again to get the data
-		return GetWeeklyTaskTimeEntries(db)
+		taskInfos, err := GetWeeklyTaskTimeEntries(db)
+		if err != nil {
+			return nil, err
+		}
+		
+		// If still no data after sync, create a special message about the sync
+		if len(taskInfos) == 0 {
+			// Create a dummy task info to indicate that sync was performed
+			syncInfo := WeeklyTaskTimeInfo{
+				TaskID:           0,
+				Name:             "🔄 Database Sync Completed",
+				WeeklyTime:       "Database was empty and has been populated with tasks from TimeCamp",
+				LastWeekTime:     "",
+				StartTime:        time.Now().Format("15:04"),
+				EstimationInfo:   "",
+				EstimationStatus: "",
+				DaysWorked:       0,
+				Comments:         []string{"Full synchronization completed successfully", "Tasks and time entries are now available for future reports"},
+			}
+			return []WeeklyTaskTimeInfo{syncInfo}, nil
+		}
+		
+		return taskInfos, nil
 	}
 
 	// Get actual time entries data from the database for the past week

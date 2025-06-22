@@ -116,7 +116,7 @@ func IsRetryableHTTPError(statusCode int) bool {
 
 // DoHTTPWithRetry executes an HTTP request with retry logic for temporary failures
 func DoHTTPWithRetry(client *http.Client, request *http.Request, config RetryConfig) (*http.Response, error) {
-	logger := NewLogger()
+	logger := GetGlobalLogger()
 
 	if client == nil {
 		client = http.DefaultClient
