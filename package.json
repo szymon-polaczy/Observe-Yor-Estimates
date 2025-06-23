@@ -4,10 +4,12 @@
   "description": "TimeCamp to Slack integration with Netlify Functions",
   "main": "index.js",
   "scripts": {
-    "build": "npm run build:go",
-    "build:go": "CGO_ENABLED=0 go build -o ./bin/observe-yor-estimates .",
+    "build": "./build.sh",
+    "build:go": "CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ./bin/observe-yor-estimates .",
+    "build:local": "CGO_ENABLED=0 go build -o ./bin/observe-yor-estimates .",
     "dev": "netlify dev",
-    "deploy": "netlify deploy --prod"
+    "deploy": "netlify deploy --prod",
+    "test": "./bin/observe-yor-estimates --help"
   },
   "dependencies": {
     "@netlify/functions": "^2.4.1",

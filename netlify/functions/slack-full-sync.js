@@ -1,4 +1,5 @@
 const { spawn } = require('child_process');
+const path = require('path');
 
 exports.handler = async (event, context) => {
   console.log('Full sync function called');
@@ -65,17 +66,48 @@ exports.handler = async (event, context) => {
       };
     }
 
-    // Check if Go binary exists
+    // Check if Go binary exists with multiple possible paths
     const fs = require('fs');
-    const binaryPath = './bin/observe-yor-estimates';
-    if (!fs.existsSync(binaryPath)) {
-      console.error('Go binary not found at:', binaryPath);
+    const possiblePaths = [
+      './bin/observe-yor-estimates',
+      path.join(process.cwd(), 'bin', 'observe-yor-estimates'),
+      path.join(__dirname, '..', '..', 'bin', 'observe-yor-estimates'),
+      '/var/task/bin/observe-yor-estimates'
+    ];
+    
+    let binaryPath = null;
+    for (const testPath of possiblePaths) {
+      if (fs.existsSync(testPath)) {
+        binaryPath = testPath;
+        console.log('Found Go binary at:', binaryPath);
+        break;
+      }
+    }
+    
+    if (!binaryPath) {
+      console.error('Go binary not found at any of these paths:', possiblePaths);
+      console.log('Current working directory:', process.cwd());
+      console.log('__dirname:', __dirname);
+      
+      // List available files for debugging
+      try {
+        const rootFiles = fs.readdirSync(process.cwd());
+        console.log('Files in cwd:', rootFiles);
+        
+        if (fs.existsSync('./bin')) {
+          const binFiles = fs.readdirSync('./bin');
+          console.log('Files in bin directory:', binFiles);
+        }
+      } catch (e) {
+        console.log('Error listing files:', e.message);
+      }
+      
       return {
         statusCode: 500,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           response_type: 'ephemeral',
-          text: '❌ Server configuration error: binary not found'
+          text: '❌ Server configuration error: Go binary not found'
         })
       };
     }
@@ -90,7 +122,7 @@ exports.handler = async (event, context) => {
 
     // Start background job for actual processing (don't await this)
     setImmediate(() => {
-      processFullSyncInBackground(slackData.response_url, slackData.user_name);
+      processFullSyncInBackground(slackData.response_url, slackData.user_name, binaryPath);
     });
 
     console.log('Returning immediate response');
@@ -114,7 +146,7 @@ exports.handler = async (event, context) => {
   }
 };
 
-async function processFullSyncInBackground(responseUrl, userName) {
+async function processFullSyncInBackground(responseUrl, userName, binaryPath) {
   try {
     console.log(`Starting full sync background process for ${userName}`);
 
@@ -127,7 +159,7 @@ async function processFullSyncInBackground(responseUrl, userName) {
     const executionPromise = executeGoCommand('full-sync', [], {
       RESPONSE_URL: responseUrl,
       OUTPUT_JSON: 'true'
-    });
+    }, binaryPath);
 
     const result = await Promise.race([executionPromise, timeoutPromise]);
 
@@ -145,12 +177,12 @@ async function processFullSyncInBackground(responseUrl, userName) {
   }
 }
 
-async function executeGoCommand(command, args = [], envVars = {}) {
+async function executeGoCommand(command, args = [], envVars = {}, binaryPath = './bin/observe-yor-estimates') {
   return new Promise((resolve) => {
-    console.log(`Executing Go command: ${command} ${args.join(' ')}`);
+    console.log(`Executing Go command: ${binaryPath} ${command} ${args.join(' ')}`);
     
     const env = { ...process.env, ...envVars };
-    const child = spawn('./bin/observe-yor-estimates', [command, ...args], { 
+    const child = spawn(binaryPath, [command, ...args], { 
       env,
       cwd: process.cwd(),
       stdio: ['pipe', 'pipe', 'pipe']
