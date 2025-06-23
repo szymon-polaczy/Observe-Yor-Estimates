@@ -315,13 +315,13 @@ func GetTaskTimeEntries(db *sql.DB) ([]TaskUpdateInfo, error) {
 
 	rows, err := db.Query(`
 		SELECT
-			t.id,
+			t.task_id,
 			t.name,
 			SUM(CASE WHEN te.date = $1 THEN te.duration ELSE 0 END) as today_seconds,
 			SUM(CASE WHEN te.date = $2 THEN te.duration ELSE 0 END) as yesterday_seconds
 		FROM tasks t
-		LEFT JOIN time_entries te ON t.id = te.task_id AND te.date IN ($1, $2)
-		GROUP BY t.id, t.name
+		LEFT JOIN time_entries te ON t.task_id = te.task_id AND te.date IN ($1, $2)
+		GROUP BY t.task_id, t.name
 		HAVING today_seconds > 0 OR yesterday_seconds > 0
 		ORDER BY t.name;
 	`, today, yesterday)
@@ -371,14 +371,14 @@ func GetWeeklyTaskTimeEntries(db *sql.DB) ([]TaskUpdateInfo, error) {
 
 	rows, err := db.Query(`
 		SELECT
-			t.id,
+			t.task_id,
 			t.name,
 			SUM(CASE WHEN te.date >= $1 THEN te.duration ELSE 0 END) as this_week_seconds,
 			SUM(CASE WHEN te.date >= $2 AND te.date < $1 THEN te.duration ELSE 0 END) as last_week_seconds,
 			COUNT(DISTINCT te.date) as days_worked
 		FROM tasks t
-		LEFT JOIN time_entries te ON t.id = te.task_id
-		GROUP BY t.id, t.name
+		LEFT JOIN time_entries te ON t.task_id = te.task_id
+		GROUP BY t.task_id, t.name
 		HAVING this_week_seconds > 0 OR last_week_seconds > 0
 		ORDER BY (this_week_seconds + last_week_seconds) DESC;
 	`, thisWeekStart.Format("2006-01-02"), lastWeekStart.Format("2006-01-02"))
@@ -429,14 +429,14 @@ func GetMonthlyTaskTimeEntries(db *sql.DB) ([]TaskUpdateInfo, error) {
 
 	rows, err := db.Query(`
 		SELECT
-			t.id,
+			t.task_id,
 			t.name,
 			SUM(CASE WHEN te.date >= $1 THEN te.duration ELSE 0 END) as this_month_seconds,
 			SUM(CASE WHEN te.date >= $2 AND te.date < $1 THEN te.duration ELSE 0 END) as last_month_seconds,
 			COUNT(DISTINCT te.date) as days_worked
 		FROM tasks t
-		LEFT JOIN time_entries te ON t.id = te.task_id
-		GROUP BY t.id, t.name
+		LEFT JOIN time_entries te ON t.task_id = te.task_id
+		GROUP BY t.task_id, t.name
 		HAVING this_month_seconds > 0 OR last_month_seconds > 0
 		ORDER BY (this_month_seconds + last_month_seconds) DESC;
 	`, thisMonthStart.Format("2006-01-02"), lastMonthStart.Format("2006-01-02"))
