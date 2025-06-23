@@ -240,10 +240,15 @@ func getTimecampTasks() ([]JsonTask, error) {
 		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
 	}
 
+	// Add minimal parameter to optimize API response size
+	q := request.URL.Query()
+	q.Add("minimal", "1")
+	request.URL.RawQuery = q.Encode()
+
 	request.Header.Add("Authorization", authBearer)
 	request.Header.Add("Accept", "application/json")
 
-	logger.Debugf("Fetching tasks from TimeCamp API: %s", getAllTasksURL)
+	logger.Debugf("Fetching tasks from TimeCamp API with minimal option: %s", request.URL.String())
 
 	// Use retry mechanism for API calls
 	retryConfig := DefaultRetryConfig()

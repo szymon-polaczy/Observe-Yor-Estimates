@@ -136,7 +136,7 @@ func handleCliCommands(args []string, logger *Logger) {
 func setupCronJobs(logger *Logger) {
 	cronScheduler := cron.New()
 
-	addCronJob(cronScheduler, "TASK_SYNC_SCHEDULE", "*/5 * * * *", "task sync", logger, func() {
+	addCronJob(cronScheduler, "TASK_SYNC_SCHEDULE", "0 */3 * * *", "task sync", logger, func() {
 		if err := SyncTasksToDatabaseIncremental(); err != nil {
 			logger.Errorf("Scheduled task sync failed: %v", err)
 		}
@@ -189,9 +189,9 @@ func showHelp() {
 	fmt.Println("  --version, version         - Show application version")
 	fmt.Println("  --help, -h, help         - Show help message")
 	fmt.Println("\nSync Behavior:")
-	fmt.Println("  • Cron jobs use incremental sync (only process changed tasks)")
+	fmt.Println("  • Cron jobs use incremental sync every 3 hours (only process changed tasks)")
 	fmt.Println("  • Manual commands use full sync (process all tasks)")
-	fmt.Println("  • This optimizes performance for regular automated updates")
+	fmt.Println("  • Uses TimeCamp API minimal option for optimized performance")
 	fmt.Println("\nSlack Integration:")
 	fmt.Println("  Set up /oye command in Slack to point to /slack/oye endpoint")
 	fmt.Println("  Requires SLACK_BOT_TOKEN environment variable for direct responses")
