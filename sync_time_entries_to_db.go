@@ -317,14 +317,14 @@ func GetTaskTimeEntries(db *sql.DB) ([]TaskUpdateInfo, error) {
 		SELECT
 			t.id,
 			t.name,
-			SUM(CASE WHEN te.date = ? THEN te.duration ELSE 0 END) as today_seconds,
-			SUM(CASE WHEN te.date = ? THEN te.duration ELSE 0 END) as yesterday_seconds
+			SUM(CASE WHEN te.date = $1 THEN te.duration ELSE 0 END) as today_seconds,
+			SUM(CASE WHEN te.date = $2 THEN te.duration ELSE 0 END) as yesterday_seconds
 		FROM tasks t
-		LEFT JOIN time_entries te ON t.id = te.task_id AND te.date IN (?, ?)
+		LEFT JOIN time_entries te ON t.id = te.task_id AND te.date IN ($1, $2)
 		GROUP BY t.id, t.name
 		HAVING today_seconds > 0 OR yesterday_seconds > 0
 		ORDER BY t.name;
-	`, today, yesterday, today, yesterday)
+	`, today, yesterday)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query task time entries: %w", err)
 	}
@@ -373,15 +373,15 @@ func GetWeeklyTaskTimeEntries(db *sql.DB) ([]TaskUpdateInfo, error) {
 		SELECT
 			t.id,
 			t.name,
-			SUM(CASE WHEN te.date >= ? THEN te.duration ELSE 0 END) as this_week_seconds,
-			SUM(CASE WHEN te.date >= ? AND te.date < ? THEN te.duration ELSE 0 END) as last_week_seconds,
+			SUM(CASE WHEN te.date >= $1 THEN te.duration ELSE 0 END) as this_week_seconds,
+			SUM(CASE WHEN te.date >= $2 AND te.date < $1 THEN te.duration ELSE 0 END) as last_week_seconds,
 			COUNT(DISTINCT te.date) as days_worked
 		FROM tasks t
 		LEFT JOIN time_entries te ON t.id = te.task_id
 		GROUP BY t.id, t.name
 		HAVING this_week_seconds > 0 OR last_week_seconds > 0
 		ORDER BY (this_week_seconds + last_week_seconds) DESC;
-	`, thisWeekStart.Format("2006-01-02"), lastWeekStart.Format("2006-01-02"), thisWeekStart.Format("2006-01-02"))
+	`, thisWeekStart.Format("2006-01-02"), lastWeekStart.Format("2006-01-02"))
 	if err != nil {
 		return nil, fmt.Errorf("failed to query weekly task time entries: %w", err)
 	}
@@ -431,15 +431,15 @@ func GetMonthlyTaskTimeEntries(db *sql.DB) ([]TaskUpdateInfo, error) {
 		SELECT
 			t.id,
 			t.name,
-			SUM(CASE WHEN te.date >= ? THEN te.duration ELSE 0 END) as this_month_seconds,
-			SUM(CASE WHEN te.date >= ? AND te.date < ? THEN te.duration ELSE 0 END) as last_month_seconds,
+			SUM(CASE WHEN te.date >= $1 THEN te.duration ELSE 0 END) as this_month_seconds,
+			SUM(CASE WHEN te.date >= $2 AND te.date < $1 THEN te.duration ELSE 0 END) as last_month_seconds,
 			COUNT(DISTINCT te.date) as days_worked
 		FROM tasks t
 		LEFT JOIN time_entries te ON t.id = te.task_id
 		GROUP BY t.id, t.name
 		HAVING this_month_seconds > 0 OR last_month_seconds > 0
 		ORDER BY (this_month_seconds + last_month_seconds) DESC;
-	`, thisMonthStart.Format("2006-01-02"), lastMonthStart.Format("2006-01-02"), thisMonthStart.Format("2006-01-02"))
+	`, thisMonthStart.Format("2006-01-02"), lastMonthStart.Format("2006-01-02"))
 	if err != nil {
 		return nil, fmt.Errorf("failed to query monthly task time entries: %w", err)
 	}
@@ -498,8 +498,8 @@ func getTaskComments(db *sql.DB, taskID int, fromDate, toDate string) ([]string,
 	query := `
 		SELECT DISTINCT description 
 		FROM time_entries 
-		WHERE task_id = ? 
-		AND date BETWEEN ? AND ? 
+		WHERE task_id = $1 
+		AND date BETWEEN $2 AND $3 
 		AND description IS NOT NULL 
 		AND TRIM(description) != ''
 		ORDER BY description

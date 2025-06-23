@@ -64,7 +64,7 @@ func SyncTasksToDatabase() error {
 	for _, task := range timecampTasks {
 		// Check if task already exists to track changes
 		var existingName string
-		checkQuery := "SELECT name FROM tasks WHERE task_id = ?"
+		checkQuery := "SELECT name FROM tasks WHERE task_id = $1"
 		err := db.QueryRow(checkQuery, task.TaskID).Scan(&existingName)
 
 		if err == sql.ErrNoRows {
@@ -85,7 +85,7 @@ func SyncTasksToDatabase() error {
 			continue
 		} else if existingName != task.Name {
 			// Task name changed, update it
-			updateQuery := "UPDATE tasks SET name = ? WHERE task_id = ?"
+			updateQuery := "UPDATE tasks SET name = $1 WHERE task_id = $2"
 			_, err := db.Exec(updateQuery, task.Name, task.TaskID)
 			if err != nil {
 				logger.Errorf("Failed to update task %d name: %v", task.TaskID, err)
