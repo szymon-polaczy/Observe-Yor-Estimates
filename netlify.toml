@@ -12,10 +12,6 @@
   node_bundler = "esbuild"
   included_files = ["bin/**"]
 
-# Support for Go server function (alternative deployment)
-[functions.go-server]
-  directory = "functions/"
-
 [[redirects]]
   from = "/api/*"
   to = "/.netlify/functions/:splat"
@@ -27,10 +23,3 @@
   to = "/.netlify/functions/:splat"
   status = 200
   force = true
-
-# Alternative: Go server redirects (comment above and uncomment these for Go server approach)
-# [[redirects]]
-#   from = "/*"
-#   to = "/.netlify/functions/go-server/:splat"
-#   status = 200
-#   force = true
