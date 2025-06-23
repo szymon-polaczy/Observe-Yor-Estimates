@@ -17,6 +17,8 @@ JOB_PROCESSOR_URL=https://your-app-name.netlify.app/.netlify/functions/server/sl
 
 Replace `your-app-name` with your actual Netlify site name.
 
+**Note:** If you're still getting timeouts, you can leave `JOB_PROCESSOR_URL` empty and the system will use the default internal URL.
+
 ### 2. Deploy to Netlify
 
 Your existing `netlify.toml` should work as-is:

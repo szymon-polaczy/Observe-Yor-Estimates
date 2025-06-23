@@ -1,0 +1,19 @@
+INFO: 2025/06/23 15:17:45 logger.go:47: Starting Observe-Yor-Estimates application
+INFO: 2025/06/23 15:17:45 logger.go:47: Server is starting on port 8080
+INFO: 2025/06/23 15:17:45 logger.go:47: Initializing database connection in background...
+DEBUG: 2025/06/23 15:17:45 logger.go:77: Using DATABASE_URL environment variable for database connection
+DEBUG: 2025/06/23 15:17:45 logger.go:82: Initializing database connection to PostgreSQL
+DEBUG: 2025/06/23 15:17:45 logger.go:77: Tasks table already exists
+DEBUG: 2025/06/23 15:17:45 logger.go:77: Task history table already exists
+DEBUG: 2025/06/23 15:17:45 logger.go:77: Time entries table already exists
+INFO: 2025/06/23 15:17:45 logger.go:47: Database connection established and tables migrated successfully
+INFO: 2025/06/23 15:17:45 logger.go:47: Database connection initialized successfully
+INFO: 2025/06/23 15:17:45 logger.go:47: Setting up cron jobs...
+INFO: 2025/06/23 15:17:45 logger.go:47: Cron scheduler started successfully
+INFO: 2025/06/23 15:17:45 logger.go:47: Running initial task sync...
+DEBUG: 2025/06/23 15:17:45 logger.go:77: Starting task synchronization with TimeCamp
+DEBUG: 2025/06/23 15:17:45 logger.go:82: Fetching tasks from TimeCamp API: https://app.timecamp.com/third_party/api/tasks
+INFO: 2025/06/23 15:17:45 logger.go:52: Received daily update command from user  in channel 
+INFO: 2025/06/23 15:17:45 logger.go:52: Processing job slack_update_1750684665913193655 of type slack_update for  in #
+INFO: 2025/06/23 15:17:45 logger.go:52: Starting processing of job slack_update_1750684665913193655
+INFO: 2025/06/23 15:17:45 logger.go:52: Successfully queued job slack_update_1750684665913193655

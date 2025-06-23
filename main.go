@@ -37,22 +37,29 @@ func main() {
 
 	logger.Info("Starting Observe-Yor-Estimates application")
 
-	_, err = GetDB()
-	if err != nil {
-		logger.Fatalf("Critical error: Failed to initialize database: %v", err)
-	}
-	logger.Info("Database connection initialized successfully")
-
-	setupCronJobs(logger)
-
-	// Run initial sync asynchronously AFTER server starts
+	// For Netlify Functions, we need to start the server immediately
+	// and defer all heavy initialization to avoid cold start timeouts
 	go func() {
-		logger.Info("Running initial task sync")
+		// Do heavy initialization in background to avoid Netlify timeout
+		logger.Info("Initializing database connection in background...")
+		_, err := GetDB()
+		if err != nil {
+			logger.Errorf("Failed to initialize database: %v", err)
+			return
+		}
+		logger.Info("Database connection initialized successfully")
+
+		logger.Info("Setting up cron jobs...")
+		setupCronJobs(logger)
+
+		logger.Info("Running initial task sync...")
 		if err := SyncTasksToDatabase(); err != nil {
 			logger.Errorf("Failed initial task sync: %v", err)
 		}
+		logger.Info("Background initialization completed")
 	}()
 
+	// Start server immediately (this is what Netlify needs to see)
 	StartServer(logger)
 }
 

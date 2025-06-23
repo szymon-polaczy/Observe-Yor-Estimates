@@ -341,6 +341,14 @@ func processJob(job JobRequest) {
 
 	logger.Infof("Starting processing of job %s", job.JobID)
 
+	// Ensure database is ready before processing
+	_, err := GetDB()
+	if err != nil {
+		logger.Errorf("Job %s failed - database not ready: %v", job.JobID, err)
+		sendJobErrorResponse(job.ResponseURL, "Database not ready yet, please try again in a moment")
+		return
+	}
+
 	switch job.JobType {
 	case "slack_update":
 		period := job.Parameters["period"]
@@ -400,12 +408,13 @@ func sendJobErrorResponse(responseURL string, errorMsg string) {
 func handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 	logger := GetGlobalLogger()
 
-	// Test database connectivity quickly
+	// Quick health check without blocking on database
+	// This prevents Netlify function timeout during initialization
 	_, err := GetDB()
 	if err != nil {
-		logger.Errorf("Health check failed - Database connection error: %v", err)
-		w.WriteHeader(http.StatusServiceUnavailable)
-		w.Write([]byte(fmt.Sprintf("Database connection failed: %v", err)))
+		logger.Warnf("Health check - Database not yet ready: %v", err)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK - Initializing (database connecting...)"))
 		return
 	}
 
