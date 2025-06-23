@@ -164,9 +164,17 @@ func SyncTimeEntriesToDatabase(fromDate, toDate string) error {
 	}
 	defer CloseWithErrorLog(insertStatement, "prepared statement")
 
+	// Prepare statement to check if task exists
+	taskExistsStatement, err := db.Prepare(`SELECT EXISTS(SELECT 1 FROM tasks WHERE task_id = $1)`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare task existence check statement: %w", err)
+	}
+	defer CloseWithErrorLog(taskExistsStatement, "task existence check statement")
+
 	// Pre-process entries to validate and convert data types
 	validEntries := make([]ProcessedTimeEntry, 0, len(timeEntries))
 	invalidCount := 0
+	missingTaskCount := 0
 
 	for _, entry := range timeEntries {
 		processed, err := processTimeEntry(entry, logger)
@@ -175,15 +183,31 @@ func SyncTimeEntriesToDatabase(fromDate, toDate string) error {
 			invalidCount++
 			continue
 		}
+
+		// Check if the task exists in the database
+		var taskExists bool
+		err = taskExistsStatement.QueryRow(processed.TaskID).Scan(&taskExists)
+		if err != nil {
+			logger.Errorf("Failed to check if task %d exists for time entry %d: %v, skipping", processed.TaskID, processed.ID, err)
+			invalidCount++
+			continue
+		}
+
+		if !taskExists {
+			logger.Warnf("Time entry %d references non-existent task %d, skipping (task may need to be synced first)", processed.ID, processed.TaskID)
+			missingTaskCount++
+			continue
+		}
+
 		validEntries = append(validEntries, processed)
 	}
 
 	if len(validEntries) == 0 {
-		logger.Warnf("No valid time entries to process after validation")
+		logger.Warnf("No valid time entries to process after validation (total: %d, invalid: %d, missing tasks: %d)", len(timeEntries), invalidCount, missingTaskCount)
 		return nil
 	}
 
-	logger.Infof("Processing %d valid entries (%d invalid entries skipped)", len(validEntries), invalidCount)
+	logger.Infof("Processing %d valid entries (%d invalid entries skipped, %d entries with missing tasks skipped)", len(validEntries), invalidCount, missingTaskCount)
 
 	// Batch insert valid entries
 	successCount := 0
@@ -204,6 +228,11 @@ func SyncTimeEntriesToDatabase(fromDate, toDate string) error {
 	}
 
 	logger.Infof("Time entries sync completed: %d entries processed successfully, %d errors encountered", successCount, errorCount)
+
+	if missingTaskCount > 0 {
+		logger.Warnf("Warning: %d time entries were skipped due to missing task references. Consider running a full tasks sync if this number is high.", missingTaskCount)
+		checkMissingTasksAndSuggestRemediation(db, missingTaskCount, logger)
+	}
 
 	if errorCount > 0 && successCount == 0 {
 		return fmt.Errorf("all time entry operations failed during sync")
@@ -308,6 +337,29 @@ func getTimeCampTimeEntries(fromDate, toDate string) ([]JsonTimeEntry, error) {
 	logger.Debugf("Successfully fetched %d time entries from TimeCamp", len(timeEntries))
 
 	return timeEntries, nil
+}
+
+// checkMissingTasksAndSuggestRemediation analyzes missing task references and suggests remediation steps
+func checkMissingTasksAndSuggestRemediation(db *sql.DB, missingTaskCount int, logger interface{ Warnf(string, ...interface{}) }) {
+	if missingTaskCount == 0 {
+		return
+	}
+
+	// Check if we have any tasks in the database at all
+	var taskCount int
+	err := db.QueryRow("SELECT COUNT(*) FROM tasks").Scan(&taskCount)
+	if err != nil {
+		logger.Warnf("Could not check task count in database: %v", err)
+		return
+	}
+
+	if taskCount == 0 {
+		logger.Warnf("REMEDIATION SUGGESTION: No tasks found in database. Run a full tasks sync first: `./bin/observe-yor-estimates sync-tasks` or `./bin/observe-yor-estimates full-sync`")
+	} else if missingTaskCount > 10 {
+		logger.Warnf("REMEDIATION SUGGESTION: High number of missing task references (%d). Consider running a full tasks sync to ensure all tasks are up to date: `./bin/observe-yor-estimates sync-tasks`", missingTaskCount)
+	} else {
+		logger.Warnf("REMEDIATION SUGGESTION: Some time entries reference missing tasks (%d). This may be normal if tasks were deleted/archived in TimeCamp but still have historical time entries.", missingTaskCount)
+	}
 }
 
 // GetTaskTimeEntries retrieves time entry information for tasks, aggregated by date
