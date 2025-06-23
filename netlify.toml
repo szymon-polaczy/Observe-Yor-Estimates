@@ -1,12 +1,13 @@
 [build]
-  command = "./deploy.sh"
+  command = "go build -o ./functions/server ."
   publish = "."
+  functions = "functions/"
 
 [build.environment]
   GO_VERSION = "1.22"
 
 [[redirects]]
   from = "/*"
-  to = "http://localhost:8080/:splat"
+  to = "/.netlify/functions/server/:splat"
   status = 200
   force = true
