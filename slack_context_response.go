@@ -241,30 +241,51 @@ func (s *SlackAPIClient) sendProjectSplitMessages(ctx *ConversationContext, proj
 	// Send one message per project
 	for i, project := range projectNames {
 		tasks := projectGroups[project]
+		const maxTasksPerMessage = 45 // Slack limit is 50 blocks, leave a buffer
 
-		projectMessage := s.formatSingleProjectMessage(project, tasks, period, i+1, len(projectNames))
+		if len(tasks) > maxTasksPerMessage {
+			// Split this project into multiple messages (chunks)
+			numChunks := (len(tasks) + maxTasksPerMessage - 1) / maxTasksPerMessage
+			for chunkIndex := 0; chunkIndex < numChunks; chunkIndex++ {
+				start := chunkIndex * maxTasksPerMessage
+				end := start + maxTasksPerMessage
+				if end > len(tasks) {
+					end = len(tasks)
+				}
+				taskChunk := tasks[start:end]
 
-		payload := map[string]interface{}{
-			"channel": ctx.ChannelID,
-			"text":    projectMessage.Text,
-			"blocks":  projectMessage.Blocks,
+				projectMessage := s.formatSingleProjectMessage(project, taskChunk, period, i+1, len(projectNames), chunkIndex+1, numChunks)
+				s.sendChunkedMessage(ctx, projectMessage)
+			}
+		} else {
+			// Send as a single message
+			projectMessage := s.formatSingleProjectMessage(project, tasks, period, i+1, len(projectNames), 0, 0)
+			s.sendChunkedMessage(ctx, projectMessage)
 		}
-
-		if ctx.ThreadTS != "" {
-			payload["thread_ts"] = ctx.ThreadTS
-		}
-
-		err := s.sendSlackAPIRequest("chat.postMessage", payload)
-		if err != nil {
-			s.logger.Errorf("Failed to send project message for %s: %v", project, err)
-			// Continue with other projects even if one fails
-		}
-
-		// Small delay between messages to avoid rate limiting
-		time.Sleep(100 * time.Millisecond)
 	}
 
 	return nil
+}
+
+// sendChunkedMessage is a helper to send project messages and handle errors
+func (s *SlackAPIClient) sendChunkedMessage(ctx *ConversationContext, message SlackMessage) {
+	payload := map[string]interface{}{
+		"channel": ctx.ChannelID,
+		"text":    message.Text,
+		"blocks":  message.Blocks,
+	}
+
+	if ctx.ThreadTS != "" {
+		payload["thread_ts"] = ctx.ThreadTS
+	}
+
+	err := s.sendSlackAPIRequest("chat.postMessage", payload)
+	if err != nil {
+		s.logger.Errorf("Failed to send project message chunk: %v", err)
+	}
+
+	// Small delay between messages to avoid rate limiting
+	time.Sleep(200 * time.Millisecond)
 }
 
 // formatReportHeaderMessage creates the header message for split reports
@@ -290,7 +311,7 @@ func (s *SlackAPIClient) formatReportHeaderMessage(period, userID string, totalT
 }
 
 // formatSingleProjectMessage creates a message for a single project
-func (s *SlackAPIClient) formatSingleProjectMessage(project string, tasks []TaskUpdateInfo, period string, projectNum, totalProjects int) SlackMessage {
+func (s *SlackAPIClient) formatSingleProjectMessage(project string, tasks []TaskUpdateInfo, period string, projectNum, totalProjects, partNum, totalParts int) SlackMessage {
 	var projectTitle string
 	if project == "Other" {
 		projectTitle = "📋 Other Tasks"
@@ -299,6 +320,9 @@ func (s *SlackAPIClient) formatSingleProjectMessage(project string, tasks []Task
 	}
 
 	headerText := fmt.Sprintf("%s (%d/%d)", projectTitle, projectNum, totalProjects)
+	if totalParts > 1 {
+		headerText = fmt.Sprintf("%s - Part %d of %d", headerText, partNum, totalParts)
+	}
 
 	blocks := []Block{
 		{
