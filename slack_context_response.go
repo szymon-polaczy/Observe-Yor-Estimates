@@ -238,19 +238,36 @@ func (s *SlackAPIClient) formatContextualMessage(taskInfos []TaskUpdateInfo, per
 		{Type: "divider"},
 	}
 
-	for _, task := range taskInfos {
-		taskBlock := formatTaskBlock(task)
-		blocks = append(blocks, taskBlock...)
+	// Use the same efficient formatting logic to avoid block limits
+	// Group tasks by project for better organization and block efficiency
+	projectGroups := groupTasksByProject(taskInfos)
 
-		messageText.WriteString(fmt.Sprintf("*%s*", task.Name))
-		if task.EstimationInfo != "" {
-			messageText.WriteString(fmt.Sprintf(" | %s", task.EstimationInfo))
+	// If we have many projects, use project grouping; otherwise use individual task blocks
+	const maxBlocksPerMessage = 50
+	const headerBlocks = 3
+	const maxProjectGroups = maxBlocksPerMessage - headerBlocks - 2 // -2 for safety and footer
+
+	if len(projectGroups) > maxProjectGroups || len(taskInfos) > 25 {
+		// Use project grouping for better space efficiency
+		additionalBlocks := formatProjectGroupedBlocks(projectGroups, &messageText, period)
+		blocks = append(blocks, additionalBlocks...)
+	} else {
+		// Use individual task blocks (1 block per task instead of 3)
+		for _, task := range taskInfos {
+			taskBlock := formatSingleTaskBlock(task)
+			blocks = append(blocks, taskBlock)
+
+			// Also build text version
+			messageText.WriteString(fmt.Sprintf("*%s*", task.Name))
+			if task.EstimationInfo != "" {
+				messageText.WriteString(fmt.Sprintf(" | %s", task.EstimationInfo))
+			}
+			messageText.WriteString(fmt.Sprintf("\nTime worked: %s: %s, %s: %s", task.CurrentPeriod, task.CurrentTime, task.PreviousPeriod, task.PreviousTime))
+			if task.DaysWorked > 0 {
+				messageText.WriteString(fmt.Sprintf(", Days worked: %d", task.DaysWorked))
+			}
+			messageText.WriteString("\n\n")
 		}
-		messageText.WriteString(fmt.Sprintf("\nTime worked: %s: %s, %s: %s", task.CurrentPeriod, task.CurrentTime, task.PreviousPeriod, task.PreviousTime))
-		if task.DaysWorked > 0 {
-			messageText.WriteString(fmt.Sprintf(", Days worked: %d", task.DaysWorked))
-		}
-		messageText.WriteString("\n\n")
 	}
 
 	return SlackMessage{
@@ -356,19 +373,34 @@ func (s *SlackAPIClient) formatPersonalThreadMessage(taskInfos []TaskUpdateInfo,
 		{Type: "divider"},
 	}
 
-	for _, task := range taskInfos {
-		taskBlock := formatTaskBlock(task)
-		blocks = append(blocks, taskBlock...)
+	// Use the same efficient formatting logic to avoid block limits
+	projectGroups := groupTasksByProject(taskInfos)
 
-		messageText.WriteString(fmt.Sprintf("*%s*", task.Name))
-		if task.EstimationInfo != "" {
-			messageText.WriteString(fmt.Sprintf(" | %s", task.EstimationInfo))
+	const maxBlocksPerMessage = 50
+	const headerBlocks = 2 // Different header structure for personal messages
+	const maxProjectGroups = maxBlocksPerMessage - headerBlocks - 2
+
+	if len(projectGroups) > maxProjectGroups || len(taskInfos) > 25 {
+		// Use project grouping for better space efficiency
+		additionalBlocks := formatProjectGroupedBlocks(projectGroups, &messageText, period)
+		blocks = append(blocks, additionalBlocks...)
+	} else {
+		// Use individual task blocks (1 block per task instead of 3)
+		for _, task := range taskInfos {
+			taskBlock := formatSingleTaskBlock(task)
+			blocks = append(blocks, taskBlock)
+
+			// Also build text version
+			messageText.WriteString(fmt.Sprintf("*%s*", task.Name))
+			if task.EstimationInfo != "" {
+				messageText.WriteString(fmt.Sprintf(" | %s", task.EstimationInfo))
+			}
+			messageText.WriteString(fmt.Sprintf("\nTime worked: %s: %s, %s: %s", task.CurrentPeriod, task.CurrentTime, task.PreviousPeriod, task.PreviousTime))
+			if task.DaysWorked > 0 {
+				messageText.WriteString(fmt.Sprintf(", Days worked: %d", task.DaysWorked))
+			}
+			messageText.WriteString("\n\n")
 		}
-		messageText.WriteString(fmt.Sprintf("\nTime worked: %s: %s, %s: %s", task.CurrentPeriod, task.CurrentTime, task.PreviousPeriod, task.PreviousTime))
-		if task.DaysWorked > 0 {
-			messageText.WriteString(fmt.Sprintf(", Days worked: %d", task.DaysWorked))
-		}
-		messageText.WriteString("\n\n")
 	}
 
 	return SlackMessage{

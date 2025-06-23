@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -154,6 +155,7 @@ func formatSlackMessage(taskInfos []TaskUpdateInfo, period string) SlackMessage 
 	var messageText strings.Builder
 	messageText.WriteString(fmt.Sprintf("*%s* - %s\n\n", title, date))
 
+	// Header blocks
 	blocks := []Block{
 		{
 			Type: "header",
@@ -168,25 +170,199 @@ func formatSlackMessage(taskInfos []TaskUpdateInfo, period string) SlackMessage 
 		{Type: "divider"},
 	}
 
-	for _, task := range taskInfos {
-		taskBlock := formatTaskBlock(task)
-		blocks = append(blocks, taskBlock...)
+	// Group tasks by project for better organization and block efficiency
+	projectGroups := groupTasksByProject(taskInfos)
 
-		messageText.WriteString(fmt.Sprintf("*%s*", task.Name))
-		if task.EstimationInfo != "" {
-			messageText.WriteString(fmt.Sprintf(" | %s", task.EstimationInfo))
+	// If we have many projects, use project grouping; otherwise use individual task blocks
+	const maxBlocksPerMessage = 50
+	const headerBlocks = 3
+	const maxProjectGroups = maxBlocksPerMessage - headerBlocks - 2 // -2 for safety and footer
+
+	if len(projectGroups) > maxProjectGroups || len(taskInfos) > 25 {
+		// Use project grouping for better space efficiency
+		blocks = append(blocks, formatProjectGroupedBlocks(projectGroups, &messageText, period)...)
+	} else {
+		// Use individual task blocks (1 block per task instead of 3)
+		for _, task := range taskInfos {
+			taskBlock := formatSingleTaskBlock(task)
+			blocks = append(blocks, taskBlock)
+
+			// Also build text version
+			messageText.WriteString(fmt.Sprintf("*%s*", task.Name))
+			if task.EstimationInfo != "" {
+				messageText.WriteString(fmt.Sprintf(" | %s", task.EstimationInfo))
+			}
+			messageText.WriteString(fmt.Sprintf("\nTime worked: %s: %s, %s: %s", task.CurrentPeriod, task.CurrentTime, task.PreviousPeriod, task.PreviousTime))
+			if task.DaysWorked > 0 {
+				messageText.WriteString(fmt.Sprintf(", Days worked: %d", task.DaysWorked))
+			}
+			messageText.WriteString("\n\n")
 		}
-		messageText.WriteString(fmt.Sprintf("\nTime worked: %s: %s, %s: %s", task.CurrentPeriod, task.CurrentTime, task.PreviousPeriod, task.PreviousTime))
-		if task.DaysWorked > 0 {
-			messageText.WriteString(fmt.Sprintf(", Days worked: %d", task.DaysWorked))
-		}
-		messageText.WriteString("\n\n")
 	}
 
 	return SlackMessage{
 		Text:   messageText.String(),
 		Blocks: blocks,
 	}
+}
+
+// formatSingleTaskBlock formats a single task into one comprehensive markdown block
+func formatSingleTaskBlock(task TaskUpdateInfo) Block {
+	taskName := sanitizeSlackText(task.Name)
+
+	var taskInfo strings.Builder
+	taskInfo.WriteString(fmt.Sprintf("*%s*\n", taskName))
+
+	// Time information
+	taskInfo.WriteString(fmt.Sprintf("• %s: **%s** | %s: **%s**",
+		task.CurrentPeriod, task.CurrentTime,
+		task.PreviousPeriod, task.PreviousTime))
+
+	if task.DaysWorked > 0 {
+		taskInfo.WriteString(fmt.Sprintf(" | Days: **%d**", task.DaysWorked))
+	}
+	taskInfo.WriteString("\n")
+
+	// Estimation info
+	if task.EstimationInfo != "" {
+		estimationInfo := sanitizeSlackText(task.EstimationInfo)
+		taskInfo.WriteString(fmt.Sprintf("• %s\n", estimationInfo))
+	}
+
+	// Comments (limit to save space)
+	if len(task.Comments) > 0 {
+		taskInfo.WriteString("• Recent: ")
+		if len(task.Comments) == 1 {
+			comment := sanitizeSlackText(task.Comments[0])
+			if len(comment) > 80 {
+				comment = comment[:77] + "..."
+			}
+			taskInfo.WriteString(fmt.Sprintf("_%s_", comment))
+		} else {
+			taskInfo.WriteString(fmt.Sprintf("_%d comments_", len(task.Comments)))
+		}
+		taskInfo.WriteString("\n")
+	}
+
+	return Block{
+		Type: "section",
+		Text: &Text{Type: "mrkdwn", Text: taskInfo.String()},
+	}
+}
+
+// groupTasksByProject groups tasks by their project identifier (e.g., WP3DX, BNBS, etc.)
+func groupTasksByProject(tasks []TaskUpdateInfo) map[string][]TaskUpdateInfo {
+	projects := make(map[string][]TaskUpdateInfo)
+
+	for _, task := range tasks {
+		project := extractProjectCode(task.Name)
+		projects[project] = append(projects[project], task)
+	}
+
+	return projects
+}
+
+// extractProjectCode extracts project code from task name (e.g., "WP3DX" from "[WP3DX-652] Task name")
+func extractProjectCode(taskName string) string {
+	// Look for pattern like [ABC-123] or [ABCD-123]
+	re := regexp.MustCompile(`\[([A-Z]+)[-\d]`)
+	matches := re.FindStringSubmatch(taskName)
+
+	if len(matches) > 1 {
+		return matches[1]
+	}
+
+	// If no project code found, group under "Other"
+	return "Other"
+}
+
+// formatProjectGroupedBlocks formats tasks grouped by project
+func formatProjectGroupedBlocks(projectGroups map[string][]TaskUpdateInfo, messageText *strings.Builder, period string) []Block {
+	var blocks []Block
+
+	// Sort project names for consistent output
+	var projectNames []string
+	for project := range projectGroups {
+		projectNames = append(projectNames, project)
+	}
+
+	// Sort projects, but put "Other" last
+	sort.Slice(projectNames, func(i, j int) bool {
+		if projectNames[i] == "Other" {
+			return false
+		}
+		if projectNames[j] == "Other" {
+			return true
+		}
+		return projectNames[i] < projectNames[j]
+	})
+
+	for _, project := range projectNames {
+		tasks := projectGroups[project]
+
+		var projectInfo strings.Builder
+		if project == "Other" {
+			projectInfo.WriteString("*📋 Other Tasks*\n\n")
+		} else {
+			projectInfo.WriteString(fmt.Sprintf("*📁 %s Project*\n\n", project))
+		}
+
+		for _, task := range tasks {
+			taskName := sanitizeSlackText(task.Name)
+			if len(taskName) > 70 {
+				taskName = taskName[:67] + "..."
+			}
+
+			projectInfo.WriteString(fmt.Sprintf("• *%s*\n", taskName))
+			projectInfo.WriteString(fmt.Sprintf("  %s: %s | %s: %s",
+				task.CurrentPeriod, task.CurrentTime,
+				task.PreviousPeriod, task.PreviousTime))
+
+			if task.DaysWorked > 0 {
+				projectInfo.WriteString(fmt.Sprintf(" | %d days", task.DaysWorked))
+			}
+
+			if task.EstimationInfo != "" {
+				estimationInfo := sanitizeSlackText(task.EstimationInfo)
+				if len(estimationInfo) > 25 {
+					estimationInfo = estimationInfo[:22] + "..."
+				}
+				projectInfo.WriteString(fmt.Sprintf(" | %s", estimationInfo))
+			}
+			projectInfo.WriteString("\n\n")
+
+			// Also build text version
+			messageText.WriteString(fmt.Sprintf("*%s*", task.Name))
+			if task.EstimationInfo != "" {
+				messageText.WriteString(fmt.Sprintf(" | %s", task.EstimationInfo))
+			}
+			messageText.WriteString(fmt.Sprintf("\nTime worked: %s: %s, %s: %s", task.CurrentPeriod, task.CurrentTime, task.PreviousPeriod, task.PreviousTime))
+			if task.DaysWorked > 0 {
+				messageText.WriteString(fmt.Sprintf(", Days worked: %d", task.DaysWorked))
+			}
+			messageText.WriteString("\n\n")
+		}
+
+		blocks = append(blocks, Block{
+			Type: "section",
+			Text: &Text{Type: "mrkdwn", Text: projectInfo.String()},
+		})
+	}
+
+	// Add summary
+	totalTasks := 0
+	for _, tasks := range projectGroups {
+		totalTasks += len(tasks)
+	}
+
+	blocks = append(blocks, Block{
+		Type: "context",
+		Elements: []Element{
+			{Type: "mrkdwn", Text: fmt.Sprintf("📊 _Total: %d tasks across %d projects_", totalTasks, len(projectGroups))},
+		},
+	})
+
+	return blocks
 }
 
 func sanitizeSlackText(text string) string {
