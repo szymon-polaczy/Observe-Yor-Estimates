@@ -165,8 +165,20 @@ func (s *SlackAPIClient) SendFinalUpdate(ctx *ConversationContext, taskInfos []T
 		return s.SendNoChangesMessage(ctx, period)
 	}
 
+	db, err := GetDB()
+	if err != nil {
+		s.logger.Errorf("Failed to get database connection: %v", err)
+		return s.SendErrorResponse(ctx, "Failed to connect to the database.")
+	}
+
+	allTasks, err := getAllTasks(db)
+	if err != nil {
+		s.logger.Errorf("Failed to get all tasks for hierarchy mapping: %v", err)
+		return s.SendErrorResponse(ctx, "Failed to retrieve task hierarchy.")
+	}
+
 	// Check if we need to split by project due to size limits
-	projectGroups := groupTasksByProject(taskInfos)
+	projectGroups := groupTasksByTopParent(taskInfos, allTasks)
 
 	// If we have many projects or tasks, send multiple messages (one per project)
 	if len(projectGroups) > 15 || len(taskInfos) > 25 {
