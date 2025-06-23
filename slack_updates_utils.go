@@ -206,13 +206,9 @@ func formatSingleTaskBlock(task TaskUpdateInfo) Block {
 	taskInfo.WriteString(fmt.Sprintf("*%s*\n", taskName))
 
 	// Time information
-	taskInfo.WriteString(fmt.Sprintf("• %s: **%s** | %s: **%s**",
+	taskInfo.WriteString(fmt.Sprintf("• %s: %s | %s: %s",
 		task.CurrentPeriod, task.CurrentTime,
 		task.PreviousPeriod, task.PreviousTime))
-
-	if task.DaysWorked > 0 {
-		taskInfo.WriteString(fmt.Sprintf(" | Days: **%d**", task.DaysWorked))
-	}
 	taskInfo.WriteString("\n")
 
 	// Estimation info
@@ -229,9 +225,9 @@ func formatSingleTaskBlock(task TaskUpdateInfo) Block {
 			if len(comment) > 80 {
 				comment = comment[:77] + "..."
 			}
-			taskInfo.WriteString(fmt.Sprintf("_%s_", comment))
+			taskInfo.WriteString(fmt.Sprintf("%s", comment))
 		} else {
-			taskInfo.WriteString(fmt.Sprintf("_%d comments_", len(task.Comments)))
+			taskInfo.WriteString(fmt.Sprintf("%d comments", len(task.Comments)))
 		}
 		taskInfo.WriteString("\n")
 	}
@@ -294,9 +290,9 @@ func formatProjectGroupedBlocks(projectGroups map[string][]TaskUpdateInfo, messa
 
 		var projectInfo strings.Builder
 		if project == "Other" {
-			projectInfo.WriteString("*📋 Other Tasks*\n\n")
+			projectInfo.WriteString("📋 Other Tasks\n\n")
 		} else {
-			projectInfo.WriteString(fmt.Sprintf("*📁 %s Project*\n\n", project))
+			projectInfo.WriteString(fmt.Sprintf("📁 %s Project\n\n", project))
 		}
 
 		for _, task := range tasks {
@@ -309,10 +305,6 @@ func formatProjectGroupedBlocks(projectGroups map[string][]TaskUpdateInfo, messa
 			projectInfo.WriteString(fmt.Sprintf("  %s: %s | %s: %s",
 				task.CurrentPeriod, task.CurrentTime,
 				task.PreviousPeriod, task.PreviousTime))
-
-			if task.DaysWorked > 0 {
-				projectInfo.WriteString(fmt.Sprintf(" | %d days", task.DaysWorked))
-			}
 
 			if task.EstimationInfo != "" {
 				estimationInfo := sanitizeSlackText(task.EstimationInfo)
@@ -355,9 +347,6 @@ func appendTaskTextMessage(builder *strings.Builder, task TaskUpdateInfo) {
 		builder.WriteString(fmt.Sprintf(" | %s", task.EstimationInfo))
 	}
 	builder.WriteString(fmt.Sprintf("\nTime worked: %s: %s, %s: %s", task.CurrentPeriod, task.CurrentTime, task.PreviousPeriod, task.PreviousTime))
-	if task.DaysWorked > 0 {
-		builder.WriteString(fmt.Sprintf(", Days worked: %d", task.DaysWorked))
-	}
 	builder.WriteString("\n\n")
 }
 
@@ -389,10 +378,6 @@ func formatTaskBlock(task TaskUpdateInfo) []Block {
 	var fields []Field
 	fields = append(fields, Field{Type: "mrkdwn", Text: fmt.Sprintf("*%s:* %s", task.CurrentPeriod, task.CurrentTime)})
 	fields = append(fields, Field{Type: "mrkdwn", Text: fmt.Sprintf("*%s:* %s", task.PreviousPeriod, task.PreviousTime)})
-
-	if task.DaysWorked > 0 {
-		fields = append(fields, Field{Type: "mrkdwn", Text: fmt.Sprintf("*Days Worked:*\n%d", task.DaysWorked)})
-	}
 
 	if task.EstimationInfo != "" {
 		// Sanitize estimation info as well
