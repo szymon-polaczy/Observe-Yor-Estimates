@@ -316,15 +316,7 @@ func (s *SlackAPIClient) formatSingleProjectMessage(project string, tasks []Task
 			blocks = append(blocks, taskBlock)
 
 			// Build text version
-			messageText.WriteString(fmt.Sprintf("*%s*", task.Name))
-			if task.EstimationInfo != "" {
-				messageText.WriteString(fmt.Sprintf(" | %s", task.EstimationInfo))
-			}
-			messageText.WriteString(fmt.Sprintf("\nTime worked: %s: %s, %s: %s", task.CurrentPeriod, task.CurrentTime, task.PreviousPeriod, task.PreviousTime))
-			if task.DaysWorked > 0 {
-				messageText.WriteString(fmt.Sprintf(", Days worked: %d", task.DaysWorked))
-			}
-			messageText.WriteString("\n\n")
+			appendTaskTextMessage(&messageText, task)
 		}
 	}
 
@@ -468,16 +460,8 @@ func (s *SlackAPIClient) formatContextualMessage(taskInfos []TaskUpdateInfo, per
 			taskBlock := formatSingleTaskBlock(task)
 			blocks = append(blocks, taskBlock)
 
-			// Also build text version
-			messageText.WriteString(fmt.Sprintf("*%s*", task.Name))
-			if task.EstimationInfo != "" {
-				messageText.WriteString(fmt.Sprintf(" | %s", task.EstimationInfo))
-			}
-			messageText.WriteString(fmt.Sprintf("\nTime worked: %s: %s, %s: %s", task.CurrentPeriod, task.CurrentTime, task.PreviousPeriod, task.PreviousTime))
-			if task.DaysWorked > 0 {
-				messageText.WriteString(fmt.Sprintf(", Days worked: %d", task.DaysWorked))
-			}
-			messageText.WriteString("\n\n")
+			// Build text version
+			appendTaskTextMessage(&messageText, task)
 		}
 	}
 
@@ -602,15 +586,7 @@ func (s *SlackAPIClient) formatPersonalThreadMessage(taskInfos []TaskUpdateInfo,
 			blocks = append(blocks, taskBlock)
 
 			// Also build text version
-			messageText.WriteString(fmt.Sprintf("*%s*", task.Name))
-			if task.EstimationInfo != "" {
-				messageText.WriteString(fmt.Sprintf(" | %s", task.EstimationInfo))
-			}
-			messageText.WriteString(fmt.Sprintf("\nTime worked: %s: %s, %s: %s", task.CurrentPeriod, task.CurrentTime, task.PreviousPeriod, task.PreviousTime))
-			if task.DaysWorked > 0 {
-				messageText.WriteString(fmt.Sprintf(", Days worked: %d", task.DaysWorked))
-			}
-			messageText.WriteString("\n\n")
+			appendTaskTextMessage(&messageText, task)
 		}
 	}
 

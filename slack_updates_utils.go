@@ -188,15 +188,7 @@ func formatSlackMessage(taskInfos []TaskUpdateInfo, period string) SlackMessage 
 			blocks = append(blocks, taskBlock)
 
 			// Also build text version
-			messageText.WriteString(fmt.Sprintf("*%s*", task.Name))
-			if task.EstimationInfo != "" {
-				messageText.WriteString(fmt.Sprintf(" | %s", task.EstimationInfo))
-			}
-			messageText.WriteString(fmt.Sprintf("\nTime worked: %s: %s, %s: %s", task.CurrentPeriod, task.CurrentTime, task.PreviousPeriod, task.PreviousTime))
-			if task.DaysWorked > 0 {
-				messageText.WriteString(fmt.Sprintf(", Days worked: %d", task.DaysWorked))
-			}
-			messageText.WriteString("\n\n")
+			appendTaskTextMessage(&messageText, task)
 		}
 	}
 
@@ -332,15 +324,7 @@ func formatProjectGroupedBlocks(projectGroups map[string][]TaskUpdateInfo, messa
 			projectInfo.WriteString("\n\n")
 
 			// Also build text version
-			messageText.WriteString(fmt.Sprintf("*%s*", task.Name))
-			if task.EstimationInfo != "" {
-				messageText.WriteString(fmt.Sprintf(" | %s", task.EstimationInfo))
-			}
-			messageText.WriteString(fmt.Sprintf("\nTime worked: %s: %s, %s: %s", task.CurrentPeriod, task.CurrentTime, task.PreviousPeriod, task.PreviousTime))
-			if task.DaysWorked > 0 {
-				messageText.WriteString(fmt.Sprintf(", Days worked: %d", task.DaysWorked))
-			}
-			messageText.WriteString("\n\n")
+			appendTaskTextMessage(messageText, task)
 		}
 
 		blocks = append(blocks, Block{
@@ -363,6 +347,18 @@ func formatProjectGroupedBlocks(projectGroups map[string][]TaskUpdateInfo, messa
 	})
 
 	return blocks
+}
+
+func appendTaskTextMessage(builder *strings.Builder, task TaskUpdateInfo) {
+	builder.WriteString(fmt.Sprintf("*%s*", task.Name))
+	if task.EstimationInfo != "" {
+		builder.WriteString(fmt.Sprintf(" | %s", task.EstimationInfo))
+	}
+	builder.WriteString(fmt.Sprintf("\nTime worked: %s: %s, %s: %s", task.CurrentPeriod, task.CurrentTime, task.PreviousPeriod, task.PreviousTime))
+	if task.DaysWorked > 0 {
+		builder.WriteString(fmt.Sprintf(", Days worked: %d", task.DaysWorked))
+	}
+	builder.WriteString("\n\n")
 }
 
 func sanitizeSlackText(text string) string {
