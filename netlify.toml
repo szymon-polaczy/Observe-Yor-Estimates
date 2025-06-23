@@ -1,5 +1,5 @@
 [build]
-  command = "go build -o ./functions/server ."
+  command = "CGO_ENABLED=0 go build -o ./functions/server ."
   publish = "."
   functions = "functions/"
 
