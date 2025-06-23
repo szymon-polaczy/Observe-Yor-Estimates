@@ -6,10 +6,6 @@
 [build.environment]
   GO_VERSION = "1.22"
 
-[functions]
-  # Increase function timeout (max 26 seconds for Pro plan, 10 seconds for free plan)
-  timeout = 26
-
 [[redirects]]
   from = "/*"
   to = "/.netlify/functions/server/:splat"
