@@ -37,30 +37,19 @@ func main() {
 
 	logger.Info("Starting Observe-Yor-Estimates application")
 
-	// For Netlify Functions, we need to start the server immediately
-	// and defer all heavy initialization to avoid cold start timeouts
-	go func() {
-		// Do heavy initialization in background to avoid Netlify timeout
-		logger.Info("Initializing database connection in background...")
-		_, err := GetDB()
-		if err != nil {
-			logger.Errorf("Failed to initialize database: %v", err)
-			return
-		}
-		logger.Info("Database connection initialized successfully")
+	// In CLI mode, we don't run as a server
+	// Initialize database connection for CLI operations
+	logger.Info("Initializing database connection...")
+	_, initErr := GetDB()
+	if initErr != nil {
+		logger.Errorf("Failed to initialize database: %v", initErr)
+		return
+	}
+	logger.Info("Database connection initialized successfully")
 
-		logger.Info("Setting up cron jobs...")
-		setupCronJobs(logger)
-
-		logger.Info("Running initial task sync...")
-		if err := SyncTasksToDatabase(); err != nil {
-			logger.Errorf("Failed initial task sync: %v", err)
-		}
-		logger.Info("Background initialization completed")
-	}()
-
-	// Start server immediately (this is what Netlify needs to see)
-	StartServer(logger)
+	logger.Info("CLI mode: No server started. Use command line arguments for operations.")
+	logger.Info("For example: ./observe-yor-estimates update daily")
+	logger.Info("Available commands: update, sync-tasks, sync-time-entries, full-sync")
 }
 
 func handleCliCommands(args []string, logger *Logger) {

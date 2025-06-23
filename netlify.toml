@@ -1,13 +1,23 @@
 [build]
-  command = "CGO_ENABLED=0 go build -o ./functions/server ."
+  command = "npm run build"
   publish = "."
-  functions = "functions/"
+  functions = "netlify/functions"
 
 [build.environment]
+  NODE_VERSION = "18"
   GO_VERSION = "1.22"
 
+[functions]
+  node_bundler = "esbuild"
+
 [[redirects]]
-  from = "/*"
-  to = "/.netlify/functions/server/:splat"
+  from = "/api/*"
+  to = "/.netlify/functions/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/slack/*"
+  to = "/.netlify/functions/:splat"
   status = 200
   force = true
