@@ -6,7 +6,7 @@ import (
 	"os"
 	"sync"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/lib/pq"
 )
 
 // Global database connection
@@ -17,19 +17,36 @@ var (
 	initErr  error
 )
 
-// getDBPath returns the database path from environment variable or default
-func getDBPath() string {
-	if path := os.Getenv("DATABASE_PATH"); path != "" {
-		return path
+// getDBConnectionString returns the PostgreSQL connection string from environment variables
+func getDBConnectionString() string {
+	// Check for Supabase environment variables
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL != "" {
+		return dbURL
 	}
 
-	// Check if we're in a Netlify environment where we need writable storage
-	if isNetlifyBuild() || isNetlifyRuntime() {
-		// In Netlify functions, use /tmp which is writable
-		return "/tmp/oye.db"
+	// Fallback to individual components
+	host := os.Getenv("DB_HOST")
+	port := os.Getenv("DB_PORT")
+	user := os.Getenv("DB_USER")
+	password := os.Getenv("DB_PASSWORD")
+	dbname := os.Getenv("DB_NAME")
+	sslmode := os.Getenv("DB_SSLMODE")
+
+	if host == "" || user == "" || password == "" || dbname == "" {
+		// Return empty string to trigger error - all required vars must be set
+		return ""
 	}
 
-	return "./oye.db" // default path for local development
+	if port == "" {
+		port = "5432"
+	}
+	if sslmode == "" {
+		sslmode = "require"
+	}
+
+	return fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
+		host, port, user, password, dbname, sslmode)
 }
 
 // isNetlifyRuntime checks if we're running in a Netlify serverless function (runtime)
@@ -50,12 +67,9 @@ func validateDatabaseWriteAccess() error {
 	}
 
 	// Try to create a test table to verify write access
-	testQuery := `CREATE TABLE IF NOT EXISTS write_test (id INTEGER PRIMARY KEY, test_value TEXT)`
+	testQuery := `CREATE TABLE IF NOT EXISTS write_test (id SERIAL PRIMARY KEY, test_value TEXT)`
 	_, err = db.Exec(testQuery)
 	if err != nil {
-		if isNetlifyBuild() || isNetlifyRuntime() {
-			return fmt.Errorf("database is read-only in Netlify environment - full sync operations require persistent storage. Consider using external database (PostgreSQL, MySQL) for production deployments")
-		}
 		return fmt.Errorf("database write test failed: %w", err)
 	}
 
@@ -69,16 +83,21 @@ func validateDatabaseWriteAccess() error {
 	return nil
 }
 
-// GetDB returns a shared connection to the SQLite database, creating it once if needed
+// GetDB returns a shared connection to the PostgreSQL database, creating it once if needed
 func GetDB() (*sql.DB, error) {
 	dbOnce.Do(func() {
 		logger := GetGlobalLogger()
-		dbPath := getDBPath()
-		logger.Debugf("Initializing database connection to: %s", dbPath)
+		connStr := getDBConnectionString()
+		if connStr == "" {
+			initErr = fmt.Errorf("database connection string not configured - please set DATABASE_URL or individual DB_* environment variables")
+			return
+		}
+		
+		logger.Debugf("Initializing database connection to PostgreSQL")
 
-		db, err := sql.Open("sqlite3", dbPath)
+		db, err := sql.Open("postgres", connStr)
 		if err != nil {
-			initErr = fmt.Errorf("failed to open database at %s: %w", dbPath, err)
+			initErr = fmt.Errorf("failed to open database connection: %w", err)
 			return
 		}
 
@@ -145,21 +164,21 @@ func CloseDB() error {
 func migrateTasksTable(db *sql.DB) error {
 	logger := GetGlobalLogger()
 
-	// Check if table exists
-	row := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='tasks';")
-	var name string
-	err := row.Scan(&name)
-	if err == sql.ErrNoRows {
-		// Table does not exist, create it
-		logger.Info("Tasks table does not exist, creating it")
-		return createTasksTable(db)
-	} else if err != nil {
+	// Check if table exists (PostgreSQL way)
+	row := db.QueryRow("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'tasks');")
+	var exists bool
+	err := row.Scan(&exists)
+	if err != nil {
 		return fmt.Errorf("error checking if tasks table exists: %w", err)
 	}
 
+	if !exists {
+		// Table does not exist, create it
+		logger.Info("Tasks table does not exist, creating it")
+		return createTasksTable(db)
+	}
+
 	logger.Debug("Tasks table already exists")
-	// Table exists, for now we don't do migration logic,
-	// but we could add checks for schema changes in the future.
 	return nil
 }
 
@@ -168,11 +187,11 @@ func createTasksTable(db *sql.DB) error {
 
 	createTableSQL := `CREATE TABLE tasks (
 task_id INTEGER PRIMARY KEY,
-parent_id INT NOT NULL,
-assigned_by INT NOT NULL,
-name STRING NOT NULL,
-level INT NOT NULL,
-root_group_id INT NOT NULL
+parent_id INTEGER NOT NULL,
+assigned_by INTEGER NOT NULL,
+name TEXT NOT NULL,
+level INTEGER NOT NULL,
+root_group_id INTEGER NOT NULL
 );`
 
 	_, err := db.Exec(createTableSQL)
@@ -188,21 +207,21 @@ root_group_id INT NOT NULL
 func migrateTaskHistoryTable(db *sql.DB) error {
 	logger := GetGlobalLogger()
 
-	// Check if table exists
-	row := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='task_history';")
-	var name string
-	err := row.Scan(&name)
-	if err == sql.ErrNoRows {
-		// Table does not exist, create it
-		logger.Info("Task history table does not exist, creating it")
-		return createTaskHistoryTable(db)
-	} else if err != nil {
+	// Check if table exists (PostgreSQL way)
+	row := db.QueryRow("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'task_history');")
+	var exists bool
+	err := row.Scan(&exists)
+	if err != nil {
 		return fmt.Errorf("error checking if task_history table exists: %w", err)
 	}
 
+	if !exists {
+		// Table does not exist, create it
+		logger.Info("Task history table does not exist, creating it")
+		return createTaskHistoryTable(db)
+	}
+
 	logger.Debug("Task history table already exists")
-	// Table exists, for now we don't do migration logic,
-	// but we could add checks for schema changes in the future.
 	return nil
 }
 
@@ -210,11 +229,11 @@ func createTaskHistoryTable(db *sql.DB) error {
 	logger := GetGlobalLogger()
 
 	createTableSQL := `CREATE TABLE task_history (
-id INTEGER PRIMARY KEY AUTOINCREMENT,
+id SERIAL PRIMARY KEY,
 task_id INTEGER NOT NULL,
-name STRING NOT NULL,
-timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-change_type STRING NOT NULL,
+name TEXT NOT NULL,
+timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+change_type TEXT NOT NULL,
 previous_value TEXT,
 current_value TEXT,
 FOREIGN KEY (task_id) REFERENCES tasks(task_id)
@@ -233,21 +252,21 @@ FOREIGN KEY (task_id) REFERENCES tasks(task_id)
 func migrateTimeEntriesTable(db *sql.DB) error {
 	logger := GetGlobalLogger()
 
-	// Check if table exists
-	row := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='time_entries';")
-	var name string
-	err := row.Scan(&name)
-	if err == sql.ErrNoRows {
-		// Table does not exist, create it
-		logger.Info("Time entries table does not exist, creating it")
-		return createTimeEntriesTable(db)
-	} else if err != nil {
+	// Check if table exists (PostgreSQL way)
+	row := db.QueryRow("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'time_entries');")
+	var exists bool
+	err := row.Scan(&exists)
+	if err != nil {
 		return fmt.Errorf("error checking if time_entries table exists: %w", err)
 	}
 
+	if !exists {
+		// Table does not exist, create it
+		logger.Info("Time entries table does not exist, creating it")
+		return createTimeEntriesTable(db)
+	}
+
 	logger.Debug("Time entries table already exists")
-	// Table exists, for now we don't do migration logic,
-	// but we could add checks for schema changes in the future.
 	return nil
 }
 
