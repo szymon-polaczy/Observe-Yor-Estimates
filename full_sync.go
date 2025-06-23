@@ -105,7 +105,7 @@ func SendFullSyncJSON() {
 				},
 			},
 		}
-		outputJSON(errorMessage)
+		outputJSON([]SlackMessage{errorMessage})
 		return
 	}
 
@@ -130,7 +130,7 @@ func SendFullSyncJSON() {
 		},
 	}
 
-	outputJSON(message)
+	outputJSON([]SlackMessage{message})
 	logger.Info("Successfully generated full sync JSON")
 }
 
