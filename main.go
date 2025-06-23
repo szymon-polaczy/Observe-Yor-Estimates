@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/joho/godotenv"
 	"github.com/robfig/cron/v3"
@@ -164,24 +163,6 @@ func addCronJob(scheduler *cron.Cron, envVar, defaultSchedule, jobName string, l
 	if err != nil {
 		logger.Fatalf("Critical error: Failed to schedule %s cron job: %v", jobName, err)
 	}
-}
-
-func isNetlifyBuild() bool {
-	return os.Getenv("NETLIFY") == "true"
-}
-
-func validateRequiredEnvVars() error {
-	requiredVars := []string{"CLICKUP_API_TOKEN", "CLICKUP_TEAM_ID", "SLACK_BOT_TOKEN", "SLACK_CHANNEL_ID"}
-	var missingVars []string
-	for _, varName := range requiredVars {
-		if os.Getenv(varName) == "" {
-			missingVars = append(missingVars, varName)
-		}
-	}
-	if len(missingVars) > 0 {
-		return fmt.Errorf("missing vars: %s", strings.Join(missingVars, ", "))
-	}
-	return nil
 }
 
 func showHelp() {

@@ -492,7 +492,7 @@ func SendFullSyncWithResponseURL(responseURL string) {
 				},
 			},
 		}
-		sendDelayedResponseToURL(responseURL, errorMessage)
+		sendDelayedResponse(responseURL, errorMessage)
 		return
 	}
 
@@ -517,7 +517,7 @@ func SendFullSyncWithResponseURL(responseURL string) {
 		},
 	}
 
-	if err := sendDelayedResponseToURL(responseURL, message); err != nil {
+	if err := sendDelayedResponse(responseURL, message); err != nil {
 		logger.Errorf("Failed to send delayed response: %v", err)
 	} else {
 		logger.Info("Successfully sent full sync completion message via response URL")
