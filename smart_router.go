@@ -101,9 +101,15 @@ func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, perio
 	// Send final result based on user preferences
 	prefs := sr.getUserPreferences(ctx.UserID)
 	if prefs.NotifyInChannel {
-		sr.slackClient.SendContextualUpdate(ctx, taskInfos, period)
+		err = sr.slackClient.SendContextualUpdate(ctx, taskInfos, period)
 	} else {
-		sr.slackClient.SendPersonalUpdate(ctx, taskInfos, period)
+		err = sr.slackClient.SendPersonalUpdate(ctx, taskInfos, period)
+	}
+
+	if err != nil {
+		sr.logger.Errorf("Failed to send final %s report: %v", period, err)
+		sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send %s report", period))
+		return
 	}
 
 	sr.logger.Infof("Completed %s update for user %s", period, ctx.UserID)
