@@ -298,87 +298,18 @@ func (s *SlackAPIClient) formatSingleProjectMessage(project string, tasks []Task
 	var messageText strings.Builder
 	messageText.WriteString(fmt.Sprintf("*%s*\n\n", headerText))
 
-	// Check if even this single project might exceed character limits
-	totalChars := 0
+	// Use detailed format
 	for _, task := range tasks {
-		taskPreview := fmt.Sprintf("*%s* - %s: %s, %s: %s",
-			task.Name, task.CurrentPeriod, task.CurrentTime, task.PreviousPeriod, task.PreviousTime)
-		totalChars += len(taskPreview)
-	}
+		taskBlock := formatSingleTaskBlock(task)
+		blocks = append(blocks, taskBlock)
 
-	if totalChars > 2500 { // Leave some margin under 3000
-		// Use summary format for this project
-		blocks = append(blocks, s.formatProjectSummaryBlock(tasks, period))
-	} else {
-		// Use detailed format
-		for _, task := range tasks {
-			taskBlock := formatSingleTaskBlock(task)
-			blocks = append(blocks, taskBlock)
-
-			// Build text version
-			appendTaskTextMessage(&messageText, task)
-		}
+		// Build text version
+		appendTaskTextMessage(&messageText, task)
 	}
 
 	return SlackMessage{
 		Text:   messageText.String(),
 		Blocks: blocks,
-	}
-}
-
-// formatProjectSummaryBlock creates a summary block when even single project is too large
-func (s *SlackAPIClient) formatProjectSummaryBlock(tasks []TaskUpdateInfo, period string) Block {
-	var summaryText strings.Builder
-	summaryText.WriteString("📊 **Project Summary** _(too many tasks for detailed view)_\n\n")
-
-	// Calculate totals
-	var currentTotalSeconds, previousTotalSeconds int
-	totalDays := 0
-
-	for _, task := range tasks {
-		currentTotalSeconds += parseTimeToSeconds(task.CurrentTime)
-		previousTotalSeconds += parseTimeToSeconds(task.PreviousTime)
-		if task.DaysWorked > totalDays {
-			totalDays = task.DaysWorked
-		}
-	}
-
-	currentTotal := formatDuration(currentTotalSeconds)
-	previousTotal := formatDuration(previousTotalSeconds)
-
-	summaryText.WriteString(fmt.Sprintf("• **%d tasks** in this project\n", len(tasks)))
-	summaryText.WriteString(fmt.Sprintf("• **Total time**: %s this period, %s last period\n", currentTotal, previousTotal))
-	summaryText.WriteString(fmt.Sprintf("• **Active days**: %d\n\n", totalDays))
-
-	// Show top 5 tasks by current period time
-	sort.Slice(tasks, func(i, j int) bool {
-		iSeconds := parseTimeToSeconds(tasks[i].CurrentTime)
-		jSeconds := parseTimeToSeconds(tasks[j].CurrentTime)
-		return iSeconds > jSeconds
-	})
-
-	summaryText.WriteString("**Top tasks by time:**\n")
-	maxTasks := 5
-	if len(tasks) < maxTasks {
-		maxTasks = len(tasks)
-	}
-
-	for i := 0; i < maxTasks; i++ {
-		task := tasks[i]
-		taskName := sanitizeSlackText(task.Name)
-		if len(taskName) > 50 {
-			taskName = taskName[:47] + "..."
-		}
-		summaryText.WriteString(fmt.Sprintf("• %s (%s)\n", taskName, task.CurrentTime))
-	}
-
-	if len(tasks) > maxTasks {
-		summaryText.WriteString(fmt.Sprintf("• ... and %d more tasks\n", len(tasks)-maxTasks))
-	}
-
-	return Block{
-		Type: "section",
-		Text: &Text{Type: "mrkdwn", Text: summaryText.String()},
 	}
 }
 
