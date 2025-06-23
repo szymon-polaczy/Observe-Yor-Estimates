@@ -85,7 +85,7 @@ func SendSlackUpdate(period string, responseURL string, asJSON bool) {
 
 	if len(taskInfos) == 0 {
 		logger.Infof("No task changes to report for %s", period)
-		if err := sendNoChangesNotification(period, responseURL); err != nil {
+		if err := sendNoChangesNotification(period, responseURL, asJSON); err != nil {
 			logger.Errorf("Failed to send 'no changes' notification: %v", err)
 		}
 		return
@@ -219,9 +219,13 @@ func formatTaskBlock(task TaskUpdateInfo) []Block {
 	}
 }
 
-func sendNoChangesNotification(period, responseURL string) error {
+func sendNoChangesNotification(period, responseURL string, asJSON bool) error {
 	message := SlackMessage{
 		Text: fmt.Sprintf("No task changes to report for %s.", period),
+	}
+	if asJSON {
+		outputJSON(message)
+		return nil
 	}
 	if responseURL != "" {
 		return sendDelayedResponseShared(responseURL, message)

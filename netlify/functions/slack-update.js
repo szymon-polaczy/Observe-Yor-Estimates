@@ -154,7 +154,7 @@ async function processUpdateInBackground(period, responseUrl, userName) {
       await sendErrorToSlack(responseUrl, `Failed to generate ${period} update: ${result.error}`);
     } else {
       console.log(`Successfully completed ${period} update for ${userName}`);
-      console.log('Go command output:', result.output);
+      await sendResponseToSlack(responseUrl, result.output);
     }
 
   } catch (error) {
@@ -212,6 +212,43 @@ async function executeGoCommand(command, args = [], envVars = {}) {
       }
     }, 2 * 60 * 1000); // 2 minute timeout
   });
+}
+
+async function sendResponseToSlack(responseUrl, jsonOutput) {
+  if (!responseUrl) {
+    console.log('No response URL, cannot send Slack message.');
+    return;
+  }
+
+  try {
+    const message = JSON.parse(jsonOutput);
+    const response_type = message.blocks ? 'in_channel' : 'ephemeral';
+
+    const payload = {
+      ...message,
+      response_type: response_type,
+    };
+    
+    console.log('Sending message to Slack:', JSON.stringify(payload, null, 2));
+
+    const fetch = (await import('node-fetch')).default;
+    const response = await fetch(responseUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (response.ok) {
+      console.log('Successfully sent message to Slack.');
+    } else {
+      const errorBody = await response.text();
+      console.error(`Failed to send message to Slack. Status: ${response.status}. Body: ${errorBody}`);
+      await sendErrorToSlack(responseUrl, `Failed to send formatted message. Status: ${response.status}`);
+    }
+  } catch (error) {
+    console.error('Error parsing or sending Slack message:', error);
+    await sendErrorToSlack(responseUrl, `There was an error processing the update from the Go binary. Raw output: ${jsonOutput}`);
+  }
 }
 
 async function sendErrorToSlack(responseUrl, errorMessage) {
