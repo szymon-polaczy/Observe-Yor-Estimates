@@ -98,12 +98,28 @@ func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, perio
 	sr.slackClient.UpdateProgress(ctx, "✍️ Formatting report...")
 	time.Sleep(500 * time.Millisecond)
 
+	// Handle the case where there are no tasks
+	if len(taskInfos) == 0 {
+		err = sr.slackClient.SendNoChangesMessage(ctx, period)
+		if err != nil {
+			sr.logger.Errorf("Failed to send 'no changes' message: %v", err)
+			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send %s report", period))
+		}
+		return
+	}
+
 	// Send final result based on user preferences
 	prefs := sr.getUserPreferences(ctx.UserID)
+
+	// Always try to send to the thread first for better UX
 	if prefs.NotifyInChannel {
-		err = sr.slackClient.SendContextualUpdate(ctx, taskInfos, period)
+		// Send public message in thread
+		err = sr.slackClient.SendFinalUpdate(ctx, taskInfos, period)
 	} else {
-		err = sr.slackClient.SendPersonalUpdate(ctx, taskInfos, period)
+		// For personal messages, try to send in thread if possible, otherwise fallback
+		// Note: Ephemeral messages don't support threading, so we'll send a regular message
+		// in the thread but make it clear it's for the specific user
+		err = sr.slackClient.SendPersonalUpdateInThread(ctx, taskInfos, period)
 	}
 
 	if err != nil {
@@ -284,12 +300,12 @@ func (sr *SmartRouter) getUserPreferences(userID string) *UserPreferences {
 		return prefs
 	}
 
-	// Default preferences for new users
+	// Default preferences for new users - use channel notifications for better threading support
 	return &UserPreferences{
 		UserID:          userID,
 		PreferredFormat: "detailed",
 		DefaultPeriod:   "daily",
-		NotifyInChannel: false, // Start with private responses
+		NotifyInChannel: true, // Changed to true for better threading support
 		LastInteraction: time.Now(),
 	}
 }

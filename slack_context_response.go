@@ -95,6 +95,24 @@ func (s *SlackAPIClient) SendPersonalUpdate(ctx *ConversationContext, taskInfos 
 	return s.sendSlackAPIRequest("chat.postEphemeral", payload)
 }
 
+// SendPersonalUpdateInThread sends a personal update in thread since ephemeral messages don't support threading
+func (s *SlackAPIClient) SendPersonalUpdateInThread(ctx *ConversationContext, taskInfos []TaskUpdateInfo, period string) error {
+	// Create a message that's addressed to the specific user but sent as a regular message in thread
+	message := s.formatPersonalThreadMessage(taskInfos, period, ctx.UserID)
+
+	payload := map[string]interface{}{
+		"channel": ctx.ChannelID,
+		"text":    message.Text,
+		"blocks":  message.Blocks,
+	}
+
+	if ctx.ThreadTS != "" {
+		payload["thread_ts"] = ctx.ThreadTS
+	}
+
+	return s.sendSlackAPIRequest("chat.postMessage", payload)
+}
+
 // Send progress message and return response for threading
 func (s *SlackAPIClient) SendProgressMessage(ctx *ConversationContext, message string) (*SlackAPIResponse, error) {
 	payload := map[string]interface{}{
@@ -244,6 +262,7 @@ func (s *SlackAPIClient) formatContextualMessage(taskInfos []TaskUpdateInfo, per
 func (s *SlackAPIClient) formatPersonalMessage(taskInfos []TaskUpdateInfo, period string, userID string) SlackMessage {
 	headerText := fmt.Sprintf("📊 Your %s task update", period)
 
+	// Simplified blocks for ephemeral messages - avoid unsupported block types
 	blocks := []Block{
 		{
 			Type: "section",
@@ -252,21 +271,108 @@ func (s *SlackAPIClient) formatPersonalMessage(taskInfos []TaskUpdateInfo, perio
 		{Type: "divider"},
 	}
 
+	// Add task information using only supported block types for ephemeral messages
 	for _, task := range taskInfos {
-		taskBlock := formatTaskBlock(task)
+		// Use simplified task blocks for ephemeral messages
+		taskBlock := s.formatSimpleTaskBlock(task)
 		blocks = append(blocks, taskBlock...)
 	}
 
-	// Add action buttons for user preferences
-	blocks = append(blocks, Block{
-		Type: "actions",
-		Elements: []Element{
-			{Type: "mrkdwn", Text: fmt.Sprintf("[📢 Share with Channel] | [⚙️ Update Preferences]")},
-		},
-	})
+	// Don't add action buttons for ephemeral messages as they're not supported
+	// Instead, add a simple text section with instructions
+	if len(taskInfos) > 0 {
+		blocks = append(blocks, Block{
+			Type: "section",
+			Text: &Text{Type: "mrkdwn", Text: "_💡 Tip: Use `/oye config public` to share updates with the channel_"},
+		})
+	}
 
 	return SlackMessage{
 		Text:   headerText,
+		Blocks: blocks,
+	}
+}
+
+// formatSimpleTaskBlock creates simplified task blocks compatible with ephemeral messages
+func (s *SlackAPIClient) formatSimpleTaskBlock(task TaskUpdateInfo) []Block {
+	// Sanitize task name to prevent Slack block issues
+	taskName := sanitizeSlackText(task.Name)
+
+	// Create a simple text-based representation for ephemeral messages
+	var taskInfo strings.Builder
+	taskInfo.WriteString(fmt.Sprintf("*%s*\n", taskName))
+	taskInfo.WriteString(fmt.Sprintf("• %s: %s\n", task.CurrentPeriod, task.CurrentTime))
+	taskInfo.WriteString(fmt.Sprintf("• %s: %s\n", task.PreviousPeriod, task.PreviousTime))
+
+	if task.DaysWorked > 0 {
+		taskInfo.WriteString(fmt.Sprintf("• Days Worked: %d\n", task.DaysWorked))
+	}
+
+	if task.EstimationInfo != "" {
+		estimationInfo := sanitizeSlackText(task.EstimationInfo)
+		taskInfo.WriteString(fmt.Sprintf("• %s\n", estimationInfo))
+	}
+
+	if len(task.Comments) > 0 {
+		taskInfo.WriteString("• Recent Comments:\n")
+		// Limit comments for ephemeral messages
+		commentCount := len(task.Comments)
+		if commentCount > 2 {
+			commentCount = 2
+		}
+		for i := 0; i < commentCount; i++ {
+			comment := sanitizeSlackText(task.Comments[i])
+			if len(comment) > 100 {
+				comment = comment[:97] + "..."
+			}
+			taskInfo.WriteString(fmt.Sprintf("  - %s\n", comment))
+		}
+		if len(task.Comments) > 2 {
+			taskInfo.WriteString(fmt.Sprintf("  - ... and %d more comments\n", len(task.Comments)-2))
+		}
+	}
+
+	return []Block{
+		{
+			Type: "section",
+			Text: &Text{Type: "mrkdwn", Text: taskInfo.String()},
+		},
+		{Type: "divider"},
+	}
+}
+
+// formatPersonalThreadMessage creates a message for personal updates that can be sent in thread
+func (s *SlackAPIClient) formatPersonalThreadMessage(taskInfos []TaskUpdateInfo, period string, userID string) SlackMessage {
+	headerText := fmt.Sprintf("📊 %s Task Update for <@%s> (Personal Report)", strings.Title(period), userID)
+
+	var messageText strings.Builder
+	messageText.WriteString(fmt.Sprintf("*%s*\n\n", headerText))
+
+	blocks := []Block{
+		{
+			Type: "section",
+			Text: &Text{Type: "mrkdwn", Text: fmt.Sprintf("*%s*\n_This is <@%s>'s personal update_", headerText, userID)},
+		},
+		{Type: "divider"},
+	}
+
+	for _, task := range taskInfos {
+		taskBlock := formatTaskBlock(task)
+		blocks = append(blocks, taskBlock...)
+
+		messageText.WriteString(fmt.Sprintf("*%s*", task.Name))
+		if task.EstimationInfo != "" {
+			messageText.WriteString(fmt.Sprintf(" | %s", task.EstimationInfo))
+		}
+		messageText.WriteString(fmt.Sprintf("\nTime worked: %s: %s, %s: %s", task.CurrentPeriod, task.CurrentTime, task.PreviousPeriod, task.PreviousTime))
+		if task.DaysWorked > 0 {
+			messageText.WriteString(fmt.Sprintf(", Days worked: %d", task.DaysWorked))
+		}
+		messageText.WriteString("\n\n")
+	}
+
+	return SlackMessage{
+		Text:   messageText.String(),
 		Blocks: blocks,
 	}
 }
