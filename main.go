@@ -43,12 +43,15 @@ func main() {
 	}
 	logger.Info("Database connection initialized successfully")
 
-	logger.Info("Running initial task sync")
-	if err := SyncTasksToDatabase(); err != nil {
-		logger.Errorf("Failed initial task sync: %v", err)
-	}
-
 	setupCronJobs(logger)
+
+	// Run initial sync asynchronously AFTER server starts
+	go func() {
+		logger.Info("Running initial task sync")
+		if err := SyncTasksToDatabase(); err != nil {
+			logger.Errorf("Failed initial task sync: %v", err)
+		}
+	}()
 
 	StartServer(logger)
 }
