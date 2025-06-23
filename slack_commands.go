@@ -420,9 +420,12 @@ func handleFullSyncCommand(w http.ResponseWriter, r *http.Request) {
 			if strings.Contains(err.Error(), "TIMECAMP_API_KEY") {
 				errorText = "❌ *API Configuration Error*"
 				troubleshootingText = "*Action Required:*\n• Verify `TIMECAMP_API_KEY` is set in Netlify environment variables\n• Ensure the API key is valid and has proper permissions\n• Check TimeCamp account status"
+			} else if strings.Contains(err.Error(), "readonly database") || strings.Contains(err.Error(), "attempt to write a readonly database") {
+				errorText = "❌ *Database Permission Error*"
+				troubleshootingText = "*Netlify Database Issue:*\n• Database file is read-only in Netlify serverless environment\n• Netlify functions run in ephemeral containers with read-only filesystem\n• Full sync operations require persistent storage\n\n*Solutions:*\n• Use external database (PostgreSQL, MySQL) for production\n• Consider database initialization during build process\n• Contact administrator to configure persistent storage"
 			} else if strings.Contains(err.Error(), "all task operations failed") {
 				errorText = "❌ *Task Sync Failed*"
-				troubleshootingText = "*Possible Causes:*\n• Invalid or expired API key\n• TimeCamp API rate limiting\n• Network connectivity issues\n• Database permission problems\n• TimeCamp service unavailable"
+				troubleshootingText = "*Possible Causes:*\n• Database permission problems (check if read-only)\n• Invalid or expired API key\n• TimeCamp API rate limiting\n• Network connectivity issues\n• TimeCamp service unavailable"
 			} else if strings.Contains(err.Error(), "HTTP request") || strings.Contains(err.Error(), "failed after retries") {
 				errorText = "❌ *Network Error*"
 				troubleshootingText = "*Possible Causes:*\n• TimeCamp API is temporarily unavailable\n• Network connectivity issues in Netlify\n• API rate limiting\n• Firewall or security restrictions"

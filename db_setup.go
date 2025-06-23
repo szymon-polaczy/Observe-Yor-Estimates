@@ -22,7 +22,51 @@ func getDBPath() string {
 	if path := os.Getenv("DATABASE_PATH"); path != "" {
 		return path
 	}
-	return "./oye.db" // default path
+
+	// Check if we're in a Netlify environment where we need writable storage
+	if isNetlifyBuild() || isNetlifyRuntime() {
+		// In Netlify functions, use /tmp which is writable
+		return "/tmp/oye.db"
+	}
+
+	return "./oye.db" // default path for local development
+}
+
+// isNetlifyRuntime checks if we're running in a Netlify serverless function (runtime)
+func isNetlifyRuntime() bool {
+	// Netlify runtime sets these environment variables
+	return os.Getenv("LAMBDA_TASK_ROOT") != "" ||
+		os.Getenv("AWS_LAMBDA_FUNCTION_NAME") != "" ||
+		os.Getenv("NETLIFY_DEV") != ""
+}
+
+// validateDatabaseWriteAccess tests if the database is writable
+func validateDatabaseWriteAccess() error {
+	logger := GetGlobalLogger()
+
+	db, err := GetDB()
+	if err != nil {
+		return fmt.Errorf("failed to connect to database: %w", err)
+	}
+
+	// Try to create a test table to verify write access
+	testQuery := `CREATE TABLE IF NOT EXISTS write_test (id INTEGER PRIMARY KEY, test_value TEXT)`
+	_, err = db.Exec(testQuery)
+	if err != nil {
+		if isNetlifyBuild() || isNetlifyRuntime() {
+			return fmt.Errorf("database is read-only in Netlify environment - full sync operations require persistent storage. Consider using external database (PostgreSQL, MySQL) for production deployments")
+		}
+		return fmt.Errorf("database write test failed: %w", err)
+	}
+
+	// Clean up test table
+	_, err = db.Exec(`DROP TABLE IF EXISTS write_test`)
+	if err != nil {
+		logger.Warnf("Failed to clean up write test table: %v", err)
+	}
+
+	logger.Debug("Database write access validated successfully")
+	return nil
 }
 
 // GetDB returns a shared connection to the SQLite database, creating it once if needed

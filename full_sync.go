@@ -24,6 +24,11 @@ func FullSyncTasksToDatabase() error {
 
 	logger.Debug("Starting FULL task synchronization with TimeCamp")
 
+	// Validate database write access before proceeding
+	if err := validateDatabaseWriteAccess(); err != nil {
+		return fmt.Errorf("database write validation failed: %w", err)
+	}
+
 	// Validate required environment variables before proceeding
 	apiKey := os.Getenv("TIMECAMP_API_KEY")
 	if apiKey == "" {
@@ -111,7 +116,6 @@ func FullSyncTimeEntriesToDatabase() error {
 	logger.Infof("Full sync: retrieving time entries from %s to %s", fromDate, toDate)
 
 	timeEntries, err := getTimeCampTimeEntriesFull(fromDate, toDate)
-	err = nil
 	if err != nil {
 		return fmt.Errorf("failed to fetch time entries from TimeCamp: %w", err)
 	}
@@ -377,6 +381,13 @@ func FullSyncAll() error {
 	logger := GetGlobalLogger()
 
 	logger.Info("Starting full synchronization of all data from TimeCamp")
+
+	// Validate database write access before attempting sync operations
+	logger.Debug("Validating database write access...")
+	if err := validateDatabaseWriteAccess(); err != nil {
+		return fmt.Errorf("database write validation failed: %w", err)
+	}
+	logger.Debug("Database write access validated successfully")
 
 	// Sync tasks first
 	logger.Info("Starting full tasks sync...")
