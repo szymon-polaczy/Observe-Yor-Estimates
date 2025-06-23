@@ -92,33 +92,63 @@ func SendSlackUpdate(period string, responseURL string, asJSON bool) {
 		return
 	}
 
-	message := formatSlackMessage(taskInfos, period)
+	projectGroups := groupTasksByProject(taskInfos)
+
+	// Sort project names for consistent output
+	var projectNames []string
+	for project := range projectGroups {
+		projectNames = append(projectNames, project)
+	}
+	sort.Slice(projectNames, func(i, j int) bool {
+		if projectNames[i] == "Other" {
+			return false
+		}
+		if projectNames[j] == "Other" {
+			return true
+		}
+		return projectNames[i] < projectNames[j]
+	})
+
+	var messages []SlackMessage
+	for _, project := range projectNames {
+		tasks := projectGroups[project]
+		message := formatProjectMessage(project, tasks, period)
+		messages = append(messages, message)
+	}
 
 	if asJSON {
-		outputJSON(message)
+		outputJSON(messages)
 		return
 	}
 
 	if responseURL != "" {
-		if err := sendDelayedResponseShared(responseURL, message); err != nil {
-			logger.Errorf("Failed to send delayed response: %v", err)
+		for _, message := range messages {
+			if err := sendDelayedResponseShared(responseURL, message); err != nil {
+				logger.Errorf("Failed to send delayed response: %v", err)
+			}
+			time.Sleep(1 * time.Second) // Avoid rate-limiting
 		}
 		return
 	}
 
 	webhookURL := os.Getenv("SLACK_WEBHOOK_URL")
 	if webhookURL == "" {
-		logger.Warn("SLACK_WEBHOOK_URL not configured. Update would contain:")
-		logger.Info(strings.Repeat("=", 50))
-		logger.Info(message.Text)
-		logger.Info(strings.Repeat("=", 50))
+		logger.Warn("SLACK_WEBHOOK_URL not configured. Updates would contain:")
+		for _, message := range messages {
+			logger.Info(strings.Repeat("=", 50))
+			logger.Info(message.Text)
+			logger.Info(strings.Repeat("=", 50))
+		}
 		return
 	}
 
-	err = sendSlackMessage(message)
-	if err != nil {
-		logger.Errorf("Failed to send Slack message: %v", err)
-		return
+	for _, message := range messages {
+		err = sendSlackMessage(message)
+		if err != nil {
+			logger.Errorf("Failed to send Slack message: %v", err)
+			// Continue sending other messages
+		}
+		time.Sleep(1 * time.Second) // Avoid rate-limiting
 	}
 
 	logger.Infof("%s Slack update sent successfully", period)
@@ -137,25 +167,30 @@ func getTaskChanges(db *sql.DB, period string) ([]TaskUpdateInfo, error) {
 	}
 }
 
-func formatSlackMessage(taskInfos []TaskUpdateInfo, period string) SlackMessage {
+func formatProjectMessage(project string, tasks []TaskUpdateInfo, period string) SlackMessage {
 	var title string
 	var date string
 	switch period {
 	case "daily":
-		title = "📊 Daily Task Update"
+		title = fmt.Sprintf("📊 Daily Task Update for %s", project)
 		date = time.Now().Format("January 2, 2006")
 	case "weekly":
-		title = "📈 Weekly Task Summary"
+		title = fmt.Sprintf("📈 Weekly Task Summary for %s", project)
 		date = time.Now().Format("January 2, 2006")
 	case "monthly":
-		title = "📅 Monthly Task Summary"
+		title = fmt.Sprintf("📅 Monthly Task Summary for %s", project)
 		date = time.Now().Format("January 2006")
+	}
+
+	if project == "Other" {
+		title = "📋 Other Tasks Update"
+	} else if project != "" {
+		title = fmt.Sprintf("📁 %s Project Update", project)
 	}
 
 	var messageText strings.Builder
 	messageText.WriteString(fmt.Sprintf("*%s* - %s\n\n", title, date))
 
-	// Header blocks
 	blocks := []Block{
 		{
 			Type: "header",
@@ -170,26 +205,10 @@ func formatSlackMessage(taskInfos []TaskUpdateInfo, period string) SlackMessage 
 		{Type: "divider"},
 	}
 
-	// Group tasks by project for better organization and block efficiency
-	projectGroups := groupTasksByProject(taskInfos)
-
-	// If we have many projects, use project grouping; otherwise use individual task blocks
-	const maxBlocksPerMessage = 50
-	const headerBlocks = 3
-	const maxProjectGroups = maxBlocksPerMessage - headerBlocks - 2 // -2 for safety and footer
-
-	if len(projectGroups) > maxProjectGroups || len(taskInfos) > 25 {
-		// Use project grouping for better space efficiency
-		blocks = append(blocks, formatProjectGroupedBlocks(projectGroups, &messageText, period)...)
-	} else {
-		// Use individual task blocks (1 block per task instead of 3)
-		for _, task := range taskInfos {
-			taskBlock := formatSingleTaskBlock(task)
-			blocks = append(blocks, taskBlock)
-
-			// Also build text version
-			appendTaskTextMessage(&messageText, task)
-		}
+	for _, task := range tasks {
+		taskBlock := formatSingleTaskBlock(task)
+		blocks = append(blocks, taskBlock)
+		appendTaskTextMessage(&messageText, task)
 	}
 
 	return SlackMessage{
@@ -264,83 +283,6 @@ func extractProjectCode(taskName string) string {
 	return "Other"
 }
 
-// formatProjectGroupedBlocks formats tasks grouped by project
-func formatProjectGroupedBlocks(projectGroups map[string][]TaskUpdateInfo, messageText *strings.Builder, period string) []Block {
-	var blocks []Block
-
-	// Sort project names for consistent output
-	var projectNames []string
-	for project := range projectGroups {
-		projectNames = append(projectNames, project)
-	}
-
-	// Sort projects, but put "Other" last
-	sort.Slice(projectNames, func(i, j int) bool {
-		if projectNames[i] == "Other" {
-			return false
-		}
-		if projectNames[j] == "Other" {
-			return true
-		}
-		return projectNames[i] < projectNames[j]
-	})
-
-	for _, project := range projectNames {
-		tasks := projectGroups[project]
-
-		var projectInfo strings.Builder
-		if project == "Other" {
-			projectInfo.WriteString("📋 Other Tasks\n\n")
-		} else {
-			projectInfo.WriteString(fmt.Sprintf("📁 %s Project\n\n", project))
-		}
-
-		for _, task := range tasks {
-			taskName := sanitizeSlackText(task.Name)
-			if len(taskName) > 70 {
-				taskName = taskName[:67] + "..."
-			}
-
-			projectInfo.WriteString(fmt.Sprintf("• *%s*\n", taskName))
-			projectInfo.WriteString(fmt.Sprintf("  %s: %s | %s: %s",
-				task.CurrentPeriod, task.CurrentTime,
-				task.PreviousPeriod, task.PreviousTime))
-
-			if task.EstimationInfo != "" {
-				estimationInfo := sanitizeSlackText(task.EstimationInfo)
-				if len(estimationInfo) > 25 {
-					estimationInfo = estimationInfo[:22] + "..."
-				}
-				projectInfo.WriteString(fmt.Sprintf(" | %s", estimationInfo))
-			}
-			projectInfo.WriteString("\n\n")
-
-			// Also build text version
-			appendTaskTextMessage(messageText, task)
-		}
-
-		blocks = append(blocks, Block{
-			Type: "section",
-			Text: &Text{Type: "mrkdwn", Text: projectInfo.String()},
-		})
-	}
-
-	// Add summary
-	totalTasks := 0
-	for _, tasks := range projectGroups {
-		totalTasks += len(tasks)
-	}
-
-	blocks = append(blocks, Block{
-		Type: "context",
-		Elements: []Element{
-			{Type: "mrkdwn", Text: fmt.Sprintf("📊 _Total: %d tasks across %d projects_", totalTasks, len(projectGroups))},
-		},
-	})
-
-	return blocks
-}
-
 func appendTaskTextMessage(builder *strings.Builder, task TaskUpdateInfo) {
 	builder.WriteString(fmt.Sprintf("*%s*", task.Name))
 	if task.EstimationInfo != "" {
@@ -371,57 +313,12 @@ func sanitizeSlackText(text string) string {
 	return text
 }
 
-func formatTaskBlock(task TaskUpdateInfo) []Block {
-	// Sanitize task name to prevent Slack block issues
-	taskName := sanitizeSlackText(task.Name)
-
-	var fields []Field
-	fields = append(fields, Field{Type: "mrkdwn", Text: fmt.Sprintf("*%s:* %s", task.CurrentPeriod, task.CurrentTime)})
-	fields = append(fields, Field{Type: "mrkdwn", Text: fmt.Sprintf("*%s:* %s", task.PreviousPeriod, task.PreviousTime)})
-
-	if task.EstimationInfo != "" {
-		// Sanitize estimation info as well
-		estimationInfo := sanitizeSlackText(task.EstimationInfo)
-		fields = append(fields, Field{Type: "mrkdwn", Text: fmt.Sprintf("*Estimation:*\n%s", estimationInfo)})
-	}
-
-	if len(task.Comments) > 0 {
-		// Sanitize and limit comments
-		var sanitizedComments []string
-		for _, comment := range task.Comments {
-			sanitizedComment := sanitizeSlackText(comment)
-			if len(sanitizedComment) > 200 { // Limit individual comments
-				sanitizedComment = sanitizedComment[:197] + "..."
-			}
-			sanitizedComments = append(sanitizedComments, sanitizedComment)
-		}
-		// Limit total number of comments displayed
-		if len(sanitizedComments) > 3 {
-			sanitizedComments = sanitizedComments[:3]
-			sanitizedComments = append(sanitizedComments, fmt.Sprintf("... and %d more comments", len(task.Comments)-3))
-		}
-		fields = append(fields, Field{Type: "mrkdwn", Text: fmt.Sprintf("*Recent Comments:*\n%s", strings.Join(sanitizedComments, "\n"))})
-	}
-
-	return []Block{
-		{
-			Type: "section",
-			Text: &Text{Type: "mrkdwn", Text: fmt.Sprintf("*%s*", taskName)},
-		},
-		{
-			Type:   "section",
-			Fields: fields,
-		},
-		{Type: "divider"},
-	}
-}
-
 func sendNoChangesNotification(period, responseURL string, asJSON bool) error {
 	message := SlackMessage{
 		Text: fmt.Sprintf("No task changes to report for %s.", period),
 	}
 	if asJSON {
-		outputJSON(message)
+		outputJSON([]SlackMessage{message})
 		return nil
 	}
 	if responseURL != "" {
@@ -467,8 +364,8 @@ func sendSlackMessage(message SlackMessage) error {
 	return nil
 }
 
-func outputJSON(message SlackMessage) {
-	json.NewEncoder(os.Stdout).Encode(message)
+func outputJSON(messages []SlackMessage) {
+	json.NewEncoder(os.Stdout).Encode(messages)
 }
 
 func parseEstimation(taskName string) (string, string) {
