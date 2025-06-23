@@ -215,23 +215,47 @@ func handleFullSyncCommand(w http.ResponseWriter, r *http.Request) {
 
 	logger.Infof("Received /full-sync command from user %s in channel %s", req.UserName, req.ChannelName)
 
-	// Send immediate acknowledgment
-	sendImmediateResponse(w, "⏳ Starting full data synchronization... This may take a few moments.", "ephemeral")
+	// Quick database connectivity check before starting
+	_, dbErr := GetDB()
+	if dbErr != nil {
+		logger.Errorf("Database connection failed: %v", dbErr)
+		sendImmediateResponse(w, fmt.Sprintf("❌ Cannot start full sync: Database connection failed - %v", dbErr), "ephemeral")
+		return
+	}
 
-	// Run full sync asynchronously
+	// Send immediate acknowledgment
+	sendImmediateResponse(w, "⏳ Starting full data synchronization... This will run in the background and you'll be notified when complete.", "ephemeral")
+
+	// Run full sync asynchronously with timeout protection
 	go func() {
-		err := FullSyncAll()
-		if err != nil {
-			logger.Errorf("Full sync failed: %v", err)
-			// Send error message to Slack
+		// Create a timeout context for the full sync operation
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+
+		done := make(chan error, 1)
+
+		// Run the sync in another goroutine to enable timeout
+		go func() {
+			done <- FullSyncAll()
+		}()
+
+		select {
+		case err := <-done:
+			if err != nil {
+				logger.Errorf("Full sync failed: %v", err)
+				sendDelayedResponse(req.ResponseURL, SlackMessage{
+					Text: fmt.Sprintf("❌ Full sync failed: %v", err),
+				})
+			} else {
+				logger.Info("Full sync completed successfully via slash command")
+				sendDelayedResponse(req.ResponseURL, SlackMessage{
+					Text: "✅ Full data synchronization completed successfully!",
+				})
+			}
+		case <-ctx.Done():
+			logger.Error("Full sync timed out after 20 seconds")
 			sendDelayedResponse(req.ResponseURL, SlackMessage{
-				Text: fmt.Sprintf("❌ Full sync failed: %v", err),
-			})
-		} else {
-			logger.Info("Full sync completed successfully via slash command")
-			// Send success message
-			sendDelayedResponse(req.ResponseURL, SlackMessage{
-				Text: "✅ Full data synchronization completed successfully!",
+				Text: "⚠️ Full sync timed out. This may indicate database connectivity issues or the operation is taking longer than expected. Please check the logs and try again.",
 			})
 		}
 	}()
@@ -239,6 +263,17 @@ func handleFullSyncCommand(w http.ResponseWriter, r *http.Request) {
 
 // handleHealthCheck handles a simple health check endpoint
 func handleHealthCheck(w http.ResponseWriter, r *http.Request) {
+	logger := GetGlobalLogger()
+
+	// Test database connectivity
+	_, err := GetDB()
+	if err != nil {
+		logger.Errorf("Health check failed - Database connection error: %v", err)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte(fmt.Sprintf("Database connection failed: %v", err)))
+		return
+	}
+
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
+	w.Write([]byte("OK - Database connected"))
 }

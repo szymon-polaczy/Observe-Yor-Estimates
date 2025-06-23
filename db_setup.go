@@ -116,13 +116,13 @@ func GetDB() (*sql.DB, error) {
 			return
 		}
 
-		// Set connection pool settings with timeouts
-		db.SetConnMaxLifetime(time.Minute * 3)
-		db.SetMaxOpenConns(10)
-		db.SetMaxIdleConns(5)
+		// Set connection pool settings with timeouts optimized for serverless
+		db.SetConnMaxLifetime(time.Minute * 1) // Reduced from 3 minutes
+		db.SetMaxOpenConns(5)                  // Reduced from 10
+		db.SetMaxIdleConns(2)                  // Reduced from 5
 
-		// Test the connection with timeout
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		// Test the connection with shorter timeout for faster failure detection
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
 		if err := db.PingContext(ctx); err != nil {
