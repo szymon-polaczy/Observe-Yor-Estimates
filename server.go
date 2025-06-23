@@ -68,12 +68,107 @@ type SlackCommandResponse struct {
 	Blocks       []Block `json:"blocks,omitempty"`
 }
 
+// Global smart router instance
+var globalRouter *SmartRouter
+
 // setupSlackRoutes sets up the HTTP routes for Slack slash commands
 func setupSlackRoutes() {
-	http.HandleFunc("/slack/update", handleUpdateCommand)
-	http.HandleFunc("/slack/full-sync", handleFullSyncCommand)
-	http.HandleFunc("/slack/process-job", handleJobProcessor)
+	// Initialize the smart router
+	globalRouter = NewSmartRouter()
+
+	// Unified handler for all OYE commands
+	http.HandleFunc("/slack/oye", handleUnifiedOYECommand)
 	http.HandleFunc("/health", handleHealthCheck)
+}
+
+// handleUnifiedOYECommand handles the new unified /oye command
+func handleUnifiedOYECommand(w http.ResponseWriter, r *http.Request) {
+	logger := GetGlobalLogger()
+
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	req, err := parseSlackCommand(r)
+	if err != nil {
+		logger.Errorf("Failed to parse slash command: %v", err)
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	if err := verifySlackRequest(req); err != nil {
+		logger.Errorf("Failed to verify Slack request: %v", err)
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	logger.Infof("Received /oye command from user %s: %s", req.UserName, req.Text)
+
+	text := strings.ToLower(strings.TrimSpace(req.Text))
+
+	// Route to appropriate handler based on command content
+	if text == "" || text == "help" {
+		sendUnifiedHelp(w, req)
+		return
+	}
+
+	if strings.Contains(text, "sync") || text == "full-sync" {
+		// Handle full sync request
+		if err := globalRouter.HandleFullSyncRequest(req); err != nil {
+			logger.Errorf("Failed to handle full sync request: %v", err)
+			sendImmediateResponse(w, "❌ Failed to process sync request", "ephemeral")
+		} else {
+			sendImmediateResponse(w, "⏳ Full sync started! I'll update you with progress...", "ephemeral")
+		}
+		return
+	}
+
+	if strings.Contains(text, "config") || strings.Contains(text, "preferences") || strings.Contains(text, "settings") {
+		// Handle configuration request
+		if err := globalRouter.HandleConfigRequest(req); err != nil {
+			logger.Errorf("Failed to handle config request: %v", err)
+			sendImmediateResponse(w, "❌ Failed to process config request", "ephemeral")
+		} else {
+			sendImmediateResponse(w, "✅ Preferences updated!", "ephemeral")
+		}
+		return
+	}
+
+	// Default to update request (daily, weekly, monthly, or user's default)
+	if err := globalRouter.HandleUpdateRequest(req); err != nil {
+		logger.Errorf("Failed to handle update request: %v", err)
+		sendImmediateResponse(w, "❌ Failed to process update request", "ephemeral")
+	} else {
+		sendImmediateResponse(w, "⏳ Generating your update! I'll show progress as I work...", "ephemeral")
+	}
+}
+
+func sendUnifiedHelp(w http.ResponseWriter, req *SlackCommandRequest) {
+	helpText := "*🎯 OYE (Observe-Yor-Estimates) Commands*\n\n" +
+		"*Quick Updates:*\n" +
+		"• `/oye` or `/oye daily` - Daily task update\n" +
+		"• `/oye weekly` - Weekly task summary\n" +
+		"• `/oye monthly` - Monthly task report\n\n" +
+		"*Data Management:*\n" +
+		"• `/oye sync` - Full data synchronization\n\n" +
+		"*Settings:*\n" +
+		"• `/oye config` - View your preferences\n" +
+		"• `/oye config public` - Share updates in channel\n" +
+		"• `/oye config private` - Keep updates private\n" +
+		"• `/oye config daily/weekly/monthly` - Set default period\n\n" +
+		"*Tips:*\n" +
+		"• Updates are private by default (only you see them)\n" +
+		"• Use \"public\" in any command to share with channel\n" +
+		"• The system remembers your preferences"
+
+	response := SlackCommandResponse{
+		ResponseType: "ephemeral",
+		Text:         helpText,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
 
 // parseSlackCommand parses the form data from a Slack slash command

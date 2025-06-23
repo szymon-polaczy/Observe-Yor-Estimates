@@ -1,6 +1,8 @@
-# Deployment Guide - Netlify Functions + Go CLI Architecture
+# Deployment Guide - Unified OYE System
 
-This guide covers deploying the **new timeout-resistant architecture** using Netlify Functions with Go CLI backend.
+This guide covers deploying the **completely redesigned OYE system** with context-aware Slack responses and unified command interface.
+
+**⚠️ Breaking Changes**: This version removes all legacy endpoints. Only the new `/oye` command is supported.
 
 ## 🎯 Architecture Summary
 
@@ -39,7 +41,7 @@ DATABASE_URL=postgresql://username:password@host:port/database
 TIMECAMP_API_KEY=your_timecamp_api_key
 
 # Slack Integration  
-SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL
+SLACK_BOT_TOKEN=xoxb-your-bot-token
 SLACK_VERIFICATION_TOKEN=your_slack_verification_token
 ```
 
@@ -116,13 +118,10 @@ export DATABASE_URL="your_postgresql_url"
 
 After deployment, your functions will be available at:
 
-### Slack Command Endpoints
+### Slack Command Endpoint
 ```bash
-# Update commands
-/.netlify/functions/slack-update
-
-# Full sync command  
-/.netlify/functions/slack-full-sync
+# Unified OYE command (replaces all old commands)
+/.netlify/functions/slack-oye
 ```
 
 ### Manual API Endpoints
@@ -143,20 +142,20 @@ After deployment, your functions will be available at:
 
 ### Update Slack App Settings
 
-Your Slack app slash commands should point to:
+**⚠️ Delete ALL old slash commands and create a single new one:**
 
 ```bash
 # Replace YOUR_SITE with your Netlify site name
-https://YOUR_SITE.netlify.app/.netlify/functions/slack-update
-https://YOUR_SITE.netlify.app/.netlify/functions/slack-full-sync
+https://YOUR_SITE.netlify.app/.netlify/functions/slack-oye
 ```
 
 ### Slash Command Setup
 
 | Command | URL | Description |
 |---------|-----|-------------|
-| `/daily-update` | `/.netlify/functions/slack-update` | Daily/weekly/monthly updates |
-| `/full-sync` | `/.netlify/functions/slack-full-sync` | Complete data sync |
+| `/oye` | `/.netlify/functions/slack-oye` | All updates, syncing, and configuration |
+
+**Delete these old commands:** `/daily-update`, `/weekly-update`, `/monthly-update`, `/full-sync`
 
 ## ⏰ Scheduled Tasks Setup
 

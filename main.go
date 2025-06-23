@@ -184,6 +184,9 @@ func showHelp() {
 	fmt.Println("  job-processor            - Run as standalone job processor server")
 	fmt.Println("  --version, version         - Show application version")
 	fmt.Println("  --help, -h, help         - Show help message")
+	fmt.Println("\nSlack Integration:")
+	fmt.Println("  Set up /oye command in Slack to point to /slack/oye endpoint")
+	fmt.Println("  Requires SLACK_BOT_TOKEN environment variable for direct responses")
 }
 
 func getResponseURL() string {

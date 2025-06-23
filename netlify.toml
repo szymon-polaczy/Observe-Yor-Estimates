@@ -13,13 +13,19 @@
   included_files = ["bin/**"]
 
 [[redirects]]
-  from = "/api/*"
-  to = "/.netlify/functions/:splat"
+  from = "/slack/oye"
+  to = "/.netlify/functions/slack-oye"
   status = 200
   force = true
 
 [[redirects]]
-  from = "/slack/*"
-  to = "/.netlify/functions/:splat"
+  from = "/health"
+  to = "/.netlify/functions/health"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/debug"
+  to = "/.netlify/functions/debug"
   status = 200
   force = true
