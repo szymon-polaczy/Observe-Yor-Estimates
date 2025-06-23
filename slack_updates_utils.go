@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,15 +14,15 @@ import (
 	"time"
 )
 
-// TaskTimeInfo represents time tracking information for a task
-type TaskTimeInfo struct {
-	TaskID           int
+type TaskUpdateInfo struct {
 	Name             string
-	YesterdayTime    string
-	TodayTime        string
-	StartTime        string
 	EstimationInfo   string
 	EstimationStatus string
+	CurrentPeriod    string
+	CurrentTime      string
+	PreviousPeriod   string
+	PreviousTime     string
+	DaysWorked       int
 	Comments         []string
 }
 
@@ -64,37 +65,168 @@ type Accessory struct {
 	Text *Text  `json:"text,omitempty"`
 }
 
-// parseEstimation extracts estimation information from task name
-func parseEstimation(taskName string) (string, string) {
+func SendSlackUpdate(period string, responseURL string, asJSON bool) {
 	logger := GetGlobalLogger()
+	logger.Infof("Starting %s Slack update", period)
 
-	// Regex to match patterns like [7-13] or [13-29]
-	re := regexp.MustCompile(`\[(\d+)-(\d+)\]`)
-	matches := re.FindStringSubmatch(taskName)
-
-	if len(matches) != 3 {
-		logger.Debugf("No estimation pattern found in task name: %s", taskName)
-		return "", "no estimation given"
+	db, err := GetDB()
+	if err != nil {
+		logger.Errorf("Failed to open database connection: %v", err)
+		sendFailureNotification("Database connection failed", err)
+		return
 	}
 
-	optimistic, err1 := strconv.Atoi(matches[1])
-	pessimistic, err2 := strconv.Atoi(matches[2])
-
-	if err1 != nil || err2 != nil {
-		logger.Warnf("Failed to parse estimation numbers from task name '%s': optimistic=%v, pessimistic=%v",
-			taskName, err1, err2)
-		return "", "invalid estimation format"
+	taskInfos, err := getTaskChanges(db, period)
+	if err != nil {
+		logger.Errorf("Failed to get %s task changes: %v", period, err)
+		sendFailureNotification("Failed to retrieve task changes", err)
+		return
 	}
 
-	if optimistic > pessimistic {
-		logger.Warnf("Invalid estimation range in task '%s': optimistic (%d) > pessimistic (%d)",
-			taskName, optimistic, pessimistic)
-		return fmt.Sprintf("Estimation: %d-%d hours", optimistic, pessimistic), "broken estimation (optimistic > pessimistic)"
+	if len(taskInfos) == 0 {
+		logger.Infof("No task changes to report for %s", period)
+		if err := sendNoChangesNotification(period, responseURL); err != nil {
+			logger.Errorf("Failed to send 'no changes' notification: %v", err)
+		}
+		return
 	}
 
-	logger.Debugf("Parsed estimation for task '%s': %d-%d hours", taskName, optimistic, pessimistic)
+	message := formatSlackMessage(taskInfos, period)
 
-	return fmt.Sprintf("Estimation: %d-%d hours", optimistic, pessimistic), ""
+	if asJSON {
+		outputJSON(message)
+		return
+	}
+
+	if responseURL != "" {
+		if err := sendDelayedResponse(responseURL, message); err != nil {
+			logger.Errorf("Failed to send delayed response: %v", err)
+		}
+		return
+	}
+
+	webhookURL := os.Getenv("SLACK_WEBHOOK_URL")
+	if webhookURL == "" {
+		logger.Warn("SLACK_WEBHOOK_URL not configured. Update would contain:")
+		logger.Info(strings.Repeat("=", 50))
+		logger.Info(message.Text)
+		logger.Info(strings.Repeat("=", 50))
+		return
+	}
+
+	err = sendSlackMessage(message)
+	if err != nil {
+		logger.Errorf("Failed to send Slack message: %v", err)
+		return
+	}
+
+	logger.Infof("%s Slack update sent successfully", period)
+}
+
+func getTaskChanges(db *sql.DB, period string) ([]TaskUpdateInfo, error) {
+	switch period {
+	case "daily":
+		return GetTaskTimeEntries(db)
+	case "weekly":
+		return GetWeeklyTaskTimeEntries(db)
+	case "monthly":
+		return GetMonthlyTaskTimeEntries(db)
+	default:
+		return nil, fmt.Errorf("invalid period: %s", period)
+	}
+}
+
+func formatSlackMessage(taskInfos []TaskUpdateInfo, period string) SlackMessage {
+	var title string
+	var date string
+	switch period {
+	case "daily":
+		title = "📊 Daily Task Update"
+		date = time.Now().Format("January 2, 2006")
+	case "weekly":
+		title = "📈 Weekly Task Summary"
+		date = time.Now().Format("January 2, 2006")
+	case "monthly":
+		title = "📅 Monthly Task Summary"
+		date = time.Now().Format("January 2006")
+	}
+
+	var messageText strings.Builder
+	messageText.WriteString(fmt.Sprintf("*%s* - %s\n\n", title, date))
+
+	blocks := []Block{
+		{
+			Type: "header",
+			Text: &Text{Type: "plain_text", Text: title},
+		},
+		{
+			Type: "context",
+			Elements: []Element{
+				{Type: "mrkdwn", Text: date},
+			},
+		},
+		{Type: "divider"},
+	}
+
+	for _, task := range taskInfos {
+		taskBlock := formatTaskBlock(task)
+		blocks = append(blocks, taskBlock...)
+
+		messageText.WriteString(fmt.Sprintf("*%s*", task.Name))
+		if task.EstimationInfo != "" {
+			messageText.WriteString(fmt.Sprintf(" | %s", task.EstimationInfo))
+		}
+		messageText.WriteString(fmt.Sprintf("\nTime worked: %s: %s, %s: %s", task.CurrentPeriod, task.CurrentTime, task.PreviousPeriod, task.PreviousTime))
+		if task.DaysWorked > 0 {
+			messageText.WriteString(fmt.Sprintf(", Days worked: %d", task.DaysWorked))
+		}
+		messageText.WriteString("\n\n")
+	}
+
+	return SlackMessage{
+		Text:   messageText.String(),
+		Blocks: blocks,
+	}
+}
+
+func formatTaskBlock(task TaskUpdateInfo) []Block {
+	var fields []Field
+	fields = append(fields, Field{Type: "mrkdwn", Text: fmt.Sprintf("*%s:* %s", task.CurrentPeriod, task.CurrentTime)})
+	fields = append(fields, Field{Type: "mrkdwn", Text: fmt.Sprintf("*%s:* %s", task.PreviousPeriod, task.PreviousTime)})
+
+	if task.DaysWorked > 0 {
+		fields = append(fields, Field{Type: "mrkdwn", Text: fmt.Sprintf("*Days Worked:*\n%d", task.DaysWorked)})
+	}
+
+	if task.EstimationInfo != "" {
+		fields = append(fields, Field{Type: "mrkdwn", Text: fmt.Sprintf("*Estimation:*\n%s", task.EstimationInfo)})
+	}
+
+	if len(task.Comments) > 0 {
+		fields = append(fields, Field{Type: "mrkdwn", Text: fmt.Sprintf("*Recent Comments:*\n%s", strings.Join(task.Comments, "\n"))})
+	}
+
+	return []Block{
+		{
+			Type: "section",
+			Text: &Text{Type: "mrkdwn", Text: fmt.Sprintf("*%s*", task.Name)},
+		},
+		{
+			Type:   "section",
+			Fields: fields,
+		},
+		{Type: "divider"},
+	}
+}
+
+func sendNoChangesNotification(period, responseURL string) error {
+	message := SlackMessage{
+		Text: fmt.Sprintf("No task changes to report for %s.", period),
+	}
+	if responseURL != "" {
+		return sendDelayedResponse(responseURL, message)
+	}
+	return sendSlackMessage(message)
 }
 
 // sendSlackMessage sends a message to Slack using the webhook
@@ -123,7 +255,41 @@ func sendSlackMessage(message SlackMessage) error {
 	return nil
 }
 
-// sendFailureNotification sends a notification about system failures
+func outputJSON(message SlackMessage) {
+	json.NewEncoder(os.Stdout).Encode(message)
+}
+
+func parseEstimation(taskName string) (string, string) {
+	logger := GetGlobalLogger()
+
+	re := regexp.MustCompile(`\[(\d+)-(\d+)\]`)
+	matches := re.FindStringSubmatch(taskName)
+
+	if len(matches) != 3 {
+		logger.Debugf("No estimation pattern found in task name: %s", taskName)
+		return "", "no estimation given"
+	}
+
+	optimistic, err1 := strconv.Atoi(matches[1])
+	pessimistic, err2 := strconv.Atoi(matches[2])
+
+	if err1 != nil || err2 != nil {
+		logger.Warnf("Failed to parse estimation numbers from task name '%s': optimistic=%v, pessimistic=%v",
+			taskName, err1, err2)
+		return "", "invalid estimation format"
+	}
+
+	if optimistic > pessimistic {
+		logger.Warnf("Invalid estimation range in task '%s': optimistic (%d) > pessimistic (%d)",
+			taskName, optimistic, pessimistic)
+		return fmt.Sprintf("Estimation: %d-%d hours", optimistic, pessimistic), "broken estimation (optimistic > pessimistic)"
+	}
+
+	logger.Debugf("Parsed estimation for task '%s': %d-%d hours", taskName, optimistic, pessimistic)
+
+	return fmt.Sprintf("Estimation: %d-%d hours", optimistic, pessimistic), ""
+}
+
 func sendFailureNotification(operation string, err error) {
 	logger := GetGlobalLogger()
 
@@ -159,7 +325,6 @@ func sendFailureNotification(operation string, err error) {
 	}
 }
 
-// parseTimeToSeconds converts time strings like "1h 30m" or "45m" back to seconds
 func parseTimeToSeconds(timeStr string) int {
 	if timeStr == "0h 0m" || timeStr == "" {
 		return 0
@@ -167,28 +332,23 @@ func parseTimeToSeconds(timeStr string) int {
 
 	var hours, minutes int
 
-	// Try to parse "Xh Ym" format
 	if strings.Contains(timeStr, "h") && strings.Contains(timeStr, "m") {
 		fmt.Sscanf(timeStr, "%dh %dm", &hours, &minutes)
 	} else if strings.Contains(timeStr, "h") {
-		// Just hours
 		fmt.Sscanf(timeStr, "%dh", &hours)
 	} else if strings.Contains(timeStr, "m") {
-		// Just minutes
 		fmt.Sscanf(timeStr, "%dm", &minutes)
 	}
 
 	return hours*3600 + minutes*60
 }
 
-// getColorIndicator returns emoji and formatting based on percentage
 func getColorIndicator(percentage float64) (string, string, bool) {
 	var emoji, description string
 	var isBold bool
 
-	// Get thresholds from environment variables with defaults
-	midPoint := 50.0  // default
-	highPoint := 90.0 // default
+	midPoint := 50.0
+	highPoint := 90.0
 
 	if midPointStr := os.Getenv("MID_POINT"); midPointStr != "" {
 		if parsed, err := strconv.ParseFloat(midPointStr, 64); err == nil {
@@ -223,13 +383,9 @@ func getColorIndicator(percentage float64) (string, string, bool) {
 	return emoji, description, isBold
 }
 
-// calculateTimeUsagePercentage calculates the percentage of estimation used based on total time spent (daily)
-func calculateTimeUsagePercentage(task TaskTimeInfo) (float64, int, error) {
-	logger := GetGlobalLogger()
-
-	// Parse the pessimistic (maximum) estimation from task name
+func calculateTimeUsagePercentage(currentTime, previousTime, estimation string) (float64, int, error) {
 	re := regexp.MustCompile(`\[(\d+)-(\d+)\]`)
-	matches := re.FindStringSubmatch(task.Name)
+	matches := re.FindStringSubmatch(estimation)
 
 	if len(matches) != 3 {
 		return 0, 0, fmt.Errorf("no estimation pattern found")
@@ -240,72 +396,16 @@ func calculateTimeUsagePercentage(task TaskTimeInfo) (float64, int, error) {
 		return 0, 0, fmt.Errorf("failed to parse pessimistic estimation: %w", err)
 	}
 
-	// Convert time strings back to seconds for calculation
-	yesterdaySeconds := parseTimeToSeconds(task.YesterdayTime)
-	todaySeconds := parseTimeToSeconds(task.TodayTime)
-	totalSeconds := yesterdaySeconds + todaySeconds
+	currentSeconds := parseTimeToSeconds(currentTime)
+	previousSeconds := parseTimeToSeconds(previousTime)
+	totalSeconds := currentSeconds + previousSeconds
 
-	// Convert pessimistic estimation from hours to seconds
 	pessimisticSeconds := pessimistic * 3600
 
-	// Calculate percentage
+	if pessimisticSeconds == 0 {
+		return 0, totalSeconds, nil
+	}
+
 	percentage := (float64(totalSeconds) / float64(pessimisticSeconds)) * 100
-
-	logger.Debugf("Task '%s': %d total seconds vs %d pessimistic seconds = %.1f%%",
-		task.Name, totalSeconds, pessimisticSeconds, percentage)
-
-	return percentage, pessimisticSeconds, nil
-}
-
-// sendDelayedResponseToURL sends a delayed response to Slack using a response URL
-// This is used when the application is called from Netlify functions with a response URL parameter
-func sendDelayedResponseToURL(responseURL string, message SlackMessage) error {
-	logger := GetGlobalLogger()
-
-	// Convert SlackMessage to SlackCommandResponse format for consistency with slash commands
-	response := struct {
-		ResponseType string  `json:"response_type"`
-		Text         string  `json:"text"`
-		Blocks       []Block `json:"blocks,omitempty"`
-	}{
-		ResponseType: "in_channel", // Visible to everyone in the channel
-		Text:         message.Text,
-		Blocks:       message.Blocks,
-	}
-
-	jsonData, err := json.Marshal(response)
-	if err != nil {
-		return fmt.Errorf("error marshaling response: %w", err)
-	}
-
-	resp, err := http.Post(responseURL, "application/json", bytes.NewBuffer(jsonData))
-	if err != nil {
-		return fmt.Errorf("error sending delayed response: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("slack API returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	logger.Debug("Successfully sent delayed response to Slack via response URL")
-	return nil
-}
-
-// outputJSON outputs a SlackMessage as JSON to stdout for use with Netlify functions
-func outputJSON(message SlackMessage) {
-	jsonData, err := json.Marshal(message)
-	if err != nil {
-		logger := GetGlobalLogger()
-		logger.Errorf("Error marshaling SlackMessage to JSON: %v", err)
-		// Fallback to simple error message
-		fallbackMessage := SlackMessage{
-			Text: "❌ Error: Failed to generate response",
-		}
-		fallbackJSON, _ := json.Marshal(fallbackMessage)
-		fmt.Print(string(fallbackJSON))
-		return
-	}
-	fmt.Print(string(jsonData))
+	return percentage, totalSeconds, nil
 }

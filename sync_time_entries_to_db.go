@@ -45,41 +45,6 @@ type ProcessedTimeEntry struct {
 	ModifyTime  string
 }
 
-// TimeEntryInfo represents aggregated time information for a task
-type TimeEntryInfo struct {
-	TaskID           int
-	TaskName         string
-	YesterdaySeconds int
-	TodaySeconds     int
-	FirstEntryTime   *time.Time
-}
-
-// WeeklyTaskTimeInfo represents aggregated weekly time information for a task
-type WeeklyTaskTimeInfo struct {
-	TaskID           int
-	Name             string
-	WeeklyTime       string
-	LastWeekTime     string
-	StartTime        string
-	EstimationInfo   string
-	EstimationStatus string
-	DaysWorked       int
-	Comments         []string
-}
-
-// MonthlyTaskTimeInfo represents aggregated monthly time information for a task
-type MonthlyTaskTimeInfo struct {
-	TaskID           int
-	Name             string
-	MonthlyTime      string
-	LastMonthTime    string
-	StartTime        string
-	EstimationInfo   string
-	EstimationStatus string
-	DaysWorked       int
-	Comments         []string
-}
-
 // processTimeEntry validates and converts a JsonTimeEntry to ProcessedTimeEntry
 func processTimeEntry(entry JsonTimeEntry, logger interface{ Warnf(string, ...interface{}) }) (ProcessedTimeEntry, error) {
 	var processed ProcessedTimeEntry
@@ -341,363 +306,177 @@ func getTimeCampTimeEntries(fromDate, toDate string) ([]JsonTimeEntry, error) {
 }
 
 // GetTaskTimeEntries retrieves time entry information for tasks, aggregated by date
-func GetTaskTimeEntries(db *sql.DB) ([]TaskTimeInfo, error) {
+func GetTaskTimeEntries(db *sql.DB) ([]TaskUpdateInfo, error) {
 	logger := GetGlobalLogger()
+	logger.Debug("Querying database for daily task time entries")
 
-	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
 	today := time.Now().Format("2006-01-02")
+	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
 
-	query := `
-		WITH task_time_data AS (
-			SELECT 
-				t.task_id,
-				t.name,
-				COALESCE(SUM(CASE WHEN te.date = ? THEN te.duration ELSE 0 END), 0) as yesterday_seconds,
-				COALESCE(SUM(CASE WHEN te.date = ? THEN te.duration ELSE 0 END), 0) as today_seconds,
-				MIN(te.start_time) as first_entry_time
-			FROM tasks t
-			LEFT JOIN time_entries te ON t.task_id = te.task_id 
-				AND te.date IN (?, ?)
-			WHERE te.task_id IS NOT NULL
-			GROUP BY t.task_id, t.name
-			HAVING yesterday_seconds > 0 OR today_seconds > 0
-		)
-		SELECT 
-			task_id,
-			name,
-			yesterday_seconds,
-			today_seconds,
-			first_entry_time
-		FROM task_time_data
-		ORDER BY (yesterday_seconds + today_seconds) DESC
-		LIMIT 20
-	`
-
-	logger.Debugf("Querying time entries for yesterday (%s) and today (%s)", yesterday, today)
-
-	rows, err := db.Query(query, yesterday, today, yesterday, today)
+	rows, err := db.Query(`
+		SELECT
+			t.id,
+			t.name,
+			SUM(CASE WHEN te.date = ? THEN te.duration ELSE 0 END) as today_seconds,
+			SUM(CASE WHEN te.date = ? THEN te.duration ELSE 0 END) as yesterday_seconds
+		FROM tasks t
+		LEFT JOIN time_entries te ON t.id = te.task_id AND te.date IN (?, ?)
+		GROUP BY t.id, t.name
+		HAVING today_seconds > 0 OR yesterday_seconds > 0
+		ORDER BY t.name;
+	`, today, yesterday, today, yesterday)
 	if err != nil {
-		return nil, fmt.Errorf("error querying time entries: %w", err)
+		return nil, fmt.Errorf("failed to query task time entries: %w", err)
 	}
-	defer CloseWithErrorLog(rows, "database rows")
+	defer rows.Close()
 
-	var taskInfos []TaskTimeInfo
-	errorCount := 0
-
+	var tasks []TaskUpdateInfo
 	for rows.Next() {
-		var taskInfo TaskTimeInfo
-		var yesterdaySeconds, todaySeconds int
-		var firstEntryTimeStr sql.NullString
+		var taskID int
+		var name string
+		var todaySeconds, yesterdaySeconds int
+		if err := rows.Scan(&taskID, &name, &todaySeconds, &yesterdaySeconds); err != nil {
+			return nil, fmt.Errorf("failed to scan task time entry: %w", err)
+		}
 
-		err := rows.Scan(
-			&taskInfo.TaskID,
-			&taskInfo.Name,
-			&yesterdaySeconds,
-			&todaySeconds,
-			&firstEntryTimeStr,
-		)
+		comments, err := getTaskComments(db, taskID, yesterday, today)
 		if err != nil {
-			logger.Errorf("Error scanning time entry row: %v", err)
-			errorCount++
-			continue
+			logger.Warnf("failed to get comments for task %d: %v", taskID, err)
 		}
 
-		// Convert seconds to duration strings
-		taskInfo.YesterdayTime = formatDuration(yesterdaySeconds)
-		taskInfo.TodayTime = formatDuration(todaySeconds)
+		estimation, status := parseEstimation(name)
 
-		// Handle start time
-		if firstEntryTimeStr.Valid {
-			if parsedTime, parseErr := time.Parse("15:04:05", firstEntryTimeStr.String); parseErr == nil {
-				taskInfo.StartTime = parsedTime.Format("15:04")
-			} else {
-				taskInfo.StartTime = firstEntryTimeStr.String
-			}
-		} else {
-			taskInfo.StartTime = "N/A"
-		}
-
-		// Extract estimation information from task name
-		taskInfo.EstimationInfo, taskInfo.EstimationStatus = parseEstimation(taskInfo.Name)
-
-		// Get comments for this task from both yesterday and today
-		comments, err := getTaskComments(db, taskInfo.TaskID, yesterday, today)
-		if err != nil {
-			logger.Warnf("Failed to get comments for task %d: %v", taskInfo.TaskID, err)
-			comments = []string{} // Empty slice if error
-		}
-		taskInfo.Comments = comments
-
-		taskInfos = append(taskInfos, taskInfo)
+		tasks = append(tasks, TaskUpdateInfo{
+			Name:             name,
+			CurrentPeriod:    "Today",
+			CurrentTime:      formatDuration(todaySeconds),
+			PreviousPeriod:   "Yesterday",
+			PreviousTime:     formatDuration(yesterdaySeconds),
+			Comments:         comments,
+			EstimationInfo:   estimation,
+			EstimationStatus: status,
+		})
 	}
 
-	// Check for iteration errors
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error during rows iteration: %w", err)
-	}
-
-	if errorCount > 0 {
-		logger.Warnf("Encountered %d errors while processing time entry rows", errorCount)
-	}
-
-	logger.Debugf("Successfully retrieved %d task time entries", len(taskInfos))
-	return taskInfos, nil
+	return tasks, nil
 }
 
-// GetWeeklyTaskTimeEntries retrieves time entry information for tasks for the past week vs previous week
-func GetWeeklyTaskTimeEntries(db *sql.DB) ([]WeeklyTaskTimeInfo, error) {
+// GetWeeklyTaskTimeEntries retrieves weekly time entry information for tasks
+func GetWeeklyTaskTimeEntries(db *sql.DB) ([]TaskUpdateInfo, error) {
 	logger := GetGlobalLogger()
+	logger.Debug("Querying database for weekly task time entries")
 
-	// Calculate date ranges for current and previous week
-	now := time.Now()
-
-	// Start of current week (Monday)
-	thisWeekStart := now.AddDate(0, 0, -int(now.Weekday())+1)
-	if now.Weekday() == time.Sunday {
-		thisWeekStart = thisWeekStart.AddDate(0, 0, -7)
-	}
-	thisWeekEnd := thisWeekStart.AddDate(0, 0, 6)
-
-	// Previous week
+	thisWeekStart := time.Now().AddDate(0, 0, -int(time.Now().Weekday()))
 	lastWeekStart := thisWeekStart.AddDate(0, 0, -7)
-	lastWeekEnd := thisWeekStart.AddDate(0, 0, -1)
 
-	thisWeekStartStr := thisWeekStart.Format("2006-01-02")
-	thisWeekEndStr := thisWeekEnd.Format("2006-01-02")
-	lastWeekStartStr := lastWeekStart.Format("2006-01-02")
-	lastWeekEndStr := lastWeekEnd.Format("2006-01-02")
-
-	query := `
-		WITH weekly_task_data AS (
-			SELECT 
-				t.task_id,
-				t.name,
-				COALESCE(SUM(CASE WHEN te.date BETWEEN ? AND ? THEN te.duration ELSE 0 END), 0) as thisweek_seconds,
-				COALESCE(SUM(CASE WHEN te.date BETWEEN ? AND ? THEN te.duration ELSE 0 END), 0) as lastweek_seconds,
-				MIN(te.start_time) as first_entry_time,
-				COUNT(DISTINCT CASE WHEN te.date BETWEEN ? AND ? THEN te.date END) as days_worked
-			FROM tasks t
-			LEFT JOIN time_entries te ON t.task_id = te.task_id 
-				AND te.date BETWEEN ? AND ?
-			WHERE te.task_id IS NOT NULL
-			GROUP BY t.task_id, t.name
-			HAVING thisweek_seconds > 0 OR lastweek_seconds > 0
-		)
-		SELECT 
-			task_id,
-			name,
-			thisweek_seconds,
-			lastweek_seconds,
-			first_entry_time,
-			days_worked
-		FROM weekly_task_data
-		ORDER BY (thisweek_seconds + lastweek_seconds) DESC
-		LIMIT 10
-	`
-
-	logger.Debugf("Querying weekly time entries: this week (%s to %s), last week (%s to %s)",
-		thisWeekStartStr, thisWeekEndStr, lastWeekStartStr, lastWeekEndStr)
-
-	rows, err := db.Query(query,
-		thisWeekStartStr, thisWeekEndStr, // this week range
-		lastWeekStartStr, lastWeekEndStr, // last week range
-		thisWeekStartStr, thisWeekEndStr, // this week range for days_worked count
-		lastWeekStartStr, thisWeekEndStr) // extended range for all entries
+	rows, err := db.Query(`
+		SELECT
+			t.id,
+			t.name,
+			SUM(CASE WHEN te.date >= ? THEN te.duration ELSE 0 END) as this_week_seconds,
+			SUM(CASE WHEN te.date >= ? AND te.date < ? THEN te.duration ELSE 0 END) as last_week_seconds,
+			COUNT(DISTINCT te.date) as days_worked
+		FROM tasks t
+		LEFT JOIN time_entries te ON t.id = te.task_id
+		GROUP BY t.id, t.name
+		HAVING this_week_seconds > 0 OR last_week_seconds > 0
+		ORDER BY (this_week_seconds + last_week_seconds) DESC;
+	`, thisWeekStart.Format("2006-01-02"), lastWeekStart.Format("2006-01-02"), thisWeekStart.Format("2006-01-02"))
 	if err != nil {
-		return nil, fmt.Errorf("error querying weekly time entries: %w", err)
+		return nil, fmt.Errorf("failed to query weekly task time entries: %w", err)
 	}
-	defer CloseWithErrorLog(rows, "database rows")
+	defer rows.Close()
 
-	var taskInfos []WeeklyTaskTimeInfo
-	errorCount := 0
-
+	var tasks []TaskUpdateInfo
 	for rows.Next() {
-		var taskInfo WeeklyTaskTimeInfo
-		var thisWeekSeconds, lastWeekSeconds int
-		var firstEntryTimeStr sql.NullString
+		var taskID int
+		var name string
+		var thisWeekSeconds, lastWeekSeconds, daysWorked int
+		if err := rows.Scan(&taskID, &name, &thisWeekSeconds, &lastWeekSeconds, &daysWorked); err != nil {
+			return nil, fmt.Errorf("failed to scan weekly task time entry: %w", err)
+		}
 
-		err := rows.Scan(
-			&taskInfo.TaskID,
-			&taskInfo.Name,
-			&thisWeekSeconds,
-			&lastWeekSeconds,
-			&firstEntryTimeStr,
-			&taskInfo.DaysWorked,
-		)
+		comments, err := getTaskComments(db, taskID, lastWeekStart.Format("2006-01-02"), time.Now().Format("2006-01-02"))
 		if err != nil {
-			logger.Errorf("Error scanning weekly time entry row: %v", err)
-			errorCount++
-			continue
+			logger.Warnf("failed to get comments for task %d: %v", taskID, err)
 		}
 
-		// Convert seconds to duration strings
-		taskInfo.WeeklyTime = formatDuration(thisWeekSeconds)
-		taskInfo.LastWeekTime = formatDuration(lastWeekSeconds)
+		estimation, status := parseEstimation(name)
 
-		// Handle start time
-		if firstEntryTimeStr.Valid {
-			if parsedTime, parseErr := time.Parse("15:04:05", firstEntryTimeStr.String); parseErr == nil {
-				taskInfo.StartTime = parsedTime.Format("15:04")
-			} else {
-				taskInfo.StartTime = firstEntryTimeStr.String
-			}
-		} else {
-			taskInfo.StartTime = "N/A"
-		}
-
-		// Extract estimation information from task name
-		taskInfo.EstimationInfo, taskInfo.EstimationStatus = parseEstimation(taskInfo.Name)
-
-		// Get comments for this task from both this week and last week
-		comments, err := getTaskComments(db, taskInfo.TaskID, lastWeekStartStr, thisWeekEndStr)
-		if err != nil {
-			logger.Warnf("Failed to get comments for task %d: %v", taskInfo.TaskID, err)
-			comments = []string{} // Empty slice if error
-		}
-		taskInfo.Comments = comments
-
-		taskInfos = append(taskInfos, taskInfo)
+		tasks = append(tasks, TaskUpdateInfo{
+			Name:             name,
+			CurrentPeriod:    "This Week",
+			CurrentTime:      formatDuration(thisWeekSeconds),
+			PreviousPeriod:   "Last Week",
+			PreviousTime:     formatDuration(lastWeekSeconds),
+			DaysWorked:       daysWorked,
+			Comments:         comments,
+			EstimationInfo:   estimation,
+			EstimationStatus: status,
+		})
 	}
-
-	// Check for iteration errors
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error during weekly rows iteration: %w", err)
-	}
-
-	if errorCount > 0 {
-		logger.Warnf("Encountered %d errors while processing weekly time entry rows", errorCount)
-	}
-
-	logger.Debugf("Successfully retrieved %d weekly task time entries", len(taskInfos))
-	return taskInfos, nil
+	return tasks, nil
 }
 
-// GetMonthlyTaskTimeEntries retrieves time entry information for tasks for the past month vs previous month
-func GetMonthlyTaskTimeEntries(db *sql.DB) ([]MonthlyTaskTimeInfo, error) {
+// GetMonthlyTaskTimeEntries retrieves monthly time entry information for tasks
+func GetMonthlyTaskTimeEntries(db *sql.DB) ([]TaskUpdateInfo, error) {
 	logger := GetGlobalLogger()
+	logger.Debug("Querying database for monthly task time entries")
 
-	// Calculate date ranges for current and previous month
-	now := time.Now()
-
-	// Start of current month (1st day)
-	thisMonthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
-	thisMonthEnd := thisMonthStart.AddDate(0, 1, -1) // Last day of current month
-
-	// Previous month
+	today := time.Now()
+	thisMonthStart := time.Date(today.Year(), today.Month(), 1, 0, 0, 0, 0, today.Location())
 	lastMonthStart := thisMonthStart.AddDate(0, -1, 0)
-	lastMonthEnd := thisMonthStart.AddDate(0, 0, -1) // Day before current month start
 
-	thisMonthStartStr := thisMonthStart.Format("2006-01-02")
-	thisMonthEndStr := thisMonthEnd.Format("2006-01-02")
-	lastMonthStartStr := lastMonthStart.Format("2006-01-02")
-	lastMonthEndStr := lastMonthEnd.Format("2006-01-02")
-
-	query := `
-		WITH monthly_task_data AS (
-			SELECT 
-				t.task_id,
-				t.name,
-				COALESCE(SUM(CASE WHEN te.date BETWEEN ? AND ? THEN te.duration ELSE 0 END), 0) as thismonth_seconds,
-				COALESCE(SUM(CASE WHEN te.date BETWEEN ? AND ? THEN te.duration ELSE 0 END), 0) as lastmonth_seconds,
-				MIN(te.start_time) as first_entry_time,
-				COUNT(DISTINCT CASE WHEN te.date BETWEEN ? AND ? THEN te.date END) as days_worked
-			FROM tasks t
-			LEFT JOIN time_entries te ON t.task_id = te.task_id 
-				AND te.date BETWEEN ? AND ?
-			WHERE te.task_id IS NOT NULL
-			GROUP BY t.task_id, t.name
-			HAVING thismonth_seconds > 0 OR lastmonth_seconds > 0
-		)
-		SELECT 
-			task_id,
-			name,
-			thismonth_seconds,
-			lastmonth_seconds,
-			first_entry_time,
-			days_worked
-		FROM monthly_task_data
-		ORDER BY (thismonth_seconds + lastmonth_seconds) DESC
-		LIMIT 10
-	`
-
-	logger.Debugf("Querying monthly time entries: this month (%s to %s), last month (%s to %s)",
-		thisMonthStartStr, thisMonthEndStr, lastMonthStartStr, lastMonthEndStr)
-
-	rows, err := db.Query(query,
-		thisMonthStartStr, thisMonthEndStr, // this month range
-		lastMonthStartStr, lastMonthEndStr, // last month range
-		thisMonthStartStr, thisMonthEndStr, // this month range for days_worked count
-		lastMonthStartStr, thisMonthEndStr) // extended range for all entries
+	rows, err := db.Query(`
+		SELECT
+			t.id,
+			t.name,
+			SUM(CASE WHEN te.date >= ? THEN te.duration ELSE 0 END) as this_month_seconds,
+			SUM(CASE WHEN te.date >= ? AND te.date < ? THEN te.duration ELSE 0 END) as last_month_seconds,
+			COUNT(DISTINCT te.date) as days_worked
+		FROM tasks t
+		LEFT JOIN time_entries te ON t.id = te.task_id
+		GROUP BY t.id, t.name
+		HAVING this_month_seconds > 0 OR last_month_seconds > 0
+		ORDER BY (this_month_seconds + last_month_seconds) DESC;
+	`, thisMonthStart.Format("2006-01-02"), lastMonthStart.Format("2006-01-02"), thisMonthStart.Format("2006-01-02"))
 	if err != nil {
-		return nil, fmt.Errorf("error querying monthly time entries: %w", err)
+		return nil, fmt.Errorf("failed to query monthly task time entries: %w", err)
 	}
-	defer CloseWithErrorLog(rows, "database rows")
+	defer rows.Close()
 
-	var taskInfos []MonthlyTaskTimeInfo
-	errorCount := 0
-
+	var tasks []TaskUpdateInfo
 	for rows.Next() {
-		var taskInfo MonthlyTaskTimeInfo
-		var thisMonthSeconds, lastMonthSeconds int
-		var firstEntryTimeStr sql.NullString
+		var taskID int
+		var name string
+		var thisMonthSeconds, lastMonthSeconds, daysWorked int
+		if err := rows.Scan(&taskID, &name, &thisMonthSeconds, &lastMonthSeconds, &daysWorked); err != nil {
+			return nil, fmt.Errorf("failed to scan monthly task time entry: %w", err)
+		}
 
-		err := rows.Scan(
-			&taskInfo.TaskID,
-			&taskInfo.Name,
-			&thisMonthSeconds,
-			&lastMonthSeconds,
-			&firstEntryTimeStr,
-			&taskInfo.DaysWorked,
-		)
+		comments, err := getTaskComments(db, taskID, lastMonthStart.Format("2006-01-02"), time.Now().Format("2006-01-02"))
 		if err != nil {
-			logger.Errorf("Error scanning monthly time entry row: %v", err)
-			errorCount++
-			continue
+			logger.Warnf("failed to get comments for task %d: %v", taskID, err)
 		}
 
-		// Convert seconds to duration strings
-		taskInfo.MonthlyTime = formatDuration(thisMonthSeconds)
-		taskInfo.LastMonthTime = formatDuration(lastMonthSeconds)
+		estimation, status := parseEstimation(name)
 
-		// Handle start time
-		if firstEntryTimeStr.Valid {
-			if parsedTime, parseErr := time.Parse("15:04:05", firstEntryTimeStr.String); parseErr == nil {
-				taskInfo.StartTime = parsedTime.Format("15:04")
-			} else {
-				taskInfo.StartTime = firstEntryTimeStr.String
-			}
-		} else {
-			taskInfo.StartTime = "N/A"
-		}
-
-		// Extract estimation information from task name
-		taskInfo.EstimationInfo, taskInfo.EstimationStatus = parseEstimation(taskInfo.Name)
-
-		// Get comments for this task from both this month and last month
-		comments, err := getTaskComments(db, taskInfo.TaskID, lastMonthStartStr, thisMonthEndStr)
-		if err != nil {
-			logger.Warnf("Failed to get comments for task %d: %v", taskInfo.TaskID, err)
-			comments = []string{} // Empty slice if error
-		}
-		taskInfo.Comments = comments
-
-		taskInfos = append(taskInfos, taskInfo)
+		tasks = append(tasks, TaskUpdateInfo{
+			Name:             name,
+			CurrentPeriod:    "This Month",
+			CurrentTime:      formatDuration(thisMonthSeconds),
+			PreviousPeriod:   "Last Month",
+			PreviousTime:     formatDuration(lastMonthSeconds),
+			DaysWorked:       daysWorked,
+			Comments:         comments,
+			EstimationInfo:   estimation,
+			EstimationStatus: status,
+		})
 	}
-
-	// Check for iteration errors
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error during monthly rows iteration: %w", err)
-	}
-
-	if errorCount > 0 {
-		logger.Warnf("Encountered %d errors while processing monthly time entry rows", errorCount)
-	}
-
-	logger.Debugf("Successfully retrieved %d monthly task time entries", len(taskInfos))
-	return taskInfos, nil
+	return tasks, nil
 }
 
-// formatDuration converts seconds to a human-readable duration string
+// formatDuration formats seconds into a human-readable string like "1h 30m"
 func formatDuration(seconds int) string {
 	if seconds == 0 {
 		return "0h 0m"

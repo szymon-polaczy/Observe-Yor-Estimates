@@ -339,91 +339,39 @@ setup_netlify() {
 
 # Main deployment logic
 main() {
-    log_section "Observe Your Estimates - Deployment Script"
-    log_info "Database Version: $DATABASE_VERSION"
-    log_info "Working Directory: $SCRIPT_DIR"
-    
-    # Step 1: Validate environment
-    if ! validate_environment; then
-        log_error "Environment validation failed"
+    log_section "Starting Deployment Process"
+
+    build_application
+
+    # If build fails, exit immediately
+    if [[ $? -ne 0 ]]; then
+        log_error "Build failed. Aborting deployment."
         exit 1
     fi
-    
-    # Step 2: Build application
-    if ! build_application; then
-        log_error "Application build failed"
-        exit 1
-    fi
-    
-    # Step 3: Check database version and decide on recreation
-    local needs_db_recreation=false
-    local needs_full_sync=false
-    
-    if is_netlify; then
-        log_info "Netlify environment - skipping database checks at build time"
-        needs_db_recreation=false
-        needs_full_sync=false
-    elif ! check_database_version; then
-        log_warning "Database version check failed - recreation required"
-        needs_db_recreation=true
-        needs_full_sync=true
-    elif ! database_exists; then
-        log_info "Database does not exist - will create and populate"
-        needs_full_sync=true
-    elif ! check_database_data; then
-        log_info "Database exists but appears empty - will populate"
-        needs_full_sync=true
-    else
-        log_success "Database exists, is current version, and has data"
-    fi
-    
-    # Step 4: Handle database recreation if needed
-    if [[ "$needs_db_recreation" == "true" ]]; then
-        log_section "Database Recreation"
-        log_warning "Removing existing database due to version change"
+
+    # Database management
+    if ! database_exists || ! check_database_version; then
+        log_info "Database needs to be created or updated"
         remove_database
-    fi
-    
-    # Step 5: Perform full sync if needed
-    if [[ "$needs_full_sync" == "true" ]]; then
-        if ! full_sync; then
-            log_error "Failed to populate database"
-            exit 1
-        fi
-        
-        # Update version after successful sync
+        log_info "Initializing new database..."
+        ./"$BINARY_NAME" --init-db
         update_database_version
-    fi
-    
-    # Step 6: Test database functionality
-    test_database
-    
-    # Step 7: Setup Netlify
-    setup_netlify
-    
-    # Final status
-    log_section "Deployment Complete"
-    log_success "Application deployed successfully!"
-    log_info "Binary: $BINARY_NAME"
-    
-    if is_netlify; then
-        log_info "Netlify deployment complete"
-        log_info "Functions deployed: health, slack-command"
-        log_info "Health check: /.netlify/functions/health"
-        log_info "Slack commands: /slack/{daily-update,weekly-update,monthly-update}"
-        log_info ""
-        log_info "Note: Set TIMECAMP_API_KEY and SLACK_WEBHOOK_URL in Netlify site settings"
-        log_info "for the functions to work properly at runtime."
+        
+        # If running on Netlify, we should perform a full sync to populate the database
+        if is_netlify; then
+            populate_database
+        fi
     else
-        log_info "Database: $(get_db_path)"
-        log_info "Version: $DATABASE_VERSION"
-        log_info "To start the application in daemon mode:"
-        log_info "  ./$BINARY_NAME"
-        log_info ""
-        log_info "To run manual commands:"
-        log_info "  ./$BINARY_NAME daily-update"
-        log_info "  ./$BINARY_NAME weekly-update"
-        log_info "  ./$BINARY_NAME monthly-update"
+        log_success "Database is up to date"
+    fi
+
+    log_success "Deployment script completed successfully"
+    
+    # If on Netlify, start the Go server in the background
+    if is_netlify; then
+        log_info "Starting Go server in background..."
+        nohup ./"$BINARY_NAME" > oye.log 2>&1 &
+        log_success "Go server started."
     fi
 }
 
@@ -480,5 +428,5 @@ case "${1:-}" in
         ;;
 esac
 
-# Run main deployment if no specific command was given
+# Run the main function
 main
