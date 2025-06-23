@@ -1,0 +1,8 @@
+INFO: 2025/06/23 15:13:12 logger.go:47: Starting standalone job processor
+INFO: 2025/06/23 15:13:12 logger.go:52: Job processor listening on port 8081
+INFO: 2025/06/23 15:13:14 logger.go:52: Received job test_123 of type slack_update for test user
+INFO: 2025/06/23 15:13:14 logger.go:52: Processing standalone job test_123
+INFO: 2025/06/23 15:13:14 logger.go:52: Processing daily update for job test_123
+INFO: 2025/06/23 15:13:14 logger.go:52: Starting daily Slack update
+DEBUG: 2025/06/23 15:13:14 logger.go:77: Using DATABASE_URL environment variable for database connection
+DEBUG: 2025/06/23 15:13:14 logger.go:82: Initializing database connection to PostgreSQL

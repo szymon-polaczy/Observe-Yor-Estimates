@@ -11,6 +11,16 @@ import (
 	"time"
 )
 
+// JobRequest represents a queued job for async processing
+type JobRequest struct {
+	JobID       string            `json:"job_id"`
+	JobType     string            `json:"job_type"`
+	Parameters  map[string]string `json:"parameters"`
+	ResponseURL string            `json:"response_url"`
+	UserInfo    string            `json:"user_info"`
+	QueuedAt    time.Time         `json:"queued_at"`
+}
+
 func StartServer(logger *Logger) {
 	// Setup handlers in this file
 	setupSlackRoutes()
@@ -62,6 +72,7 @@ type SlackCommandResponse struct {
 func setupSlackRoutes() {
 	http.HandleFunc("/slack/update", handleUpdateCommand)
 	http.HandleFunc("/slack/full-sync", handleFullSyncCommand)
+	http.HandleFunc("/slack/process-job", handleJobProcessor)
 	http.HandleFunc("/health", handleHealthCheck)
 }
 
@@ -147,7 +158,56 @@ func sendDelayedResponse(responseURL string, message SlackMessage) error {
 	return nil
 }
 
-// handleUpdateCommand handles all update-related slash commands
+// generateJobID creates a unique job ID
+func generateJobID(jobType string) string {
+	return fmt.Sprintf("%s_%d", jobType, time.Now().UnixNano())
+}
+
+// queueJob queues a job for processing by calling the job processor endpoint
+func queueJob(jobType string, parameters map[string]string, responseURL string, userInfo string) error {
+	logger := GetGlobalLogger()
+
+	jobRequest := JobRequest{
+		JobID:       generateJobID(jobType),
+		JobType:     jobType,
+		Parameters:  parameters,
+		ResponseURL: responseURL,
+		UserInfo:    userInfo,
+		QueuedAt:    time.Now(),
+	}
+
+	// Get the job processor URL - could be same domain or external service
+	processorURL := os.Getenv("JOB_PROCESSOR_URL")
+	if processorURL == "" {
+		// For local testing, use localhost; in production this would be the full Netlify URL
+		processorURL = "http://localhost:8080/slack/process-job"
+	}
+
+	jsonData, err := json.Marshal(jobRequest)
+	if err != nil {
+		return fmt.Errorf("error marshaling job request: %w", err)
+	}
+
+	// Make async call to job processor
+	go func() {
+		resp, err := http.Post(processorURL, "application/json", strings.NewReader(string(jsonData)))
+		if err != nil {
+			logger.Errorf("Failed to queue job %s: %v", jobRequest.JobID, err)
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			logger.Errorf("Job processor returned status %d for job %s", resp.StatusCode, jobRequest.JobID)
+		} else {
+			logger.Infof("Successfully queued job %s", jobRequest.JobID)
+		}
+	}()
+
+	return nil
+}
+
+// handleUpdateCommand handles all update-related slash commands with immediate response
 func handleUpdateCommand(w http.ResponseWriter, r *http.Request) {
 	logger := GetGlobalLogger()
 
@@ -182,16 +242,27 @@ func handleUpdateCommand(w http.ResponseWriter, r *http.Request) {
 
 	logger.Infof("Received %s update command from user %s in channel %s", period, req.UserName, req.ChannelName)
 
-	// Send immediate acknowledgment
-	sendImmediateResponse(w, fmt.Sprintf("⏳ Generating %s update...", period), "ephemeral")
+	// Send immediate response - this is CRUCIAL for Netlify timeouts
+	sendImmediateResponse(w, fmt.Sprintf("⏳ Your %s update is being prepared... I'll send the results here in a moment!", period), "ephemeral")
 
-	// Process the command asynchronously
-	go func() {
-		SendSlackUpdate(period, req.ResponseURL, false)
-	}()
+	// Queue the job for processing
+	parameters := map[string]string{
+		"period": period,
+	}
+	userInfo := fmt.Sprintf("%s in #%s", req.UserName, req.ChannelName)
+
+	if err := queueJob("slack_update", parameters, req.ResponseURL, userInfo); err != nil {
+		logger.Errorf("Failed to queue update job: %v", err)
+		// Send error message since we already responded
+		go func() {
+			sendDelayedResponse(req.ResponseURL, SlackMessage{
+				Text: fmt.Sprintf("❌ Failed to queue %s update job. Please try again.", period),
+			})
+		}()
+	}
 }
 
-// handleFullSyncCommand handles the /full-sync slash command from Slack
+// handleFullSyncCommand handles the /full-sync slash command with immediate response
 func handleFullSyncCommand(w http.ResponseWriter, r *http.Request) {
 	logger := GetGlobalLogger()
 
@@ -215,57 +286,121 @@ func handleFullSyncCommand(w http.ResponseWriter, r *http.Request) {
 
 	logger.Infof("Received /full-sync command from user %s in channel %s", req.UserName, req.ChannelName)
 
-	// Quick database connectivity check before starting
-	_, dbErr := GetDB()
-	if dbErr != nil {
-		logger.Errorf("Database connection failed: %v", dbErr)
-		sendImmediateResponse(w, fmt.Sprintf("❌ Cannot start full sync: Database connection failed - %v", dbErr), "ephemeral")
+	// Send immediate response - NO timeout waiting!
+	sendImmediateResponse(w, "⏳ Full data synchronization has been queued! This usually takes 30-60 seconds. I'll notify you here when it's complete.", "ephemeral")
+
+	// Queue the job for processing
+	parameters := map[string]string{
+		"sync_type": "full",
+	}
+	userInfo := fmt.Sprintf("%s in #%s", req.UserName, req.ChannelName)
+
+	if err := queueJob("full_sync", parameters, req.ResponseURL, userInfo); err != nil {
+		logger.Errorf("Failed to queue full sync job: %v", err)
+		// Send error message since we already responded
+		go func() {
+			sendDelayedResponse(req.ResponseURL, SlackMessage{
+				Text: "❌ Failed to queue full sync job. Please try again.",
+			})
+		}()
+	}
+}
+
+// handleJobProcessor processes queued jobs - this runs separately and can take time
+func handleJobProcessor(w http.ResponseWriter, r *http.Request) {
+	logger := GetGlobalLogger()
+
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Send immediate acknowledgment
-	sendImmediateResponse(w, "⏳ Starting full data synchronization... This will run in the background and you'll be notified when complete.", "ephemeral")
+	var jobRequest JobRequest
+	if err := json.NewDecoder(r.Body).Decode(&jobRequest); err != nil {
+		logger.Errorf("Failed to decode job request: %v", err)
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
 
-	// Run full sync asynchronously with timeout protection
+	logger.Infof("Processing job %s of type %s for %s", jobRequest.JobID, jobRequest.JobType, jobRequest.UserInfo)
+
+	// Respond immediately to the caller that we received the job
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(fmt.Sprintf("Job %s queued successfully", jobRequest.JobID)))
+
+	// Process the job asynchronously
 	go func() {
-		// Create a timeout context for the full sync operation
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
+		processJob(jobRequest)
+	}()
+}
 
-		done := make(chan error, 1)
+// processJob handles the actual job processing
+func processJob(job JobRequest) {
+	logger := GetGlobalLogger()
+	startTime := time.Now()
 
-		// Run the sync in another goroutine to enable timeout
-		go func() {
-			done <- FullSyncAll()
-		}()
+	logger.Infof("Starting processing of job %s", job.JobID)
 
-		select {
-		case err := <-done:
-			if err != nil {
-				logger.Errorf("Full sync failed: %v", err)
-				sendDelayedResponse(req.ResponseURL, SlackMessage{
-					Text: fmt.Sprintf("❌ Full sync failed: %v", err),
-				})
-			} else {
-				logger.Info("Full sync completed successfully via slash command")
-				sendDelayedResponse(req.ResponseURL, SlackMessage{
-					Text: "✅ Full data synchronization completed successfully!",
-				})
-			}
-		case <-ctx.Done():
-			logger.Error("Full sync timed out after 20 seconds")
-			sendDelayedResponse(req.ResponseURL, SlackMessage{
-				Text: "⚠️ Full sync timed out. This may indicate database connectivity issues or the operation is taking longer than expected. Please check the logs and try again.",
+	switch job.JobType {
+	case "slack_update":
+		period := job.Parameters["period"]
+		if period == "" {
+			logger.Errorf("Missing period parameter for slack_update job %s", job.JobID)
+			sendJobErrorResponse(job.ResponseURL, "Invalid job configuration")
+			return
+		}
+
+		// Send initial status update
+		sendDelayedResponse(job.ResponseURL, SlackMessage{
+			Text: fmt.Sprintf("🔄 Starting %s update generation...", period),
+		})
+
+		// Actually do the work
+		SendSlackUpdate(period, job.ResponseURL, false)
+
+	case "full_sync":
+		// Send initial status update
+		sendDelayedResponse(job.ResponseURL, SlackMessage{
+			Text: "🔄 Starting full synchronization...",
+		})
+
+		// Actually do the work
+		if err := FullSyncAll(); err != nil {
+			logger.Errorf("Full sync failed in job %s: %v", job.JobID, err)
+			sendDelayedResponse(job.ResponseURL, SlackMessage{
+				Text: fmt.Sprintf("❌ Full sync failed: %v", err),
+			})
+		} else {
+			duration := time.Since(startTime)
+			logger.Infof("Full sync completed successfully in job %s (took %v)", job.JobID, duration)
+			sendDelayedResponse(job.ResponseURL, SlackMessage{
+				Text: fmt.Sprintf("✅ Full data synchronization completed successfully! (completed in %v)", duration.Round(time.Second)),
 			})
 		}
-	}()
+
+	default:
+		logger.Errorf("Unknown job type: %s", job.JobType)
+		sendJobErrorResponse(job.ResponseURL, "Unknown job type")
+	}
+
+	duration := time.Since(startTime)
+	logger.Infof("Completed processing job %s in %v", job.JobID, duration)
+}
+
+// sendJobErrorResponse sends an error response for failed jobs
+func sendJobErrorResponse(responseURL string, errorMsg string) {
+	if responseURL != "" {
+		sendDelayedResponse(responseURL, SlackMessage{
+			Text: fmt.Sprintf("❌ Job failed: %s", errorMsg),
+		})
+	}
 }
 
 // handleHealthCheck handles a simple health check endpoint
 func handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 	logger := GetGlobalLogger()
 
-	// Test database connectivity
+	// Test database connectivity quickly
 	_, err := GetDB()
 	if err != nil {
 		logger.Errorf("Health check failed - Database connection error: %v", err)

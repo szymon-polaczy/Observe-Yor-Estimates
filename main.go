@@ -68,6 +68,10 @@ func handleCliCommands(args []string, logger *Logger) {
 		fmt.Println("Observe-Yor-Estimates v1.0.0")
 	case "--build-test", "build-test":
 		fmt.Println("Build test successful - binary is working correctly")
+	case "job-processor":
+		// Run as standalone job processor
+		processJobsMain()
+		return
 	case "--init-db", "init-db":
 		_, err := GetDB()
 		if err != nil {
@@ -175,6 +179,7 @@ func showHelp() {
 	fmt.Println("  sync-time-entries        - Sync recent time entries (last day)")
 	fmt.Println("  sync-tasks               - Sync all tasks")
 	fmt.Println("  full-sync                - Full sync of all tasks and time entries")
+	fmt.Println("  job-processor            - Run as standalone job processor server")
 	fmt.Println("  --version, version         - Show application version")
 	fmt.Println("  --help, -h, help         - Show help message")
 }
