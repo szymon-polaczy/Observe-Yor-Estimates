@@ -181,19 +181,23 @@ func showHelp() {
 }
 
 func getResponseURL() string {
+	// First check command line arguments
 	for i, arg := range os.Args {
 		if (arg == "--response-url" || arg == "-r") && i+1 < len(os.Args) {
 			return os.Args[i+1]
 		}
 	}
-	return ""
+	// If not found in args, check environment variable (set by Netlify functions)
+	return os.Getenv("RESPONSE_URL")
 }
 
 func getOutputJSON() bool {
+	// First check command line arguments
 	for _, arg := range os.Args {
 		if arg == "--json" {
 			return true
 		}
 	}
-	return false
+	// If not found in args, check environment variable (set by Netlify functions)
+	return os.Getenv("OUTPUT_JSON") == "true"
 }

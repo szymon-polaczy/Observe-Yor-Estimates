@@ -99,7 +99,7 @@ func SendSlackUpdate(period string, responseURL string, asJSON bool) {
 	}
 
 	if responseURL != "" {
-		if err := sendDelayedResponse(responseURL, message); err != nil {
+		if err := sendDelayedResponseShared(responseURL, message); err != nil {
 			logger.Errorf("Failed to send delayed response: %v", err)
 		}
 		return
@@ -224,7 +224,7 @@ func sendNoChangesNotification(period, responseURL string) error {
 		Text: fmt.Sprintf("No task changes to report for %s.", period),
 	}
 	if responseURL != "" {
-		return sendDelayedResponse(responseURL, message)
+		return sendDelayedResponseShared(responseURL, message)
 	}
 	return sendSlackMessage(message)
 }
