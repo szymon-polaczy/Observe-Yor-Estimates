@@ -96,7 +96,7 @@ func handleCliCommands(args []string, logger *Logger) {
 		SendSlackUpdate(period, responseURL, outputJSON)
 	case "sync-time-entries":
 		logger.Info("Running time entries sync command")
-		if err := SyncTimeEntriesToDatabase(); err != nil {
+		if err := SyncTimeEntriesToDatabase("", ""); err != nil {
 			logger.Errorf("Time entries sync failed: %v", err)
 			os.Exit(1)
 		}
@@ -139,7 +139,7 @@ func setupCronJobs(logger *Logger) {
 	})
 
 	addCronJob(cronScheduler, "TIME_ENTRIES_SYNC_SCHEDULE", "*/10 * * * *", "time entries sync", logger, func() {
-		if err := SyncTimeEntriesToDatabase(); err != nil {
+		if err := SyncTimeEntriesToDatabase("", ""); err != nil {
 			logger.Errorf("Scheduled time entries sync failed: %v", err)
 		}
 	})

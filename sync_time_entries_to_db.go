@@ -101,9 +101,9 @@ func safeStringConvert(value interface{}) string {
 	return fmt.Sprintf("%v", value)
 }
 
-// SyncTimeEntriesToDatabase fetches recent time entries from TimeCamp and stores them in the database
-// This function is optimized for regular cron jobs and only syncs the last day's entries
-func SyncTimeEntriesToDatabase() error {
+// SyncTimeEntriesToDatabase fetches time entries from TimeCamp and stores them in the database
+// If fromDate and toDate are provided, uses those dates; otherwise defaults to last day (optimized for cron jobs)
+func SyncTimeEntriesToDatabase(fromDate, toDate string) error {
 	logger := GetGlobalLogger()
 
 	// Load environment variables - but don't panic here since main already validated them
@@ -114,9 +114,14 @@ func SyncTimeEntriesToDatabase() error {
 
 	logger.Debug("Starting time entries synchronization with TimeCamp")
 
-	// Get time entries from the last day only (optimized for cron jobs)
-	fromDate := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
-	toDate := time.Now().Format("2006-01-02")
+	// Use provided dates or default to last day only (optimized for cron jobs)
+	if fromDate == "" || toDate == "" {
+		fromDate = time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+		toDate = time.Now().Format("2006-01-02")
+		logger.Debugf("Using default date range for cron sync: %s to %s", fromDate, toDate)
+	} else {
+		logger.Infof("Using custom date range: %s to %s", fromDate, toDate)
+	}
 
 	timeEntries, err := getTimeCampTimeEntries(fromDate, toDate)
 	if err != nil {
