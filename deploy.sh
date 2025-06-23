@@ -52,10 +52,15 @@ get_db_path() {
     echo "${DATABASE_PATH:-$DEFAULT_DB_PATH}"
 }
 
-# Check if database file exists
+# Check if database is accessible (for PostgreSQL/Supabase)
 database_exists() {
-    local db_path=$(get_db_path)
-    [[ -f "$db_path" ]]
+    # For PostgreSQL, we check connectivity rather than file existence
+    if [[ -f "$BINARY_NAME" ]]; then
+        ./"$BINARY_NAME" --db-check >/dev/null 2>&1
+    else
+        # If binary doesn't exist yet, assume database needs setup
+        return 1
+    fi
 }
 
 # Check database version
@@ -80,17 +85,15 @@ update_database_version() {
     log_info "Updated database version to $DATABASE_VERSION"
 }
 
-# Remove existing database and version file
+# Clear database version (for PostgreSQL, we don't delete the database itself)
 remove_database() {
-    local db_path=$(get_db_path)
-    if [[ -f "$db_path" ]]; then
-        rm -f "$db_path"
-        log_info "Removed existing database: $db_path"
-    fi
+    # For PostgreSQL/Supabase, we only remove the version file
+    # The actual database clearing would be done through SQL commands if needed
     if [[ -f "$VERSION_FILE" ]]; then
         rm -f "$VERSION_FILE"
-        log_info "Removed version file"
+        log_info "Removed version file - database will be resynced"
     fi
+    log_info "Database version reset - full sync will be performed"
 }
 
 # Check if database has data
@@ -111,21 +114,16 @@ check_database_data() {
     # Create a simple Go program to check database contents
     log_info "Checking database for existing data..."
     
-    # We'll use sqlite3 command if available, otherwise use a Go approach
-    if command -v sqlite3 >/dev/null 2>&1; then
-        local task_count=$(sqlite3 "$db_path" "SELECT COUNT(*) FROM tasks WHERE name IS NOT NULL;" 2>/dev/null || echo "0")
-        local time_entry_count=$(sqlite3 "$db_path" "SELECT COUNT(*) FROM time_entries WHERE duration > 0;" 2>/dev/null || echo "0")
-        
-        log_info "Found $task_count tasks and $time_entry_count time entries in database"
-        
-        # Consider database populated if we have both tasks and time entries
-        if [[ "$task_count" -gt 0 && "$time_entry_count" -gt 0 ]]; then
-            return 0
-        else
-            return 1
-        fi
+    # For PostgreSQL/Supabase, we'll test database connectivity through the Go application
+    # since we don't have direct database access without credentials
+    log_info "Using Go application to check PostgreSQL database connectivity..."
+    
+    # Try to connect to the database and check for data
+    if ./"$BINARY_NAME" --db-check 2>/dev/null; then
+        log_info "Database is accessible and contains data"
+        return 0
     else
-        log_warning "sqlite3 command not available, assuming database needs population"
+        log_info "Database needs population or is not accessible"
         return 1
     fi
 }

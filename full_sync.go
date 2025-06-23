@@ -53,8 +53,15 @@ func FullSyncTasksToDatabase() error {
 		return fmt.Errorf("failed to open database connection: %w", err)
 	}
 
-	// Use INSERT OR REPLACE to handle existing tasks during full sync
-	insertStatement, err := db.Prepare("INSERT OR REPLACE INTO tasks values(?, ?, ?, ?, ?, ?)")
+	// Use INSERT ... ON CONFLICT to handle existing tasks during full sync (PostgreSQL equivalent of INSERT OR REPLACE)
+	insertStatement, err := db.Prepare(`INSERT INTO tasks (task_id, parent_id, assigned_by, name, level, root_group_id) 
+		VALUES ($1, $2, $3, $4, $5, $6) 
+		ON CONFLICT (task_id) DO UPDATE SET 
+		parent_id = EXCLUDED.parent_id,
+		assigned_by = EXCLUDED.assigned_by,
+		name = EXCLUDED.name,
+		level = EXCLUDED.level,
+		root_group_id = EXCLUDED.root_group_id`)
 	if err != nil {
 		return fmt.Errorf("failed to prepare insert statement: %w", err)
 	}
@@ -137,10 +144,21 @@ func FullSyncTimeEntriesToDatabase() error {
 		return fmt.Errorf("failed to migrate time_entries table: %w", err)
 	}
 
-	// Use INSERT OR REPLACE to handle existing time entries during full sync
-	insertStatement, err := db.Prepare(`INSERT OR REPLACE INTO time_entries 
+	// Use INSERT ... ON CONFLICT to handle existing time entries during full sync (PostgreSQL equivalent of INSERT OR REPLACE)
+	insertStatement, err := db.Prepare(`INSERT INTO time_entries 
 		(id, task_id, user_id, date, start_time, end_time, duration, description, billable, locked, modify_time) 
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) 
+		ON CONFLICT (id) DO UPDATE SET 
+		task_id = EXCLUDED.task_id,
+		user_id = EXCLUDED.user_id,
+		date = EXCLUDED.date,
+		start_time = EXCLUDED.start_time,
+		end_time = EXCLUDED.end_time,
+		duration = EXCLUDED.duration,
+		description = EXCLUDED.description,
+		billable = EXCLUDED.billable,
+		locked = EXCLUDED.locked,
+		modify_time = EXCLUDED.modify_time`)
 	if err != nil {
 		return fmt.Errorf("failed to prepare insert statement: %w", err)
 	}

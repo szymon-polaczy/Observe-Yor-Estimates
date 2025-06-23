@@ -50,8 +50,10 @@ func SyncTasksToDatabase() error {
 	}
 	// Note: Using shared database connection, no need to close here
 
-	// Use INSERT OR IGNORE to handle existing tasks
-	insertStatement, err := db.Prepare("INSERT OR IGNORE INTO tasks values(?, ?, ?, ?, ?, ?)")
+	// Use INSERT ... ON CONFLICT DO NOTHING to handle existing tasks (PostgreSQL equivalent of INSERT OR IGNORE)
+	insertStatement, err := db.Prepare(`INSERT INTO tasks (task_id, parent_id, assigned_by, name, level, root_group_id) 
+		VALUES ($1, $2, $3, $4, $5, $6) 
+		ON CONFLICT (task_id) DO NOTHING`)
 	if err != nil {
 		return fmt.Errorf("failed to prepare insert statement: %w", err)
 	}
@@ -129,7 +131,7 @@ func SyncTasksToDatabase() error {
 // TrackTaskChange records a task change in the history table
 func TrackTaskChange(db *sql.DB, taskID int, taskName, changeType, previousValue, currentValue string) error {
 	query := `INSERT INTO task_history (task_id, name, change_type, previous_value, current_value) 
-			  VALUES (?, ?, ?, ?, ?)`
+			  VALUES ($1, $2, $3, $4, $5)`
 
 	_, err := db.Exec(query, taskID, taskName, changeType, previousValue, currentValue)
 	if err != nil {
