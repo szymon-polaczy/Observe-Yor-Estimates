@@ -91,7 +91,8 @@ func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, perio
 	// Get task data
 	taskInfos, err := getTaskChanges(db, period)
 	if err != nil {
-		sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to get %s changes", period))
+		errorMessage := fmt.Sprintf("Failed to get %s changes: ```%v```", period, err)
+		sr.slackClient.SendErrorResponse(ctx, errorMessage)
 		return
 	}
 
