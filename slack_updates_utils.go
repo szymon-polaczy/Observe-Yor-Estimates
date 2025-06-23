@@ -189,7 +189,31 @@ func formatSlackMessage(taskInfos []TaskUpdateInfo, period string) SlackMessage 
 	}
 }
 
+func sanitizeSlackText(text string) string {
+	// Remove or escape characters that can cause issues in Slack blocks
+	// Replace problematic characters that might break JSON or Slack formatting
+	text = strings.ReplaceAll(text, "\n", " ") // Replace newlines with spaces in task names
+	text = strings.ReplaceAll(text, "\r", " ") // Replace carriage returns
+	text = strings.ReplaceAll(text, "\t", " ") // Replace tabs
+	text = strings.ReplaceAll(text, "\"", "'") // Replace double quotes with single quotes
+	text = strings.ReplaceAll(text, "\\", "/") // Replace backslashes
+
+	// Trim excessive whitespace
+	text = strings.TrimSpace(text)
+	text = regexp.MustCompile(`\s+`).ReplaceAllString(text, " ")
+
+	// Limit text length to prevent Slack API issues (Slack has limits on block text length)
+	if len(text) > 2000 {
+		text = text[:1997] + "..."
+	}
+
+	return text
+}
+
 func formatTaskBlock(task TaskUpdateInfo) []Block {
+	// Sanitize task name to prevent Slack block issues
+	taskName := sanitizeSlackText(task.Name)
+
 	var fields []Field
 	fields = append(fields, Field{Type: "mrkdwn", Text: fmt.Sprintf("*%s:* %s", task.CurrentPeriod, task.CurrentTime)})
 	fields = append(fields, Field{Type: "mrkdwn", Text: fmt.Sprintf("*%s:* %s", task.PreviousPeriod, task.PreviousTime)})
@@ -199,17 +223,33 @@ func formatTaskBlock(task TaskUpdateInfo) []Block {
 	}
 
 	if task.EstimationInfo != "" {
-		fields = append(fields, Field{Type: "mrkdwn", Text: fmt.Sprintf("*Estimation:*\n%s", task.EstimationInfo)})
+		// Sanitize estimation info as well
+		estimationInfo := sanitizeSlackText(task.EstimationInfo)
+		fields = append(fields, Field{Type: "mrkdwn", Text: fmt.Sprintf("*Estimation:*\n%s", estimationInfo)})
 	}
 
 	if len(task.Comments) > 0 {
-		fields = append(fields, Field{Type: "mrkdwn", Text: fmt.Sprintf("*Recent Comments:*\n%s", strings.Join(task.Comments, "\n"))})
+		// Sanitize and limit comments
+		var sanitizedComments []string
+		for _, comment := range task.Comments {
+			sanitizedComment := sanitizeSlackText(comment)
+			if len(sanitizedComment) > 200 { // Limit individual comments
+				sanitizedComment = sanitizedComment[:197] + "..."
+			}
+			sanitizedComments = append(sanitizedComments, sanitizedComment)
+		}
+		// Limit total number of comments displayed
+		if len(sanitizedComments) > 3 {
+			sanitizedComments = sanitizedComments[:3]
+			sanitizedComments = append(sanitizedComments, fmt.Sprintf("... and %d more comments", len(task.Comments)-3))
+		}
+		fields = append(fields, Field{Type: "mrkdwn", Text: fmt.Sprintf("*Recent Comments:*\n%s", strings.Join(sanitizedComments, "\n"))})
 	}
 
 	return []Block{
 		{
 			Type: "section",
-			Text: &Text{Type: "mrkdwn", Text: fmt.Sprintf("*%s*", task.Name)},
+			Text: &Text{Type: "mrkdwn", Text: fmt.Sprintf("*%s*", taskName)},
 		},
 		{
 			Type:   "section",
@@ -235,6 +275,7 @@ func sendNoChangesNotification(period, responseURL string, asJSON bool) error {
 
 // sendSlackMessage sends a message to Slack using the webhook
 func sendSlackMessage(message SlackMessage) error {
+	logger := GetGlobalLogger()
 	webhookURL := os.Getenv("SLACK_WEBHOOK_URL")
 	if webhookURL == "" {
 		return fmt.Errorf("SLACK_WEBHOOK_URL environment variable not set")
@@ -245,6 +286,14 @@ func sendSlackMessage(message SlackMessage) error {
 		return fmt.Errorf("error marshaling message: %w", err)
 	}
 
+	// Log the JSON payload for debugging (first 500 chars to avoid spam)
+	jsonStr := string(jsonData)
+	if len(jsonStr) > 500 {
+		logger.Debugf("Sending Slack message payload (truncated): %s...", jsonStr[:500])
+	} else {
+		logger.Debugf("Sending Slack message payload: %s", jsonStr)
+	}
+
 	resp, err := http.Post(webhookURL, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return fmt.Errorf("error sending request: %w", err)
@@ -253,9 +302,11 @@ func sendSlackMessage(message SlackMessage) error {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		logger.Errorf("Slack API error - Status: %d, Response: %s", resp.StatusCode, string(body))
 		return fmt.Errorf("slack API returned status %d: %s", resp.StatusCode, string(body))
 	}
 
+	logger.Debugf("Successfully sent message to Slack webhook")
 	return nil
 }
 

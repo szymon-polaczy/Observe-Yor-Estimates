@@ -107,9 +107,16 @@ func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, perio
 	}
 
 	if err != nil {
-		sr.logger.Errorf("Failed to send final %s report: %v", period, err)
-		sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send %s report", period))
-		return
+		sr.logger.Errorf("Failed to send final %s report via Slack API: %v", period, err)
+
+		// Try webhook fallback
+		message := sr.slackClient.formatContextualMessage(taskInfos, period, ctx.UserID)
+		if webhookErr := sendSlackMessage(message); webhookErr != nil {
+			sr.logger.Errorf("Webhook fallback also failed: %v", webhookErr)
+			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send %s report", period))
+			return
+		}
+		sr.logger.Info("Successfully sent report via webhook fallback")
 	}
 
 	sr.logger.Infof("Completed %s update for user %s", period, ctx.UserID)

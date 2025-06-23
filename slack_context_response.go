@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -288,6 +289,14 @@ func (s *SlackAPIClient) sendSlackAPIRequestWithResponse(endpoint string, payloa
 		return nil, fmt.Errorf("error marshaling payload: %w", err)
 	}
 
+	// Log the JSON payload for debugging (first 500 chars to avoid spam)
+	jsonStr := string(jsonData)
+	if len(jsonStr) > 500 {
+		s.logger.Debugf("Sending %s payload (truncated): %s...", endpoint, jsonStr[:500])
+	} else {
+		s.logger.Debugf("Sending %s payload: %s", endpoint, jsonStr)
+	}
+
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("error creating request: %w", err)
@@ -303,12 +312,21 @@ func (s *SlackAPIClient) sendSlackAPIRequestWithResponse(endpoint string, payloa
 	}
 	defer resp.Body.Close()
 
+	// Read the raw response body for detailed logging
+	bodyBytes, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return nil, fmt.Errorf("error reading response body: %w", readErr)
+	}
+
 	var slackResp SlackAPIResponse
-	if err := json.NewDecoder(resp.Body).Decode(&slackResp); err != nil {
+	if err := json.Unmarshal(bodyBytes, &slackResp); err != nil {
+		s.logger.Errorf("Error decoding Slack API response for %s: %v", endpoint, err)
+		s.logger.Errorf("Raw response body: %s", string(bodyBytes))
 		return nil, fmt.Errorf("error decoding response: %w", err)
 	}
 
 	if !slackResp.OK {
+		s.logger.Errorf("Slack API error for %s - Error: %s, Full response: %s", endpoint, slackResp.Error, string(bodyBytes))
 		return nil, fmt.Errorf("slack API error: %s", slackResp.Error)
 	}
 
