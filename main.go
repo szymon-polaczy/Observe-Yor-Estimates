@@ -107,7 +107,7 @@ func handleCliCommands(args []string, logger *Logger) {
 		logger.Info("Time entries sync completed successfully")
 	case "sync-tasks":
 		logger.Info("Running tasks sync command")
-		if err := SyncTasksToDatabase(); err != nil {
+		if err := SyncTasksToDatabaseFull(); err != nil {
 			logger.Errorf("Tasks sync failed: %v", err)
 			os.Exit(1)
 		}
@@ -137,7 +137,7 @@ func setupCronJobs(logger *Logger) {
 	cronScheduler := cron.New()
 
 	addCronJob(cronScheduler, "TASK_SYNC_SCHEDULE", "*/5 * * * *", "task sync", logger, func() {
-		if err := SyncTasksToDatabase(); err != nil {
+		if err := SyncTasksToDatabaseIncremental(); err != nil {
 			logger.Errorf("Scheduled task sync failed: %v", err)
 		}
 	})
@@ -183,11 +183,15 @@ func showHelp() {
 	fmt.Println("\nAvailable commands:")
 	fmt.Println("  update <period>          - Send Slack update for a period (daily, weekly, monthly)")
 	fmt.Println("  sync-time-entries        - Sync recent time entries (last day)")
-	fmt.Println("  sync-tasks               - Sync all tasks")
+	fmt.Println("  sync-tasks               - Full sync of all tasks (manual operation)")
 	fmt.Println("  full-sync                - Full sync of all tasks and time entries")
 	fmt.Println("  job-processor            - Run as standalone job processor server")
 	fmt.Println("  --version, version         - Show application version")
 	fmt.Println("  --help, -h, help         - Show help message")
+	fmt.Println("\nSync Behavior:")
+	fmt.Println("  • Cron jobs use incremental sync (only process changed tasks)")
+	fmt.Println("  • Manual commands use full sync (process all tasks)")
+	fmt.Println("  • This optimizes performance for regular automated updates")
 	fmt.Println("\nSlack Integration:")
 	fmt.Println("  Set up /oye command in Slack to point to /slack/oye endpoint")
 	fmt.Println("  Requires SLACK_BOT_TOKEN environment variable for direct responses")
