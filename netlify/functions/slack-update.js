@@ -62,8 +62,15 @@ exports.handler = async (event, context) => {
       };
     }
 
-    // Determine the period from command text
-    const period = slackData.text?.trim() || 'daily';
+    // Determine the period from command text or command name
+    let period;
+    const command = slackData.command;
+    if (command && command.endsWith('-update') && command.length > 8) { // > '/-update'.length
+        period = command.substring(1, command.length - '-update'.length);
+    } else {
+        period = slackData.text?.trim() || 'daily';
+    }
+
     if (!['daily', 'weekly', 'monthly'].includes(period)) {
       console.log('Invalid period:', period);
       return {

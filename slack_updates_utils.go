@@ -331,13 +331,17 @@ func parseTimeToSeconds(timeStr string) int {
 	}
 
 	var hours, minutes int
+	hRegex := regexp.MustCompile(`(\d+)h`)
+	mRegex := regexp.MustCompile(`(\d+)m`)
 
-	if strings.Contains(timeStr, "h") && strings.Contains(timeStr, "m") {
-		fmt.Sscanf(timeStr, "%dh %dm", &hours, &minutes)
-	} else if strings.Contains(timeStr, "h") {
-		fmt.Sscanf(timeStr, "%dh", &hours)
-	} else if strings.Contains(timeStr, "m") {
-		fmt.Sscanf(timeStr, "%dm", &minutes)
+	hMatch := hRegex.FindStringSubmatch(timeStr)
+	if len(hMatch) > 1 {
+		hours, _ = strconv.Atoi(hMatch[1])
+	}
+
+	mMatch := mRegex.FindStringSubmatch(timeStr)
+	if len(mMatch) > 1 {
+		minutes, _ = strconv.Atoi(mMatch[1])
 	}
 
 	return hours*3600 + minutes*60
