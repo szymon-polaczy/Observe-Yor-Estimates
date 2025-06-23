@@ -41,6 +41,28 @@ func NewSlackAPIClient() *SlackAPIClient {
 	}
 }
 
+// NewSlackAPIClientFromEnv creates a client using CLI environment variables
+func NewSlackAPIClientFromEnv() *SlackAPIClient {
+	client := NewSlackAPIClient()
+
+	// When called from CLI, create context from environment variables
+	if channelID := os.Getenv("CHANNEL_ID"); channelID != "" {
+		client.logger.Debugf("CLI mode: Using channel %s", channelID)
+	}
+
+	return client
+}
+
+// GetContextFromEnv creates conversation context from environment variables (for CLI usage)
+func GetContextFromEnv() *ConversationContext {
+	return &ConversationContext{
+		ChannelID:   os.Getenv("CHANNEL_ID"),
+		UserID:      os.Getenv("USER_ID"),
+		ThreadTS:    os.Getenv("THREAD_TS"),
+		CommandType: os.Getenv("COMMAND_TYPE"),
+	}
+}
+
 // Send message directly to the channel where user asked
 func (s *SlackAPIClient) SendContextualUpdate(ctx *ConversationContext, taskInfos []TaskUpdateInfo, period string) error {
 	message := s.formatContextualMessage(taskInfos, period, ctx.UserID)

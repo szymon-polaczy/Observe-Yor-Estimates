@@ -91,9 +91,17 @@ func handleCliCommands(args []string, logger *Logger) {
 			return
 		}
 		logger.Infof("Running %s update command", period)
-		responseURL := getResponseURL()
-		outputJSON := getOutputJSON()
-		SendSlackUpdate(period, responseURL, outputJSON)
+
+		// Check if we have Slack API context (from Netlify function)
+		if os.Getenv("SLACK_BOT_TOKEN") != "" && os.Getenv("CHANNEL_ID") != "" {
+			logger.Info("Using direct Slack API for context-aware response")
+			handleDirectSlackUpdate(period)
+		} else {
+			// Fallback to original behavior
+			responseURL := getResponseURL()
+			outputJSON := getOutputJSON()
+			SendSlackUpdate(period, responseURL, outputJSON)
+		}
 	case "sync-time-entries":
 		logger.Info("Running time entries sync command")
 		if err := SyncTimeEntriesToDatabase("", ""); err != nil {
@@ -209,4 +217,39 @@ func getOutputJSON() bool {
 	}
 	// If not found in args, check environment variable (set by Netlify functions)
 	return os.Getenv("OUTPUT_JSON") == "true"
+}
+
+func handleDirectSlackUpdate(period string) {
+	logger := GetGlobalLogger()
+	logger.Infof("Handling direct Slack update for period: %s", period)
+
+	// Create Slack API client and context from environment
+	slackClient := NewSlackAPIClientFromEnv()
+	ctx := GetContextFromEnv()
+
+	// Get database connection
+	db, err := GetDB()
+	if err != nil {
+		logger.Errorf("Failed to open database connection: %v", err)
+		slackClient.SendErrorResponse(ctx, "Database connection failed")
+		return
+	}
+
+	// Get task data
+	taskInfos, err := getTaskChanges(db, period)
+	if err != nil {
+		logger.Errorf("Failed to get %s task changes: %v", period, err)
+		slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to get %s changes", period))
+		return
+	}
+
+	// Send direct response to Slack
+	if len(taskInfos) == 0 {
+		slackClient.SendNoChangesMessage(ctx, period)
+	} else {
+		// Default to personal update for now - can be enhanced with user preferences
+		slackClient.SendPersonalUpdate(ctx, taskInfos, period)
+	}
+
+	logger.Infof("Direct Slack update completed for period: %s", period)
 }

@@ -133,41 +133,85 @@ async function processUnifiedCommandInBackground(slackData) {
   try {
     console.log(`Processing unified OYE command for ${slackData.user_name}: ${slackData.text}`);
 
-    // Convert Slack data to URL-encoded form for the Go server
-    const formData = new URLSearchParams();
-    Object.keys(slackData).forEach(key => {
-      if (slackData[key]) {
-        formData.append(key, slackData[key]);
-      }
-    });
-
-    // Call the Go server's unified handler
-    const serverUrl = process.env.SERVER_URL || 'http://localhost:8080';
-    const endpoint = `${serverUrl}/slack/oye`;
-
-    console.log(`Calling Go server at: ${endpoint}`);
-
-    const fetch = (await import('node-fetch')).default;
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: formData.toString(),
-    });
-
-    if (response.ok) {
-      console.log('Successfully processed unified command via Go server');
+    // Parse command to determine action
+    const text = (slackData.text || '').toLowerCase().trim();
+    
+    if (text.includes('sync') || text === 'full-sync') {
+      await executeGoCommand('full-sync', [], {
+        SLACK_BOT_TOKEN: process.env.SLACK_BOT_TOKEN,
+        CHANNEL_ID: slackData.channel_id,
+        USER_ID: slackData.user_id
+      });
     } else {
-      const errorBody = await response.text();
-      console.error(`Go server returned error: ${response.status} - ${errorBody}`);
-      await sendErrorToSlack(slackData.response_url, `Server error: ${response.status}`);
+      // Determine period
+      let period = 'daily';
+      if (text.includes('weekly')) period = 'weekly';
+      else if (text.includes('monthly')) period = 'monthly';
+      
+      await executeGoCommand('update', [period], {
+        SLACK_BOT_TOKEN: process.env.SLACK_BOT_TOKEN,
+        CHANNEL_ID: slackData.channel_id,
+        USER_ID: slackData.user_id
+      });
     }
+
+    console.log('Successfully processed unified command via Go CLI');
 
   } catch (error) {
     console.error('Error in unified command processing:', error);
     await sendErrorToSlack(slackData.response_url, `Processing failed: ${error.message}`);
   }
+}
+
+async function executeGoCommand(command, args = [], envVars = {}) {
+  return new Promise((resolve) => {
+    console.log(`Executing Go command: ${command} ${args.join(' ')}`);
+    
+    const env = { ...process.env, ...envVars };
+    const child = spawn('./bin/observe-yor-estimates', [command, ...args], { 
+      env,
+      cwd: process.cwd(),
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (data) => {
+      const output = data.toString();
+      stdout += output;
+      console.log('Go stdout:', output);
+    });
+
+    child.stderr.on('data', (data) => {
+      const output = data.toString();
+      stderr += output;
+      console.log('Go stderr:', output);
+    });
+
+    child.on('close', (code) => {
+      console.log(`Go command exited with code: ${code}`);
+      if (code === 0) {
+        resolve({ success: true, output: stdout });
+      } else {
+        resolve({ success: false, error: stderr || `Exit code: ${code}` });
+      }
+    });
+
+    child.on('error', (error) => {
+      console.error('Go command spawn error:', error);
+      resolve({ success: false, error: error.message });
+    });
+
+    // Add timeout for the child process
+    setTimeout(() => {
+      if (!child.killed) {
+        console.log('Killing Go process due to timeout');
+        child.kill('SIGTERM');
+        resolve({ success: false, error: 'Command timeout after 2 minutes' });
+      }
+    }, 2 * 60 * 1000); // 2 minute timeout
+  });
 }
 
 

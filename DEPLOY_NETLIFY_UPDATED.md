@@ -18,11 +18,16 @@ DATABASE_URL=your_database_url
 SLACK_VERIFICATION_TOKEN=your_verification_token
 SLACK_BOT_TOKEN=xoxb-your-bot-token
 
+# For automated cron updates (posts to configured channel)
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL
+
 # Optional: For separate server deployment
 SERVER_URL=https://your-app-name.netlify.app
 ```
 
-**⚠️ SLACK_BOT_TOKEN is now required** - the system no longer falls back to webhooks.
+**Two-path system:**
+- **User commands** (`/oye`) → Use `SLACK_BOT_TOKEN` for context-aware responses
+- **Automated cron jobs** → Use `SLACK_WEBHOOK_URL` for scheduled updates to configured channel
 
 ### 2. Slack App Configuration
 
