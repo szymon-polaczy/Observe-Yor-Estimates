@@ -37,7 +37,6 @@ func main() {
 
 	logger.Info("Starting Observe-Yor-Estimates application")
 
-	// In CLI mode, we don't run as a server
 	// Initialize database connection for CLI operations
 	logger.Info("Initializing database connection...")
 	_, initErr := GetDB()
@@ -47,9 +46,16 @@ func main() {
 	}
 	logger.Info("Database connection initialized successfully")
 
-	logger.Info("CLI mode: No server started. Use command line arguments for operations.")
-	logger.Info("For example: ./observe-yor-estimates update daily")
-	logger.Info("Available commands: update, sync-tasks, sync-time-entries, full-sync")
+	// Start as long-running server with background services
+	logger.Info("Starting server mode with background services...")
+
+	// Setup and start cron jobs for periodic syncing
+	logger.Info("Setting up scheduled tasks...")
+	setupCronJobs(logger)
+
+	// Start HTTP server for Slack commands (this will block)
+	logger.Info("Starting HTTP server for Slack integrations...")
+	StartServer(logger)
 }
 
 func handleCliCommands(args []string, logger *Logger) {
