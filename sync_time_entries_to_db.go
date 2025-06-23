@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+	"github.com/lib/pq"
 )
 
 // JsonTimeEntry represents a time entry from TimeCamp API
@@ -144,7 +145,7 @@ func SyncTimeEntriesToDatabase(fromDate, toDate string) error {
 		return fmt.Errorf("failed to migrate time_entries table: %w", err)
 	}
 
-	// Use INSERT ... ON CONFLICT to handle existing time entries (PostgreSQL equivalent of INSERT OR REPLACE)
+	// Prepare insert statement (ON CONFLICT to upsert)
 	insertStatement, err := db.Prepare(`INSERT INTO time_entries 
 		(id, task_id, user_id, date, start_time, end_time, duration, description, billable, locked, modify_time) 
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) 
@@ -164,12 +165,19 @@ func SyncTimeEntriesToDatabase(fromDate, toDate string) error {
 	}
 	defer CloseWithErrorLog(insertStatement, "prepared statement")
 
-	// Prepare statement to check if task exists
-	taskExistsStatement, err := db.Prepare(`SELECT EXISTS(SELECT 1 FROM tasks WHERE task_id = $1)`)
+	// Build an in-memory set of existing task IDs to avoid per-entry queries
+	existingTasks := make(map[int]struct{})
+	rowsTasks, err := db.Query(`SELECT task_id FROM tasks`)
 	if err != nil {
-		return fmt.Errorf("failed to prepare task existence check statement: %w", err)
+		return fmt.Errorf("failed to fetch existing tasks: %w", err)
 	}
-	defer CloseWithErrorLog(taskExistsStatement, "task existence check statement")
+	for rowsTasks.Next() {
+		var id int
+		if err := rowsTasks.Scan(&id); err == nil {
+			existingTasks[id] = struct{}{}
+		}
+	}
+	rowsTasks.Close()
 
 	// Pre-process entries to validate and convert data types
 	validEntries := make([]ProcessedTimeEntry, 0, len(timeEntries))
@@ -184,17 +192,8 @@ func SyncTimeEntriesToDatabase(fromDate, toDate string) error {
 			continue
 		}
 
-		// Check if the task exists in the database
-		var taskExists bool
-		err = taskExistsStatement.QueryRow(processed.TaskID).Scan(&taskExists)
-		if err != nil {
-			logger.Errorf("Failed to check if task %d exists for time entry %d: %v, skipping", processed.TaskID, processed.ID, err)
-			invalidCount++
-			continue
-		}
-
-		if !taskExists {
-			logger.Warnf("Time entry %d references non-existent task %d, skipping (task may need to be synced first)", processed.ID, processed.TaskID)
+		// Check if task exists in the pre-fetched map
+		if _, ok := existingTasks[processed.TaskID]; !ok {
 			missingTaskCount++
 			continue
 		}
@@ -388,17 +387,14 @@ func GetTaskTimeEntries(db *sql.DB) ([]TaskUpdateInfo, error) {
 	defer rows.Close()
 
 	var tasks []TaskUpdateInfo
+	var taskIDs []int
+
 	for rows.Next() {
 		var taskID int
 		var name string
 		var todaySeconds, yesterdaySeconds int
 		if err := rows.Scan(&taskID, &name, &todaySeconds, &yesterdaySeconds); err != nil {
 			return nil, fmt.Errorf("failed to scan task time entry: %w", err)
-		}
-
-		comments, err := getTaskComments(db, taskID, yesterday, today)
-		if err != nil {
-			logger.Warnf("failed to get comments for task %d: %v", taskID, err)
 		}
 
 		estimation, status := parseEstimation(name)
@@ -409,10 +405,23 @@ func GetTaskTimeEntries(db *sql.DB) ([]TaskUpdateInfo, error) {
 			CurrentTime:      formatDuration(todaySeconds),
 			PreviousPeriod:   "Yesterday",
 			PreviousTime:     formatDuration(yesterdaySeconds),
-			Comments:         comments,
 			EstimationInfo:   estimation,
 			EstimationStatus: status,
 		})
+		taskIDs = append(taskIDs, taskID)
+	}
+
+	// Bulk fetch comments for all tasks found
+	commentsMap, err := getTaskCommentsBulk(db, taskIDs, yesterday, today)
+	if err != nil {
+		logger.Warnf("failed to bulk fetch comments: %v", err)
+	}
+
+	// Attach comments
+	for i, id := range taskIDs {
+		if comments, ok := commentsMap[id]; ok {
+			tasks[i].Comments = comments
+		}
 	}
 
 	return tasks, nil
@@ -445,17 +454,14 @@ func GetWeeklyTaskTimeEntries(db *sql.DB) ([]TaskUpdateInfo, error) {
 	defer rows.Close()
 
 	var tasks []TaskUpdateInfo
+	var taskIDs []int
+
 	for rows.Next() {
 		var taskID int
 		var name string
 		var thisWeekSeconds, lastWeekSeconds, daysWorked int
 		if err := rows.Scan(&taskID, &name, &thisWeekSeconds, &lastWeekSeconds, &daysWorked); err != nil {
 			return nil, fmt.Errorf("failed to scan weekly task time entry: %w", err)
-		}
-
-		comments, err := getTaskComments(db, taskID, lastWeekStart.Format("2006-01-02"), time.Now().Format("2006-01-02"))
-		if err != nil {
-			logger.Warnf("failed to get comments for task %d: %v", taskID, err)
 		}
 
 		estimation, status := parseEstimation(name)
@@ -467,10 +473,21 @@ func GetWeeklyTaskTimeEntries(db *sql.DB) ([]TaskUpdateInfo, error) {
 			PreviousPeriod:   "Last Week",
 			PreviousTime:     formatDuration(lastWeekSeconds),
 			DaysWorked:       daysWorked,
-			Comments:         comments,
 			EstimationInfo:   estimation,
 			EstimationStatus: status,
 		})
+		taskIDs = append(taskIDs, taskID)
+	}
+
+	commentsMap, err := getTaskCommentsBulk(db, taskIDs, lastWeekStart.Format("2006-01-02"), time.Now().Format("2006-01-02"))
+	if err != nil {
+		logger.Warnf("failed to bulk fetch comments: %v", err)
+	}
+
+	for i, id := range taskIDs {
+		if comments, ok := commentsMap[id]; ok {
+			tasks[i].Comments = comments
+		}
 	}
 	return tasks, nil
 }
@@ -503,17 +520,13 @@ func GetMonthlyTaskTimeEntries(db *sql.DB) ([]TaskUpdateInfo, error) {
 	defer rows.Close()
 
 	var tasks []TaskUpdateInfo
+	var taskIDs []int
 	for rows.Next() {
 		var taskID int
 		var name string
 		var thisMonthSeconds, lastMonthSeconds, daysWorked int
 		if err := rows.Scan(&taskID, &name, &thisMonthSeconds, &lastMonthSeconds, &daysWorked); err != nil {
 			return nil, fmt.Errorf("failed to scan monthly task time entry: %w", err)
-		}
-
-		comments, err := getTaskComments(db, taskID, lastMonthStart.Format("2006-01-02"), time.Now().Format("2006-01-02"))
-		if err != nil {
-			logger.Warnf("failed to get comments for task %d: %v", taskID, err)
 		}
 
 		estimation, status := parseEstimation(name)
@@ -525,10 +538,21 @@ func GetMonthlyTaskTimeEntries(db *sql.DB) ([]TaskUpdateInfo, error) {
 			PreviousPeriod:   "Last Month",
 			PreviousTime:     formatDuration(lastMonthSeconds),
 			DaysWorked:       daysWorked,
-			Comments:         comments,
 			EstimationInfo:   estimation,
 			EstimationStatus: status,
 		})
+		taskIDs = append(taskIDs, taskID)
+	}
+
+	commentsMap, err := getTaskCommentsBulk(db, taskIDs, lastMonthStart.Format("2006-01-02"), time.Now().Format("2006-01-02"))
+	if err != nil {
+		logger.Warnf("failed to bulk fetch comments: %v", err)
+	}
+
+	for i, id := range taskIDs {
+		if comments, ok := commentsMap[id]; ok {
+			tasks[i].Comments = comments
+		}
 	}
 	return tasks, nil
 }
@@ -589,4 +613,46 @@ func getTaskComments(db *sql.DB, taskID int, fromDate, toDate string) ([]string,
 
 	logger.Debugf("Retrieved %d comments for task %d between %s and %s", len(comments), taskID, fromDate, toDate)
 	return comments, nil
+}
+
+func getTaskCommentsBulk(db *sql.DB, taskIDs []int, fromDate, toDate string) (map[int][]string, error) {
+	logger := GetGlobalLogger()
+
+	if len(taskIDs) == 0 {
+		return map[int][]string{}, nil
+	}
+
+	// Build query using ANY($1) to leverage Postgres array parameter
+	query := `SELECT task_id, ARRAY_AGG(DISTINCT TRIM(description) ORDER BY TRIM(description))
+	          FROM time_entries
+	          WHERE task_id = ANY($1) AND date BETWEEN $2 AND $3 AND description IS NOT NULL AND TRIM(description) != ''
+	          GROUP BY task_id`
+
+	rows, err := db.Query(query, pq.Array(taskIDs), fromDate, toDate)
+	if err != nil {
+		return nil, fmt.Errorf("error querying bulk task comments: %w", err)
+	}
+	defer CloseWithErrorLog(rows, "bulk comments rows")
+
+	commentsMap := make(map[int][]string)
+	for rows.Next() {
+		var taskID int
+		var comments pq.StringArray
+		if err := rows.Scan(&taskID, &comments); err != nil {
+			logger.Errorf("error scanning bulk comments row: %v", err)
+			continue
+		}
+		// Convert pq.StringArray to []string
+		strComments := make([]string, len(comments))
+		for i, c := range comments {
+			strComments[i] = strings.TrimSpace(c)
+		}
+		commentsMap[taskID] = strComments
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating bulk comments rows: %w", err)
+	}
+
+	return commentsMap, nil
 }
