@@ -371,20 +371,20 @@ func GetTaskTimeEntries(db *sql.DB) ([]TaskUpdateInfo, error) {
 WITH yesterday AS (
     SELECT task_id, SUM(duration) AS total_duration
     FROM time_entries
-    WHERE date = CURRENT_DATE - INTERVAL '1 day'
+    WHERE date::date = CURRENT_DATE - INTERVAL '1 day'
     GROUP BY task_id
 ),
 day_before AS (
     SELECT task_id, SUM(duration) AS total_duration
     FROM time_entries
-    WHERE date = CURRENT_DATE - INTERVAL '2 days'
+    WHERE date::date = CURRENT_DATE - INTERVAL '2 days'
     GROUP BY task_id
 )
 SELECT 
     t.name, 
     COALESCE(y.total_duration, 0) AS yesterday_duration, 
     COALESCE(db.total_duration, 0) AS day_before_duration,
-    (SELECT string_agg(description, ' | ') FROM time_entries te WHERE te.task_id = t.task_id AND te.date = CURRENT_DATE - INTERVAL '1 day'),
+    (SELECT string_agg(description, ' | ') FROM time_entries te WHERE te.task_id = t.task_id AND te.date::date = CURRENT_DATE - INTERVAL '1 day'),
     t.task_id,
     t.parent_id
 FROM tasks t
@@ -452,13 +452,13 @@ func GetWeeklyTaskTimeEntries(db *sql.DB) ([]TaskUpdateInfo, error) {
 WITH current_week AS (
     SELECT task_id, SUM(duration) AS total_duration, COUNT(DISTINCT date) as days_worked
     FROM time_entries
-    WHERE date >= CURRENT_DATE - INTERVAL '7 days' AND date < CURRENT_DATE
+    WHERE date::date >= CURRENT_DATE - INTERVAL '7 days' AND date::date < CURRENT_DATE
     GROUP BY task_id
 ),
 previous_week AS (
     SELECT task_id, SUM(duration) AS total_duration
     FROM time_entries
-    WHERE date >= CURRENT_DATE - INTERVAL '14 days' AND date < CURRENT_DATE - INTERVAL '7 days'
+    WHERE date::date >= CURRENT_DATE - INTERVAL '14 days' AND date::date < CURRENT_DATE - INTERVAL '7 days'
     GROUP BY task_id
 )
 SELECT 
@@ -466,7 +466,7 @@ SELECT
     COALESCE(cw.total_duration, 0) AS current_week_duration, 
     COALESCE(pw.total_duration, 0) AS previous_week_duration,
     COALESCE(cw.days_worked, 0) as days_worked,
-    (SELECT string_agg(description, ' | ') FROM time_entries te WHERE te.task_id = t.task_id AND te.date >= CURRENT_DATE - INTERVAL '7 days' AND te.date < CURRENT_DATE),
+    (SELECT string_agg(description, ' | ') FROM time_entries te WHERE te.task_id = t.task_id AND te.date::date >= CURRENT_DATE - INTERVAL '7 days' AND te.date::date < CURRENT_DATE),
     t.task_id,
     t.parent_id
 FROM tasks t
@@ -541,13 +541,13 @@ func GetMonthlyTaskTimeEntries(db *sql.DB) ([]TaskUpdateInfo, error) {
 WITH current_month AS (
     SELECT task_id, SUM(duration) AS total_duration, COUNT(DISTINCT date) as days_worked
     FROM time_entries
-    WHERE date >= CURRENT_DATE - INTERVAL '30 days' AND date < CURRENT_DATE
+    WHERE date::date >= CURRENT_DATE - INTERVAL '30 days' AND date::date < CURRENT_DATE
     GROUP BY task_id
 ),
 previous_month AS (
     SELECT task_id, SUM(duration) AS total_duration
     FROM time_entries
-    WHERE date >= CURRENT_DATE - INTERVAL '60 days' AND date < CURRENT_DATE - INTERVAL '30 days'
+    WHERE date::date >= CURRENT_DATE - INTERVAL '60 days' AND date::date < CURRENT_DATE - INTERVAL '30 days'
     GROUP BY task_id
 )
 SELECT 
@@ -555,7 +555,7 @@ SELECT
     COALESCE(cm.total_duration, 0) AS current_month_duration, 
     COALESCE(pm.total_duration, 0) AS previous_month_duration,
     COALESCE(cm.days_worked, 0) as days_worked,
-    (SELECT string_agg(description, ' | ') FROM time_entries te WHERE te.task_id = t.task_id AND te.date >= CURRENT_DATE - INTERVAL '30 days' AND te.date < CURRENT_DATE),
+    (SELECT string_agg(description, ' | ') FROM time_entries te WHERE te.task_id = t.task_id AND te.date::date >= CURRENT_DATE - INTERVAL '30 days' AND te.date::date < CURRENT_DATE),
     t.task_id,
     t.parent_id
 FROM tasks t
