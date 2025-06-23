@@ -366,65 +366,80 @@ func GetTaskTimeEntries(db *sql.DB) ([]TaskUpdateInfo, error) {
 	logger := GetGlobalLogger()
 	logger.Debug("Querying database for daily task time entries")
 
-	today := time.Now().Format("2006-01-02")
-	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
-
-	rows, err := db.Query(`
-		SELECT
-			t.task_id,
-			t.name,
-			SUM(CASE WHEN te.date = $1 THEN te.duration ELSE 0 END) as today_seconds,
-			SUM(CASE WHEN te.date = $2 THEN te.duration ELSE 0 END) as yesterday_seconds
-		FROM tasks t
-		LEFT JOIN time_entries te ON t.task_id = te.task_id AND te.date IN ($1, $2)
-		GROUP BY t.task_id, t.name
-		HAVING SUM(CASE WHEN te.date = $1 THEN te.duration ELSE 0 END) > 0 OR SUM(CASE WHEN te.date = $2 THEN te.duration ELSE 0 END) > 0
-		ORDER BY t.name;
-	`, today, yesterday)
+	// Daily changes: compare yesterday with the day before
+	query := `
+WITH yesterday AS (
+    SELECT task_id, SUM(duration) AS total_duration
+    FROM time_entries
+    WHERE date = CURRENT_DATE - INTERVAL '1 day'
+    GROUP BY task_id
+),
+day_before AS (
+    SELECT task_id, SUM(duration) AS total_duration
+    FROM time_entries
+    WHERE date = CURRENT_DATE - INTERVAL '2 days'
+    GROUP BY task_id
+)
+SELECT 
+    t.name, 
+    COALESCE(y.total_duration, 0) AS yesterday_duration, 
+    COALESCE(db.total_duration, 0) AS day_before_duration,
+    (SELECT string_agg(description, ' | ') FROM time_entries te WHERE te.task_id = t.task_id AND te.date = CURRENT_DATE - INTERVAL '1 day'),
+    t.task_id,
+    t.parent_id
+FROM tasks t
+LEFT JOIN yesterday y ON t.task_id = y.task_id
+LEFT JOIN day_before db ON t.task_id = db.task_id
+WHERE COALESCE(y.total_duration, 0) > 0 OR COALESCE(db.total_duration, 0) > 0;
+`
+	rows, err := db.Query(query)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query task time entries: %w", err)
+		return nil, fmt.Errorf("failed to query daily task time entries: %w", err)
 	}
 	defer rows.Close()
 
-	var tasks []TaskUpdateInfo
-	var taskIDs []int
-
+	var taskInfos []TaskUpdateInfo
 	for rows.Next() {
-		var taskID int
-		var name string
-		var todaySeconds, yesterdaySeconds int
-		if err := rows.Scan(&taskID, &name, &todaySeconds, &yesterdaySeconds); err != nil {
-			return nil, fmt.Errorf("failed to scan task time entry: %w", err)
+		var info TaskUpdateInfo
+		var yesterdayDuration, dayBeforeDuration int
+		var comments sql.NullString
+		err := rows.Scan(&info.Name, &yesterdayDuration, &dayBeforeDuration, &comments, &info.TaskID, &info.ParentID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan task time entry row: %w", err)
 		}
+		info.CurrentPeriod = "Yesterday"
+		info.CurrentTime = formatDuration(yesterdayDuration)
+		info.PreviousPeriod = "Day Before"
+		info.PreviousTime = formatDuration(dayBeforeDuration)
+		info.EstimationInfo, info.EstimationStatus = parseEstimation(info.Name)
+		if comments.Valid {
+			info.Comments = strings.Split(comments.String, " | ")
+		}
+		taskInfos = append(taskInfos, info)
+	}
 
-		estimation, status := parseEstimation(name)
-
-		tasks = append(tasks, TaskUpdateInfo{
-			Name:             name,
-			CurrentPeriod:    "Today",
-			CurrentTime:      formatDuration(todaySeconds),
-			PreviousPeriod:   "Yesterday",
-			PreviousTime:     formatDuration(yesterdaySeconds),
-			EstimationInfo:   estimation,
-			EstimationStatus: status,
-		})
-		taskIDs = append(taskIDs, taskID)
+	// Extract task IDs for bulk comment fetching
+	var taskIDs []int
+	for _, info := range taskInfos {
+		taskIDs = append(taskIDs, info.TaskID)
 	}
 
 	// Bulk fetch comments for all tasks found
+	today := time.Now().Format("2006-01-02")
+	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
 	commentsMap, err := getTaskCommentsBulk(db, taskIDs, yesterday, today)
 	if err != nil {
 		logger.Warnf("failed to bulk fetch comments: %v", err)
 	}
 
 	// Attach comments
-	for i, id := range taskIDs {
-		if comments, ok := commentsMap[id]; ok {
-			tasks[i].Comments = comments
+	for i, info := range taskInfos {
+		if comments, ok := commentsMap[info.TaskID]; ok {
+			taskInfos[i].Comments = comments
 		}
 	}
 
-	return tasks, nil
+	return taskInfos, nil
 }
 
 // GetWeeklyTaskTimeEntries retrieves weekly time entry information for tasks
@@ -432,64 +447,88 @@ func GetWeeklyTaskTimeEntries(db *sql.DB) ([]TaskUpdateInfo, error) {
 	logger := GetGlobalLogger()
 	logger.Debug("Querying database for weekly task time entries")
 
-	thisWeekStart := time.Now().AddDate(0, 0, -int(time.Now().Weekday()))
-	lastWeekStart := thisWeekStart.AddDate(0, 0, -7)
-
-	rows, err := db.Query(`
-		SELECT
-			t.task_id,
-			t.name,
-			SUM(CASE WHEN te.date >= $1 THEN te.duration ELSE 0 END) as this_week_seconds,
-			SUM(CASE WHEN te.date >= $2 AND te.date < $1 THEN te.duration ELSE 0 END) as last_week_seconds,
-			COUNT(DISTINCT te.date) as days_worked
-		FROM tasks t
-		LEFT JOIN time_entries te ON t.task_id = te.task_id
-		GROUP BY t.task_id, t.name
-		HAVING SUM(CASE WHEN te.date >= $1 THEN te.duration ELSE 0 END) > 0 OR SUM(CASE WHEN te.date >= $2 AND te.date < $1 THEN te.duration ELSE 0 END) > 0
-		ORDER BY (SUM(CASE WHEN te.date >= $1 THEN te.duration ELSE 0 END) + SUM(CASE WHEN te.date >= $2 AND te.date < $1 THEN te.duration ELSE 0 END)) DESC;
-	`, thisWeekStart.Format("2006-01-02"), lastWeekStart.Format("2006-01-02"))
+	// Weekly changes: compare last 7 days with the 7 days before that
+	query := `
+WITH current_week AS (
+    SELECT task_id, SUM(duration) AS total_duration, COUNT(DISTINCT date) as days_worked
+    FROM time_entries
+    WHERE date >= CURRENT_DATE - INTERVAL '7 days' AND date < CURRENT_DATE
+    GROUP BY task_id
+),
+previous_week AS (
+    SELECT task_id, SUM(duration) AS total_duration
+    FROM time_entries
+    WHERE date >= CURRENT_DATE - INTERVAL '14 days' AND date < CURRENT_DATE - INTERVAL '7 days'
+    GROUP BY task_id
+)
+SELECT 
+    t.name, 
+    COALESCE(cw.total_duration, 0) AS current_week_duration, 
+    COALESCE(pw.total_duration, 0) AS previous_week_duration,
+    COALESCE(cw.days_worked, 0) as days_worked,
+    (SELECT string_agg(description, ' | ') FROM time_entries te WHERE te.task_id = t.task_id AND te.date >= CURRENT_DATE - INTERVAL '7 days' AND te.date < CURRENT_DATE),
+    t.task_id,
+    t.parent_id
+FROM tasks t
+LEFT JOIN current_week cw ON t.task_id = cw.task_id
+LEFT JOIN previous_week pw ON t.task_id = pw.task_id
+WHERE COALESCE(cw.total_duration, 0) > 0 OR COALESCE(pw.total_duration, 0) > 0;
+`
+	rows, err := db.Query(query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query weekly task time entries: %w", err)
 	}
 	defer rows.Close()
 
-	var tasks []TaskUpdateInfo
-	var taskIDs []int
-
+	var taskInfos []TaskUpdateInfo
 	for rows.Next() {
-		var taskID int
-		var name string
-		var thisWeekSeconds, lastWeekSeconds, daysWorked int
-		if err := rows.Scan(&taskID, &name, &thisWeekSeconds, &lastWeekSeconds, &daysWorked); err != nil {
-			return nil, fmt.Errorf("failed to scan weekly task time entry: %w", err)
+		var info TaskUpdateInfo
+		var currentWeekDuration, previousWeekDuration int
+		var comments sql.NullString
+		err := rows.Scan(
+			&info.Name,
+			&currentWeekDuration,
+			&previousWeekDuration,
+			&info.DaysWorked,
+			&comments,
+			&info.TaskID,
+			&info.ParentID,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan weekly task time entry row: %w", err)
 		}
-
-		estimation, status := parseEstimation(name)
-
-		tasks = append(tasks, TaskUpdateInfo{
-			Name:             name,
-			CurrentPeriod:    "This Week",
-			CurrentTime:      formatDuration(thisWeekSeconds),
-			PreviousPeriod:   "Last Week",
-			PreviousTime:     formatDuration(lastWeekSeconds),
-			DaysWorked:       daysWorked,
-			EstimationInfo:   estimation,
-			EstimationStatus: status,
-		})
-		taskIDs = append(taskIDs, taskID)
+		info.CurrentPeriod = "This Week"
+		info.CurrentTime = formatDuration(currentWeekDuration)
+		info.PreviousPeriod = "Last Week"
+		info.PreviousTime = formatDuration(previousWeekDuration)
+		info.EstimationInfo, info.EstimationStatus = parseEstimation(info.Name)
+		if comments.Valid {
+			info.Comments = strings.Split(comments.String, " | ")
+		}
+		taskInfos = append(taskInfos, info)
 	}
 
+	// Extract task IDs for bulk comment fetching
+	var taskIDs []int
+	for _, info := range taskInfos {
+		taskIDs = append(taskIDs, info.TaskID)
+	}
+
+	// Bulk fetch comments
+	lastWeekStart := time.Now().AddDate(0, 0, -14)
 	commentsMap, err := getTaskCommentsBulk(db, taskIDs, lastWeekStart.Format("2006-01-02"), time.Now().Format("2006-01-02"))
 	if err != nil {
 		logger.Warnf("failed to bulk fetch comments: %v", err)
 	}
 
-	for i, id := range taskIDs {
-		if comments, ok := commentsMap[id]; ok {
-			tasks[i].Comments = comments
+	// Attach comments
+	for i, info := range taskInfos {
+		if comments, ok := commentsMap[info.TaskID]; ok {
+			taskInfos[i].Comments = comments
 		}
 	}
-	return tasks, nil
+
+	return taskInfos, nil
 }
 
 // GetMonthlyTaskTimeEntries retrieves monthly time entry information for tasks
@@ -497,64 +536,88 @@ func GetMonthlyTaskTimeEntries(db *sql.DB) ([]TaskUpdateInfo, error) {
 	logger := GetGlobalLogger()
 	logger.Debug("Querying database for monthly task time entries")
 
-	today := time.Now()
-	thisMonthStart := time.Date(today.Year(), today.Month(), 1, 0, 0, 0, 0, today.Location())
-	lastMonthStart := thisMonthStart.AddDate(0, -1, 0)
-
-	rows, err := db.Query(`
-		SELECT
-			t.task_id,
-			t.name,
-			SUM(CASE WHEN te.date >= $1 THEN te.duration ELSE 0 END) as this_month_seconds,
-			SUM(CASE WHEN te.date >= $2 AND te.date < $1 THEN te.duration ELSE 0 END) as last_month_seconds,
-			COUNT(DISTINCT te.date) as days_worked
-		FROM tasks t
-		LEFT JOIN time_entries te ON t.task_id = te.task_id
-		GROUP BY t.task_id, t.name
-		HAVING SUM(CASE WHEN te.date >= $1 THEN te.duration ELSE 0 END) > 0 OR SUM(CASE WHEN te.date >= $2 AND te.date < $1 THEN te.duration ELSE 0 END) > 0
-		ORDER BY (SUM(CASE WHEN te.date >= $1 THEN te.duration ELSE 0 END) + SUM(CASE WHEN te.date >= $2 AND te.date < $1 THEN te.duration ELSE 0 END)) DESC;
-	`, thisMonthStart.Format("2006-01-02"), lastMonthStart.Format("2006-01-02"))
+	// Monthly changes: compare last 30 days with the 30 days before that
+	query := `
+WITH current_month AS (
+    SELECT task_id, SUM(duration) AS total_duration, COUNT(DISTINCT date) as days_worked
+    FROM time_entries
+    WHERE date >= CURRENT_DATE - INTERVAL '30 days' AND date < CURRENT_DATE
+    GROUP BY task_id
+),
+previous_month AS (
+    SELECT task_id, SUM(duration) AS total_duration
+    FROM time_entries
+    WHERE date >= CURRENT_DATE - INTERVAL '60 days' AND date < CURRENT_DATE - INTERVAL '30 days'
+    GROUP BY task_id
+)
+SELECT 
+    t.name, 
+    COALESCE(cm.total_duration, 0) AS current_month_duration, 
+    COALESCE(pm.total_duration, 0) AS previous_month_duration,
+    COALESCE(cm.days_worked, 0) as days_worked,
+    (SELECT string_agg(description, ' | ') FROM time_entries te WHERE te.task_id = t.task_id AND te.date >= CURRENT_DATE - INTERVAL '30 days' AND te.date < CURRENT_DATE),
+    t.task_id,
+    t.parent_id
+FROM tasks t
+LEFT JOIN current_month cm ON t.task_id = cm.task_id
+LEFT JOIN previous_month pm ON t.task_id = pm.task_id
+WHERE COALESCE(cm.total_duration, 0) > 0 OR COALESCE(pm.total_duration, 0) > 0;
+`
+	rows, err := db.Query(query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query monthly task time entries: %w", err)
 	}
 	defer rows.Close()
 
-	var tasks []TaskUpdateInfo
-	var taskIDs []int
+	var taskInfos []TaskUpdateInfo
 	for rows.Next() {
-		var taskID int
-		var name string
-		var thisMonthSeconds, lastMonthSeconds, daysWorked int
-		if err := rows.Scan(&taskID, &name, &thisMonthSeconds, &lastMonthSeconds, &daysWorked); err != nil {
-			return nil, fmt.Errorf("failed to scan monthly task time entry: %w", err)
+		var info TaskUpdateInfo
+		var currentMonthDuration, previousMonthDuration int
+		var comments sql.NullString
+		err := rows.Scan(
+			&info.Name,
+			&currentMonthDuration,
+			&previousMonthDuration,
+			&info.DaysWorked,
+			&comments,
+			&info.TaskID,
+			&info.ParentID,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan monthly task time entry row: %w", err)
 		}
-
-		estimation, status := parseEstimation(name)
-
-		tasks = append(tasks, TaskUpdateInfo{
-			Name:             name,
-			CurrentPeriod:    "This Month",
-			CurrentTime:      formatDuration(thisMonthSeconds),
-			PreviousPeriod:   "Last Month",
-			PreviousTime:     formatDuration(lastMonthSeconds),
-			DaysWorked:       daysWorked,
-			EstimationInfo:   estimation,
-			EstimationStatus: status,
-		})
-		taskIDs = append(taskIDs, taskID)
+		info.CurrentPeriod = "This Month"
+		info.CurrentTime = formatDuration(currentMonthDuration)
+		info.PreviousPeriod = "Last Month"
+		info.PreviousTime = formatDuration(previousMonthDuration)
+		info.EstimationInfo, info.EstimationStatus = parseEstimation(info.Name)
+		if comments.Valid {
+			info.Comments = strings.Split(comments.String, " | ")
+		}
+		taskInfos = append(taskInfos, info)
 	}
 
+	// Extract task IDs for bulk comment fetching
+	var taskIDs []int
+	for _, info := range taskInfos {
+		taskIDs = append(taskIDs, info.TaskID)
+	}
+
+	// Bulk fetch comments
+	lastMonthStart := time.Now().AddDate(0, -1, 0)
 	commentsMap, err := getTaskCommentsBulk(db, taskIDs, lastMonthStart.Format("2006-01-02"), time.Now().Format("2006-01-02"))
 	if err != nil {
 		logger.Warnf("failed to bulk fetch comments: %v", err)
 	}
 
-	for i, id := range taskIDs {
-		if comments, ok := commentsMap[id]; ok {
-			tasks[i].Comments = comments
+	// Attach comments
+	for i, info := range taskInfos {
+		if comments, ok := commentsMap[info.TaskID]; ok {
+			taskInfos[i].Comments = comments
 		}
 	}
-	return tasks, nil
+
+	return taskInfos, nil
 }
 
 // formatDuration formats seconds into a human-readable string like "1h 30m"
@@ -566,10 +629,7 @@ func formatDuration(seconds int) string {
 	hours := seconds / 3600
 	minutes := (seconds % 3600) / 60
 
-	if hours > 0 {
-		return fmt.Sprintf("%dh %dm", hours, minutes)
-	}
-	return fmt.Sprintf("%dm", minutes)
+	return fmt.Sprintf("%dh %dm", hours, minutes)
 }
 
 // getTaskComments retrieves unique comments for a task within a specific date range
@@ -577,11 +637,11 @@ func getTaskComments(db *sql.DB, taskID int, fromDate, toDate string) ([]string,
 	logger := GetGlobalLogger()
 
 	query := `
-		SELECT DISTINCT description 
-		FROM time_entries 
-		WHERE task_id = $1 
-		AND date BETWEEN $2 AND $3 
-		AND description IS NOT NULL 
+		SELECT description
+		FROM time_entries
+		WHERE task_id = $1
+		AND date BETWEEN $2 AND $3
+		AND description IS NOT NULL
 		AND TRIM(description) != ''
 		ORDER BY description
 	`
@@ -655,4 +715,18 @@ func getTaskCommentsBulk(db *sql.DB, taskIDs []int, fromDate, toDate string) (ma
 	}
 
 	return commentsMap, nil
+}
+
+func parseEstimationStatus(currentSeconds, previousSeconds int) string {
+	// Simple status based on whether time was logged
+	if currentSeconds > 0 && previousSeconds == 0 {
+		return "new"
+	}
+	if currentSeconds > 0 {
+		return "active"
+	}
+	if currentSeconds == 0 && previousSeconds > 0 {
+		return "stalled"
+	}
+	return "idle"
 }

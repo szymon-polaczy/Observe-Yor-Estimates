@@ -16,6 +16,8 @@ import (
 )
 
 type TaskUpdateInfo struct {
+	TaskID           int
+	ParentID         int
 	Name             string
 	EstimationInfo   string
 	EstimationStatus string
@@ -92,7 +94,15 @@ func SendSlackUpdate(period string, responseURL string, asJSON bool) {
 		return
 	}
 
-	projectGroups := groupTasksByProject(taskInfos)
+	// Fetch all tasks for hierarchy mapping
+	allTasks, err := getAllTasks(db)
+	if err != nil {
+		logger.Errorf("Failed to get all tasks for hierarchy mapping: %v", err)
+		sendFailureNotification("Failed to retrieve task hierarchy", err)
+		return
+	}
+
+	projectGroups := groupTasksByTopParent(taskInfos, allTasks)
 
 	// Sort project names for consistent output
 	var projectNames []string
@@ -257,30 +267,38 @@ func formatSingleTaskBlock(task TaskUpdateInfo) Block {
 	}
 }
 
-// groupTasksByProject groups tasks by their project identifier (e.g., WP3DX, BNBS, etc.)
-func groupTasksByProject(tasks []TaskUpdateInfo) map[string][]TaskUpdateInfo {
+// groupTasksByTopParent groups tasks by their ultimate parent task
+func groupTasksByTopParent(tasks []TaskUpdateInfo, allTasks map[int]Task) map[string][]TaskUpdateInfo {
 	projects := make(map[string][]TaskUpdateInfo)
 
 	for _, task := range tasks {
-		project := extractProjectCode(task.Name)
-		projects[project] = append(projects[project], task)
+		var projectName string
+		if task.ParentID == 0 {
+			projectName = task.Name // This task is a top-level parent
+		} else {
+			projectName = getTopLevelParent(task.ParentID, allTasks)
+		}
+		projects[projectName] = append(projects[projectName], task)
 	}
 
 	return projects
 }
 
-// extractProjectCode extracts project code from task name (e.g., "WP3DX" from "[WP3DX-652] Task name")
-func extractProjectCode(taskName string) string {
-	// Look for pattern like [ABC-123] or [ABCD-123]
-	re := regexp.MustCompile(`\[([A-Z]+)[-\d]`)
-	matches := re.FindStringSubmatch(taskName)
-
-	if len(matches) > 1 {
-		return matches[1]
+// getTopLevelParent finds the ultimate ancestor of a task
+func getTopLevelParent(parentID int, allTasks map[int]Task) string {
+	const maxDepth = 10 // To prevent infinite loops
+	currentID := parentID
+	for i := 0; i < maxDepth; i++ {
+		parentTask, ok := allTasks[currentID]
+		if !ok {
+			return "Unknown Project" // Parent task not found
+		}
+		if parentTask.ParentID == 0 || parentTask.ParentID == parentTask.ID {
+			return parentTask.Name // Found the top-level parent
+		}
+		currentID = parentTask.ParentID
 	}
-
-	// If no project code found, group under "Other"
-	return "Other"
+	return "Unknown Project (recursion limit)" // Exceeded max depth
 }
 
 func appendTaskTextMessage(builder *strings.Builder, task TaskUpdateInfo) {
@@ -521,4 +539,30 @@ func calculateTimeUsagePercentage(currentTime, previousTime, estimation string) 
 
 	percentage := (float64(totalSeconds) / float64(pessimisticSeconds)) * 100
 	return percentage, totalSeconds, nil
+}
+
+// Task is a simplified struct for holding task hierarchy data
+type Task struct {
+	ID       int
+	ParentID int
+	Name     string
+}
+
+// getAllTasks fetches all tasks from the database for hierarchy mapping
+func getAllTasks(db *sql.DB) (map[int]Task, error) {
+	rows, err := db.Query("SELECT task_id, parent_id, name FROM tasks")
+	if err != nil {
+		return nil, fmt.Errorf("could not query all tasks: %w", err)
+	}
+	defer rows.Close()
+
+	tasks := make(map[int]Task)
+	for rows.Next() {
+		var t Task
+		if err := rows.Scan(&t.ID, &t.ParentID, &t.Name); err != nil {
+			return nil, fmt.Errorf("could not scan task row: %w", err)
+		}
+		tasks[t.ID] = t
+	}
+	return tasks, nil
 }
