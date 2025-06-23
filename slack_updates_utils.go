@@ -267,38 +267,48 @@ func formatSingleTaskBlock(task TaskUpdateInfo) Block {
 	}
 }
 
-// groupTasksByTopParent groups tasks by their ultimate parent task
+// getProjectNameForTask finds the project-level parent for a task.
+// A "project" is defined as the ancestor that is one level below the ultimate root task.
+func getProjectNameForTask(taskID int, allTasks map[int]Task) string {
+	const maxDepth = 10
+
+	currentID := taskID
+	var previousID = taskID
+
+	for i := 0; i < maxDepth; i++ {
+		task, ok := allTasks[currentID]
+		if !ok {
+			if projectTask, ok := allTasks[previousID]; ok {
+				return projectTask.Name
+			}
+			return "Unknown Project (Orphan Task)"
+		}
+
+		if task.ParentID == 0 {
+			projectTask, ok := allTasks[previousID]
+			if !ok {
+				return "Unknown Project (Hierarchy Issue)"
+			}
+			return projectTask.Name
+		}
+
+		previousID = currentID
+		currentID = task.ParentID
+	}
+
+	return "Unknown Project (Max Recursion)"
+}
+
+// groupTasksByTopParent groups tasks by their project, which is one level below the root.
 func groupTasksByTopParent(tasks []TaskUpdateInfo, allTasks map[int]Task) map[string][]TaskUpdateInfo {
 	projects := make(map[string][]TaskUpdateInfo)
 
 	for _, task := range tasks {
-		var projectName string
-		if task.ParentID == 0 {
-			projectName = task.Name // This task is a top-level parent
-		} else {
-			projectName = getTopLevelParent(task.ParentID, allTasks)
-		}
+		projectName := getProjectNameForTask(task.TaskID, allTasks)
 		projects[projectName] = append(projects[projectName], task)
 	}
 
 	return projects
-}
-
-// getTopLevelParent finds the ultimate ancestor of a task
-func getTopLevelParent(parentID int, allTasks map[int]Task) string {
-	const maxDepth = 10 // To prevent infinite loops
-	currentID := parentID
-	for i := 0; i < maxDepth; i++ {
-		parentTask, ok := allTasks[currentID]
-		if !ok {
-			return "Unknown Project" // Parent task not found
-		}
-		if parentTask.ParentID == 0 || parentTask.ParentID == parentTask.ID {
-			return parentTask.Name // Found the top-level parent
-		}
-		currentID = parentTask.ParentID
-	}
-	return "Unknown Project (recursion limit)" // Exceeded max depth
 }
 
 func appendTaskTextMessage(builder *strings.Builder, task TaskUpdateInfo) {
