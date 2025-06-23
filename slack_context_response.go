@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"time"
 )
@@ -164,6 +165,15 @@ func (s *SlackAPIClient) SendFinalUpdate(ctx *ConversationContext, taskInfos []T
 		return s.SendNoChangesMessage(ctx, period)
 	}
 
+	// Check if we need to split by project due to size limits
+	projectGroups := groupTasksByProject(taskInfos)
+
+	// If we have many projects or tasks, send multiple messages (one per project)
+	if len(projectGroups) > 15 || len(taskInfos) > 25 {
+		return s.sendProjectSplitMessages(ctx, projectGroups, period, taskInfos)
+	}
+
+	// Otherwise, send as single message
 	message := s.formatContextualMessage(taskInfos, period, ctx.UserID)
 
 	payload := map[string]interface{}{
@@ -177,6 +187,207 @@ func (s *SlackAPIClient) SendFinalUpdate(ctx *ConversationContext, taskInfos []T
 	}
 
 	return s.sendSlackAPIRequest("chat.postMessage", payload)
+}
+
+// sendProjectSplitMessages sends separate messages for each project to avoid limits
+func (s *SlackAPIClient) sendProjectSplitMessages(ctx *ConversationContext, projectGroups map[string][]TaskUpdateInfo, period string, allTasks []TaskUpdateInfo) error {
+	// Send header message first
+	headerMessage := s.formatReportHeaderMessage(period, ctx.UserID, len(allTasks), len(projectGroups))
+
+	payload := map[string]interface{}{
+		"channel": ctx.ChannelID,
+		"text":    headerMessage.Text,
+		"blocks":  headerMessage.Blocks,
+	}
+
+	if ctx.ThreadTS != "" {
+		payload["thread_ts"] = ctx.ThreadTS
+	}
+
+	err := s.sendSlackAPIRequest("chat.postMessage", payload)
+	if err != nil {
+		return fmt.Errorf("failed to send header message: %w", err)
+	}
+
+	// Sort project names for consistent output
+	var projectNames []string
+	for project := range projectGroups {
+		projectNames = append(projectNames, project)
+	}
+
+	// Sort projects, but put "Other" last
+	sort.Slice(projectNames, func(i, j int) bool {
+		if projectNames[i] == "Other" {
+			return false
+		}
+		if projectNames[j] == "Other" {
+			return true
+		}
+		return projectNames[i] < projectNames[j]
+	})
+
+	// Send one message per project
+	for i, project := range projectNames {
+		tasks := projectGroups[project]
+
+		projectMessage := s.formatSingleProjectMessage(project, tasks, period, i+1, len(projectNames))
+
+		payload := map[string]interface{}{
+			"channel": ctx.ChannelID,
+			"text":    projectMessage.Text,
+			"blocks":  projectMessage.Blocks,
+		}
+
+		if ctx.ThreadTS != "" {
+			payload["thread_ts"] = ctx.ThreadTS
+		}
+
+		err := s.sendSlackAPIRequest("chat.postMessage", payload)
+		if err != nil {
+			s.logger.Errorf("Failed to send project message for %s: %v", project, err)
+			// Continue with other projects even if one fails
+		}
+
+		// Small delay between messages to avoid rate limiting
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	return nil
+}
+
+// formatReportHeaderMessage creates the header message for split reports
+func (s *SlackAPIClient) formatReportHeaderMessage(period, userID string, totalTasks, totalProjects int) SlackMessage {
+	headerText := fmt.Sprintf("📊 %s Task Update for <@%s>", strings.Title(period), userID)
+
+	blocks := []Block{
+		{
+			Type: "header",
+			Text: &Text{Type: "plain_text", Text: fmt.Sprintf("%s Task Update", strings.Title(period))},
+		},
+		{
+			Type: "section",
+			Text: &Text{Type: "mrkdwn", Text: fmt.Sprintf("*%s*\n📋 **%d tasks** across **%d projects**\n_Report split by project for better readability_", headerText, totalTasks, totalProjects)},
+		},
+		{Type: "divider"},
+	}
+
+	return SlackMessage{
+		Text:   fmt.Sprintf("%s - %d tasks across %d projects", headerText, totalTasks, totalProjects),
+		Blocks: blocks,
+	}
+}
+
+// formatSingleProjectMessage creates a message for a single project
+func (s *SlackAPIClient) formatSingleProjectMessage(project string, tasks []TaskUpdateInfo, period string, projectNum, totalProjects int) SlackMessage {
+	var projectTitle string
+	if project == "Other" {
+		projectTitle = "📋 Other Tasks"
+	} else {
+		projectTitle = fmt.Sprintf("📁 %s Project", project)
+	}
+
+	headerText := fmt.Sprintf("%s (%d/%d)", projectTitle, projectNum, totalProjects)
+
+	blocks := []Block{
+		{
+			Type: "section",
+			Text: &Text{Type: "mrkdwn", Text: fmt.Sprintf("*%s*\n_%d tasks in this project_", headerText, len(tasks))},
+		},
+	}
+
+	var messageText strings.Builder
+	messageText.WriteString(fmt.Sprintf("*%s*\n\n", headerText))
+
+	// Check if even this single project might exceed character limits
+	totalChars := 0
+	for _, task := range tasks {
+		taskPreview := fmt.Sprintf("*%s* - %s: %s, %s: %s",
+			task.Name, task.CurrentPeriod, task.CurrentTime, task.PreviousPeriod, task.PreviousTime)
+		totalChars += len(taskPreview)
+	}
+
+	if totalChars > 2500 { // Leave some margin under 3000
+		// Use summary format for this project
+		blocks = append(blocks, s.formatProjectSummaryBlock(tasks, period))
+	} else {
+		// Use detailed format
+		for _, task := range tasks {
+			taskBlock := formatSingleTaskBlock(task)
+			blocks = append(blocks, taskBlock)
+
+			// Build text version
+			messageText.WriteString(fmt.Sprintf("*%s*", task.Name))
+			if task.EstimationInfo != "" {
+				messageText.WriteString(fmt.Sprintf(" | %s", task.EstimationInfo))
+			}
+			messageText.WriteString(fmt.Sprintf("\nTime worked: %s: %s, %s: %s", task.CurrentPeriod, task.CurrentTime, task.PreviousPeriod, task.PreviousTime))
+			if task.DaysWorked > 0 {
+				messageText.WriteString(fmt.Sprintf(", Days worked: %d", task.DaysWorked))
+			}
+			messageText.WriteString("\n\n")
+		}
+	}
+
+	return SlackMessage{
+		Text:   messageText.String(),
+		Blocks: blocks,
+	}
+}
+
+// formatProjectSummaryBlock creates a summary block when even single project is too large
+func (s *SlackAPIClient) formatProjectSummaryBlock(tasks []TaskUpdateInfo, period string) Block {
+	var summaryText strings.Builder
+	summaryText.WriteString("📊 **Project Summary** _(too many tasks for detailed view)_\n\n")
+
+	// Calculate totals
+	var currentTotalSeconds, previousTotalSeconds int
+	totalDays := 0
+
+	for _, task := range tasks {
+		currentTotalSeconds += parseTimeToSeconds(task.CurrentTime)
+		previousTotalSeconds += parseTimeToSeconds(task.PreviousTime)
+		if task.DaysWorked > totalDays {
+			totalDays = task.DaysWorked
+		}
+	}
+
+	currentTotal := formatDuration(currentTotalSeconds)
+	previousTotal := formatDuration(previousTotalSeconds)
+
+	summaryText.WriteString(fmt.Sprintf("• **%d tasks** in this project\n", len(tasks)))
+	summaryText.WriteString(fmt.Sprintf("• **Total time**: %s this period, %s last period\n", currentTotal, previousTotal))
+	summaryText.WriteString(fmt.Sprintf("• **Active days**: %d\n\n", totalDays))
+
+	// Show top 5 tasks by current period time
+	sort.Slice(tasks, func(i, j int) bool {
+		iSeconds := parseTimeToSeconds(tasks[i].CurrentTime)
+		jSeconds := parseTimeToSeconds(tasks[j].CurrentTime)
+		return iSeconds > jSeconds
+	})
+
+	summaryText.WriteString("**Top tasks by time:**\n")
+	maxTasks := 5
+	if len(tasks) < maxTasks {
+		maxTasks = len(tasks)
+	}
+
+	for i := 0; i < maxTasks; i++ {
+		task := tasks[i]
+		taskName := sanitizeSlackText(task.Name)
+		if len(taskName) > 50 {
+			taskName = taskName[:47] + "..."
+		}
+		summaryText.WriteString(fmt.Sprintf("• %s (%s)\n", taskName, task.CurrentTime))
+	}
+
+	if len(tasks) > maxTasks {
+		summaryText.WriteString(fmt.Sprintf("• ... and %d more tasks\n", len(tasks)-maxTasks))
+	}
+
+	return Block{
+		Type: "section",
+		Text: &Text{Type: "mrkdwn", Text: summaryText.String()},
+	}
 }
 
 func (s *SlackAPIClient) SendNoChangesMessage(ctx *ConversationContext, period string) error {
