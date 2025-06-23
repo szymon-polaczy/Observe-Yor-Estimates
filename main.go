@@ -70,10 +70,6 @@ func handleCliCommands(args []string, logger *Logger) {
 		fmt.Println("Observe-Yor-Estimates v1.0.0")
 	case "--build-test", "build-test":
 		fmt.Println("Build test successful - binary is working correctly")
-	case "job-processor":
-		// Run as standalone job processor
-		processJobsMain()
-		return
 	case "--init-db", "init-db":
 		_, err := GetDB()
 		if err != nil {
