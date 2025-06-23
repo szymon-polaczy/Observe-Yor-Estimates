@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
+	"time"
 
 	_ "github.com/lib/pq"
 )
@@ -19,9 +22,12 @@ var (
 
 // getDBConnectionString returns the PostgreSQL connection string from environment variables
 func getDBConnectionString() string {
+	logger := GetGlobalLogger()
+
 	// Check for Supabase environment variables
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL != "" {
+		logger.Debug("Using DATABASE_URL environment variable for database connection")
 		return dbURL
 	}
 
@@ -34,6 +40,10 @@ func getDBConnectionString() string {
 	sslmode := os.Getenv("DB_SSLMODE")
 
 	if host == "" || user == "" || password == "" || dbname == "" {
+		logger.Error("Database configuration missing! Required environment variables:")
+		logger.Error("  Either set DATABASE_URL")
+		logger.Error("  Or set all of: DB_HOST, DB_USER, DB_PASSWORD, DB_NAME")
+		logger.Error("  Optional: DB_PORT (defaults to 5432), DB_SSLMODE (defaults to require)")
 		// Return empty string to trigger error - all required vars must be set
 		return ""
 	}
@@ -45,6 +55,7 @@ func getDBConnectionString() string {
 		sslmode = "require"
 	}
 
+	logger.Debug("Using individual DB_* environment variables for database connection")
 	return fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
 		host, port, user, password, dbname, sslmode)
 }
@@ -63,6 +74,10 @@ func validateDatabaseWriteAccess() error {
 
 	db, err := GetDB()
 	if err != nil {
+		// Check if this is an IPv6 connectivity issue
+		if strings.Contains(err.Error(), "network is unreachable") && strings.Contains(err.Error(), "dial tcp [") {
+			return fmt.Errorf("failed to connect to database: IPv6 connectivity issue detected. The database hostname only resolves to IPv6 addresses but your system cannot reach IPv6 networks. This is a common issue with some network configurations. Consider: 1) Enabling IPv6 connectivity on your system/network, 2) Using a different database that supports IPv4, or 3) Using a VPN/proxy that supports IPv6. Original error: %w", err)
+		}
 		return fmt.Errorf("failed to connect to database: %w", err)
 	}
 
@@ -92,7 +107,7 @@ func GetDB() (*sql.DB, error) {
 			initErr = fmt.Errorf("database connection string not configured - please set DATABASE_URL or individual DB_* environment variables")
 			return
 		}
-		
+
 		logger.Debugf("Initializing database connection to PostgreSQL")
 
 		db, err := sql.Open("postgres", connStr)
@@ -101,10 +116,23 @@ func GetDB() (*sql.DB, error) {
 			return
 		}
 
-		// Test the connection
-		if err := db.Ping(); err != nil {
+		// Set connection pool settings with timeouts
+		db.SetConnMaxLifetime(time.Minute * 3)
+		db.SetMaxOpenConns(10)
+		db.SetMaxIdleConns(5)
+
+		// Test the connection with timeout
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		if err := db.PingContext(ctx); err != nil {
 			db.Close()
-			initErr = fmt.Errorf("failed to ping database: %w", err)
+			// Provide more helpful error messages for common connectivity issues
+			if strings.Contains(err.Error(), "network is unreachable") && strings.Contains(err.Error(), "dial tcp [") {
+				initErr = fmt.Errorf("failed to ping database: IPv6 connectivity issue detected. The database hostname only resolves to IPv6 addresses but your system cannot reach IPv6 networks. This suggests a network configuration issue. Original error: %w", err)
+			} else {
+				initErr = fmt.Errorf("failed to ping database (connection timeout after 10s): %w", err)
+			}
 			return
 		}
 
