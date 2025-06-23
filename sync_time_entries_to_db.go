@@ -322,7 +322,7 @@ func GetTaskTimeEntries(db *sql.DB) ([]TaskUpdateInfo, error) {
 		FROM tasks t
 		LEFT JOIN time_entries te ON t.task_id = te.task_id AND te.date IN ($1, $2)
 		GROUP BY t.task_id, t.name
-		HAVING today_seconds > 0 OR yesterday_seconds > 0
+		HAVING SUM(CASE WHEN te.date = $1 THEN te.duration ELSE 0 END) > 0 OR SUM(CASE WHEN te.date = $2 THEN te.duration ELSE 0 END) > 0
 		ORDER BY t.name;
 	`, today, yesterday)
 	if err != nil {
@@ -379,8 +379,8 @@ func GetWeeklyTaskTimeEntries(db *sql.DB) ([]TaskUpdateInfo, error) {
 		FROM tasks t
 		LEFT JOIN time_entries te ON t.task_id = te.task_id
 		GROUP BY t.task_id, t.name
-		HAVING this_week_seconds > 0 OR last_week_seconds > 0
-		ORDER BY (this_week_seconds + last_week_seconds) DESC;
+		HAVING SUM(CASE WHEN te.date >= $1 THEN te.duration ELSE 0 END) > 0 OR SUM(CASE WHEN te.date >= $2 AND te.date < $1 THEN te.duration ELSE 0 END) > 0
+		ORDER BY (SUM(CASE WHEN te.date >= $1 THEN te.duration ELSE 0 END) + SUM(CASE WHEN te.date >= $2 AND te.date < $1 THEN te.duration ELSE 0 END)) DESC;
 	`, thisWeekStart.Format("2006-01-02"), lastWeekStart.Format("2006-01-02"))
 	if err != nil {
 		return nil, fmt.Errorf("failed to query weekly task time entries: %w", err)
@@ -437,8 +437,8 @@ func GetMonthlyTaskTimeEntries(db *sql.DB) ([]TaskUpdateInfo, error) {
 		FROM tasks t
 		LEFT JOIN time_entries te ON t.task_id = te.task_id
 		GROUP BY t.task_id, t.name
-		HAVING this_month_seconds > 0 OR last_month_seconds > 0
-		ORDER BY (this_month_seconds + last_month_seconds) DESC;
+		HAVING SUM(CASE WHEN te.date >= $1 THEN te.duration ELSE 0 END) > 0 OR SUM(CASE WHEN te.date >= $2 AND te.date < $1 THEN te.duration ELSE 0 END) > 0
+		ORDER BY (SUM(CASE WHEN te.date >= $1 THEN te.duration ELSE 0 END) + SUM(CASE WHEN te.date >= $2 AND te.date < $1 THEN te.duration ELSE 0 END)) DESC;
 	`, thisMonthStart.Format("2006-01-02"), lastMonthStart.Format("2006-01-02"))
 	if err != nil {
 		return nil, fmt.Errorf("failed to query monthly task time entries: %w", err)

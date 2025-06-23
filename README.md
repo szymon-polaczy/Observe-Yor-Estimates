@@ -175,7 +175,10 @@ curl -X POST http://localhost:8888/.netlify/functions/slack-update \
 
 1. Connect your repository to Netlify
 2. Set environment variables in Netlify dashboard
-3. Deploy automatically on git push
+3. **Set up GitHub Actions for background tasks**:
+   - Go to GitHub → Your Repo → Settings → Secrets and Variables → Actions
+   - Add secret: `NETLIFY_SITE_URL` = `https://your-app-name.netlify.app`
+4. Deploy automatically on git push
 
 ### Manual Deployment
 
