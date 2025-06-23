@@ -1,14 +1,35 @@
 const { spawn } = require('child_process');
-const { promisify } = require('util');
 
 exports.handler = async (event, context) => {
-  // Set timeout to prevent long-running functions
-  const timeout = context.getRemainingTimeInMillis() - 1000; // Leave 1s buffer
-
+  console.log('Slack update function called');
+  console.log('Event method:', event.httpMethod);
+  
   try {
+    // Check HTTP method
+    if (event.httpMethod !== 'POST') {
+      console.log('Invalid HTTP method:', event.httpMethod);
+      return {
+        statusCode: 405,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ error: 'Method not allowed' })
+      };
+    }
+
+    // Check if body exists
+    if (!event.body) {
+      console.log('No body in request');
+      return {
+        statusCode: 400,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          response_type: 'ephemeral',
+          text: '❌ Invalid request: no body'
+        })
+      };
+    }
+    
     // Parse the request
-    const body = event.body;
-    const params = new URLSearchParams(body);
+    const params = new URLSearchParams(event.body);
     
     const slackData = {
       token: params.get('token'),
@@ -20,18 +41,31 @@ exports.handler = async (event, context) => {
       response_url: params.get('response_url')
     };
 
+    console.log('Parsed Slack data:', {
+      command: slackData.command,
+      user_name: slackData.user_name,
+      text: slackData.text,
+      has_response_url: !!slackData.response_url
+    });
+
     // Validate Slack token
     const expectedToken = process.env.SLACK_VERIFICATION_TOKEN;
     if (expectedToken && slackData.token !== expectedToken) {
+      console.log('Token validation failed');
       return {
         statusCode: 401,
-        body: JSON.stringify({ error: 'Invalid verification token' })
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          response_type: 'ephemeral',
+          text: '❌ Invalid verification token'
+        })
       };
     }
 
     // Determine the period from command text
     const period = slackData.text?.trim() || 'daily';
     if (!['daily', 'weekly', 'monthly'].includes(period)) {
+      console.log('Invalid period:', period);
       return {
         statusCode: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -42,6 +76,23 @@ exports.handler = async (event, context) => {
       };
     }
 
+    // Check if Go binary exists
+    const fs = require('fs');
+    const binaryPath = './bin/observe-yor-estimates';
+    if (!fs.existsSync(binaryPath)) {
+      console.error('Go binary not found at:', binaryPath);
+      return {
+        statusCode: 500,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          response_type: 'ephemeral',
+          text: '❌ Server configuration error: binary not found'
+        })
+      };
+    }
+
+    console.log(`Starting ${period} update background process`);
+
     // Send immediate response
     const immediateResponse = {
       response_type: 'ephemeral',
@@ -49,8 +100,11 @@ exports.handler = async (event, context) => {
     };
 
     // Start background job for actual processing
-    processUpdateInBackground(period, slackData.response_url, slackData.user_name);
+    setImmediate(() => {
+      processUpdateInBackground(period, slackData.response_url, slackData.user_name);
+    });
 
+    console.log('Returning immediate response');
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'application/json' },
@@ -59,6 +113,7 @@ exports.handler = async (event, context) => {
 
   } catch (error) {
     console.error('Error in slack-update function:', error);
+    console.error('Error stack:', error.stack);
     return {
       statusCode: 500,
       headers: { 'Content-Type': 'application/json' },
@@ -72,18 +127,27 @@ exports.handler = async (event, context) => {
 
 async function processUpdateInBackground(period, responseUrl, userName) {
   try {
-    console.log(`Starting ${period} update for ${userName}`);
+    console.log(`Starting ${period} update background process for ${userName}`);
+
+    // Add timeout to prevent infinite hanging
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Operation timed out after 3 minutes')), 3 * 60 * 1000);
+    });
 
     // Execute the Go CLI tool
-    const result = await executeGoCommand('update', [period], {
+    const executionPromise = executeGoCommand('update', [period], {
       RESPONSE_URL: responseUrl,
       OUTPUT_JSON: 'true'
     });
 
-    if (result.error) {
+    const result = await Promise.race([executionPromise, timeoutPromise]);
+
+    if (!result.success) {
+      console.error('Go command failed:', result.error);
       await sendErrorToSlack(responseUrl, `Failed to generate ${period} update: ${result.error}`);
     } else {
       console.log(`Successfully completed ${period} update for ${userName}`);
+      console.log('Go command output:', result.output);
     }
 
   } catch (error) {
@@ -94,24 +158,32 @@ async function processUpdateInBackground(period, responseUrl, userName) {
 
 async function executeGoCommand(command, args = [], envVars = {}) {
   return new Promise((resolve) => {
+    console.log(`Executing Go command: ${command} ${args.join(' ')}`);
+    
     const env = { ...process.env, ...envVars };
     const child = spawn('./bin/observe-yor-estimates', [command, ...args], { 
       env,
-      cwd: process.cwd()
+      cwd: process.cwd(),
+      stdio: ['pipe', 'pipe', 'pipe']
     });
 
     let stdout = '';
     let stderr = '';
 
     child.stdout.on('data', (data) => {
-      stdout += data.toString();
+      const output = data.toString();
+      stdout += output;
+      console.log('Go stdout:', output);
     });
 
     child.stderr.on('data', (data) => {
-      stderr += data.toString();
+      const output = data.toString();
+      stderr += output;
+      console.log('Go stderr:', output);
     });
 
     child.on('close', (code) => {
+      console.log(`Go command exited with code: ${code}`);
       if (code === 0) {
         resolve({ success: true, output: stdout });
       } else {
@@ -120,15 +192,29 @@ async function executeGoCommand(command, args = [], envVars = {}) {
     });
 
     child.on('error', (error) => {
+      console.error('Go command spawn error:', error);
       resolve({ success: false, error: error.message });
     });
+
+    // Add timeout for the child process
+    setTimeout(() => {
+      if (!child.killed) {
+        console.log('Killing Go process due to timeout');
+        child.kill('SIGTERM');
+        resolve({ success: false, error: 'Command timeout after 2 minutes' });
+      }
+    }, 2 * 60 * 1000); // 2 minute timeout
   });
 }
 
 async function sendErrorToSlack(responseUrl, errorMessage) {
-  if (!responseUrl) return;
+  if (!responseUrl) {
+    console.log('No response URL provided for error message');
+    return;
+  }
 
   try {
+    console.log('Sending error to Slack:', errorMessage);
     const fetch = (await import('node-fetch')).default;
     
     const response = await fetch(responseUrl, {
@@ -141,7 +227,9 @@ async function sendErrorToSlack(responseUrl, errorMessage) {
     });
 
     if (!response.ok) {
-      console.error('Failed to send error to Slack:', response.status);
+      console.error('Failed to send error to Slack:', response.status, await response.text());
+    } else {
+      console.log('Successfully sent error message to Slack');
     }
   } catch (error) {
     console.error('Error sending error message to Slack:', error);
