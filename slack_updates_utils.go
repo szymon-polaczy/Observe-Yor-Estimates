@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 type TaskUpdateInfo struct {
@@ -27,6 +29,15 @@ type TaskUpdateInfo struct {
 	PreviousTime     string
 	DaysWorked       int
 	Comments         []string
+	// User breakdown: map of user_id to time contributions
+	UserBreakdown    map[int]UserTimeContribution
+}
+
+// UserTimeContribution represents time contributed by a specific user
+type UserTimeContribution struct {
+	UserID       int
+	CurrentTime  string
+	PreviousTime string
 }
 
 // SlackMessage represents the structure of a Slack message
@@ -258,10 +269,39 @@ func formatSingleTaskBlock(task TaskUpdateInfo) Block {
 	var taskInfo strings.Builder
 	taskInfo.WriteString(fmt.Sprintf("*%s*\n", taskName))
 
-	// Time information
-	taskInfo.WriteString(fmt.Sprintf("• %s: %s | %s: %s",
+	// Time information with user breakdown if multiple users
+	timeInfo := fmt.Sprintf("• %s: %s | %s: %s",
 		task.CurrentPeriod, task.CurrentTime,
-		task.PreviousPeriod, task.PreviousTime))
+		task.PreviousPeriod, task.PreviousTime)
+	
+	// Add user breakdown if there are multiple users
+	if len(task.UserBreakdown) > 1 {
+		timeInfo += " ["
+		var userContribs []string
+		var sortedUserIDs []int
+		
+		// Collect and sort user IDs for consistent ordering
+		for userID := range task.UserBreakdown {
+			sortedUserIDs = append(sortedUserIDs, userID)
+		}
+		sort.Ints(sortedUserIDs)
+		
+		for _, userID := range sortedUserIDs {
+			contrib := task.UserBreakdown[userID]
+			// Only show users who contributed time in the current period
+			if contrib.CurrentTime != "0h 0m" {
+				userContribs = append(userContribs, fmt.Sprintf("user%d: %s", userID, contrib.CurrentTime))
+			}
+		}
+		
+		if len(userContribs) > 0 {
+			timeInfo += strings.Join(userContribs, ", ") + "]"
+		} else {
+			// Remove the opening bracket if no users contributed
+			timeInfo = strings.TrimSuffix(timeInfo, " [")
+		}
+	}
+	taskInfo.WriteString(timeInfo)
 	taskInfo.WriteString("\n")
 
 	// Estimation info
@@ -409,7 +449,38 @@ func appendTaskTextMessage(builder *strings.Builder, task TaskUpdateInfo) {
 	if task.EstimationInfo != "" {
 		builder.WriteString(fmt.Sprintf(" | %s", task.EstimationInfo))
 	}
-	builder.WriteString(fmt.Sprintf("\nTime worked: %s: %s, %s: %s", task.CurrentPeriod, task.CurrentTime, task.PreviousPeriod, task.PreviousTime))
+	
+	timeText := fmt.Sprintf("\nTime worked: %s: %s, %s: %s", task.CurrentPeriod, task.CurrentTime, task.PreviousPeriod, task.PreviousTime)
+	
+	// Add user breakdown if there are multiple users
+	if len(task.UserBreakdown) > 1 {
+		timeText += " ["
+		var userContribs []string
+		var sortedUserIDs []int
+		
+		// Collect and sort user IDs for consistent ordering
+		for userID := range task.UserBreakdown {
+			sortedUserIDs = append(sortedUserIDs, userID)
+		}
+		sort.Ints(sortedUserIDs)
+		
+		for _, userID := range sortedUserIDs {
+			contrib := task.UserBreakdown[userID]
+			// Only show users who contributed time in the current period
+			if contrib.CurrentTime != "0h 0m" {
+				userContribs = append(userContribs, fmt.Sprintf("user%d: %s", userID, contrib.CurrentTime))
+			}
+		}
+		
+		if len(userContribs) > 0 {
+			timeText += strings.Join(userContribs, ", ") + "]"
+		} else {
+			// Remove the opening bracket if no users contributed
+			timeText = strings.TrimSuffix(timeText, " [")
+		}
+	}
+	
+	builder.WriteString(timeText)
 	builder.WriteString("\n\n")
 }
 
@@ -956,7 +1027,50 @@ func GetTasksOverThreshold(db *sql.DB, threshold float64, period string) ([]Task
 		toDate = time.Now().Format("2006-01-02")
 	}
 
-	// Simplified query - get all tasks with estimations and let Go handle the threshold logic
+	// First get user breakdown data for all tasks with estimations
+	userBreakdownQuery := `
+		SELECT 
+			t.task_id,
+			te.user_id,
+			COALESCE(SUM(CASE WHEN te.date BETWEEN $1 AND $2 THEN te.duration ELSE 0 END), 0) as current_duration,
+			COALESCE(SUM(CASE WHEN te.date < $1 THEN te.duration ELSE 0 END), 0) as previous_duration
+		FROM tasks t
+		INNER JOIN time_entries te ON t.task_id = te.task_id
+		WHERE t.name ~ '\[([0-9]+(?:[.,][0-9]+)?h?[-+][0-9]+(?:[.,][0-9]+)?h?|[0-9]+(?:[.,][0-9]+)?h?)\]'  -- Only tasks with estimation patterns
+		GROUP BY t.task_id, te.user_id
+		HAVING COALESCE(SUM(te.duration), 0) > 0  -- Only users with time logged
+	`
+
+	userRows, err := db.Query(userBreakdownQuery, fromDate, toDate)
+	if err != nil {
+		logger.Warnf("Failed to query user breakdown for threshold tasks: %v", err)
+	}
+	defer userRows.Close()
+
+	// Build user breakdown map: taskID -> userID -> contribution
+	userBreakdowns := make(map[int]map[int]UserTimeContribution)
+	if userRows != nil {
+		for userRows.Next() {
+			var taskID, userID, currentDuration, previousDuration int
+			err := userRows.Scan(&taskID, &userID, &currentDuration, &previousDuration)
+			if err != nil {
+				logger.Warnf("Failed to scan user breakdown row for threshold tasks: %v", err)
+				continue
+			}
+
+			if _, exists := userBreakdowns[taskID]; !exists {
+				userBreakdowns[taskID] = make(map[int]UserTimeContribution)
+			}
+
+			userBreakdowns[taskID][userID] = UserTimeContribution{
+				UserID:       userID,
+				CurrentTime:  formatDuration(currentDuration),
+				PreviousTime: formatDuration(previousDuration),
+			}
+		}
+	}
+
+	// Main query - get all tasks with estimations and let Go handle the threshold logic
 	query := `
 		SELECT 
 			t.task_id,
@@ -1030,6 +1144,11 @@ func GetTasksOverThreshold(db *sql.DB, threshold float64, period string) ([]Task
 
 		// Parse estimation with usage percentage
 		task.EstimationInfo, task.EstimationStatus = parseEstimationWithUsage(task.Name, task.CurrentTime, task.PreviousTime)
+
+		// Add user breakdown
+		if breakdown, exists := userBreakdowns[task.TaskID]; exists {
+			task.UserBreakdown = breakdown
+		}
 
 		taskIDs = append(taskIDs, task.TaskID)
 		tasks = append(tasks, task)
@@ -1127,6 +1246,7 @@ func getTasksJustCrossedThreshold(db *sql.DB, threshold float64, since time.Time
 	defer rows.Close()
 
 	var alerts []ThresholdAlert
+	var alertTaskIDs []int
 	for rows.Next() {
 		var taskID, parentID int
 		var name string
@@ -1186,6 +1306,7 @@ func getTasksJustCrossedThreshold(db *sql.DB, threshold float64, since time.Time
 			alert.EstimationInfo, _ = parseEstimationWithUsage(alert.Name, alert.CurrentTime, alert.PreviousTime)
 
 			alerts = append(alerts, alert)
+			alertTaskIDs = append(alertTaskIDs, taskID)
 		}
 	}
 
@@ -1223,6 +1344,54 @@ func SendThresholdAlerts(alerts []ThresholdAlert) error {
 
 	// Send a message for each threshold that was crossed
 	for threshold, thresholdAlerts := range thresholdGroups {
+		// Get task IDs for user breakdown query
+		var alertTaskIDs []int
+		for _, alert := range thresholdAlerts {
+			alertTaskIDs = append(alertTaskIDs, alert.TaskID)
+		}
+
+		// Get user breakdown data for threshold alerts
+		var userBreakdowns map[int]map[int]UserTimeContribution
+		if len(alertTaskIDs) > 0 {
+			userBreakdownQuery := `
+				SELECT 
+					te.task_id,
+					te.user_id,
+					COALESCE(SUM(te.duration), 0) as total_duration
+				FROM time_entries te
+				WHERE te.task_id = ANY($1)
+				GROUP BY te.task_id, te.user_id
+				HAVING COALESCE(SUM(te.duration), 0) > 0
+			`
+
+			userRows, err := db.Query(userBreakdownQuery, pq.Array(alertTaskIDs))
+			if err != nil {
+				logger.Warnf("Failed to query user breakdown for threshold alerts: %v", err)
+			} else {
+				defer userRows.Close()
+				userBreakdowns = make(map[int]map[int]UserTimeContribution)
+				
+				for userRows.Next() {
+					var taskID, userID, totalDuration int
+					err := userRows.Scan(&taskID, &userID, &totalDuration)
+					if err != nil {
+						logger.Warnf("Failed to scan user breakdown row for threshold alerts: %v", err)
+						continue
+					}
+
+					if _, exists := userBreakdowns[taskID]; !exists {
+						userBreakdowns[taskID] = make(map[int]UserTimeContribution)
+					}
+
+					userBreakdowns[taskID][userID] = UserTimeContribution{
+						UserID:       userID,
+						CurrentTime:  formatDuration(totalDuration),
+						PreviousTime: "0h 0m", // For threshold alerts, we show total vs 0
+					}
+				}
+			}
+		}
+
 		// Convert ThresholdAlert to TaskUpdateInfo for compatibility with existing functions
 		var taskInfos []TaskUpdateInfo
 		for _, alert := range thresholdAlerts {
@@ -1239,6 +1408,14 @@ func SendThresholdAlerts(alerts []ThresholdAlert) error {
 				DaysWorked:       0,
 				Comments:         []string{}, // We could add comments here if needed
 			}
+
+			// Add user breakdown if available
+			if userBreakdowns != nil {
+				if breakdown, exists := userBreakdowns[alert.TaskID]; exists {
+					taskInfo.UserBreakdown = breakdown
+				}
+			}
+
 			taskInfos = append(taskInfos, taskInfo)
 		}
 
