@@ -105,6 +105,12 @@ func safeStringConvert(value interface{}) string {
 // SyncTimeEntriesToDatabase fetches time entries from TimeCamp and stores them in the database
 // If fromDate and toDate are provided, uses those dates; otherwise defaults to last day (optimized for cron jobs)
 func SyncTimeEntriesToDatabase(fromDate, toDate string) error {
+	return SyncTimeEntriesToDatabaseWithOptions(fromDate, toDate, false)
+}
+
+// SyncTimeEntriesToDatabaseWithOptions provides more control over the sync behavior
+// includeOrphaned: if true, stores orphaned time entries for later processing (useful during full sync)
+func SyncTimeEntriesToDatabaseWithOptions(fromDate, toDate string, includeOrphaned bool) error {
 	logger := GetGlobalLogger()
 
 	// Load environment variables - but don't panic here since main already validated them
@@ -145,6 +151,13 @@ func SyncTimeEntriesToDatabase(fromDate, toDate string) error {
 		return fmt.Errorf("failed to migrate time_entries table: %w", err)
 	}
 
+	// Ensure orphaned_time_entries table exists if we're including orphaned entries
+	if includeOrphaned {
+		if err := ensureOrphanedTimeEntriesTable(db); err != nil {
+			return fmt.Errorf("failed to ensure orphaned_time_entries table: %w", err)
+		}
+	}
+
 	// Prepare insert statement (ON CONFLICT to upsert)
 	insertStatement, err := db.Prepare(`INSERT INTO time_entries 
 		(id, task_id, user_id, date, start_time, end_time, duration, description, billable, locked, modify_time) 
@@ -165,6 +178,30 @@ func SyncTimeEntriesToDatabase(fromDate, toDate string) error {
 	}
 	defer CloseWithErrorLog(insertStatement, "prepared statement")
 
+	// Prepare orphaned insert statement if needed
+	var orphanedInsertStatement *sql.Stmt
+	if includeOrphaned {
+		orphanedInsertStatement, err = db.Prepare(`INSERT INTO orphaned_time_entries 
+			(id, task_id, user_id, date, start_time, end_time, duration, description, billable, locked, modify_time, sync_date) 
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) 
+			ON CONFLICT (id) DO UPDATE SET 
+			task_id = EXCLUDED.task_id,
+			user_id = EXCLUDED.user_id,
+			date = EXCLUDED.date,
+			start_time = EXCLUDED.start_time,
+			end_time = EXCLUDED.end_time,
+			duration = EXCLUDED.duration,
+			description = EXCLUDED.description,
+			billable = EXCLUDED.billable,
+			locked = EXCLUDED.locked,
+			modify_time = EXCLUDED.modify_time,
+			sync_date = EXCLUDED.sync_date`)
+		if err != nil {
+			return fmt.Errorf("failed to prepare orphaned insert statement: %w", err)
+		}
+		defer CloseWithErrorLog(orphanedInsertStatement, "orphaned prepared statement")
+	}
+
 	// Build an optimized in-memory set of existing task IDs to avoid per-entry queries
 	existingTasks := make(map[int]struct{})
 	rowsTasks, err := db.Query(`SELECT task_id FROM tasks`)
@@ -184,6 +221,7 @@ func SyncTimeEntriesToDatabase(fromDate, toDate string) error {
 
 	// Pre-process entries to validate and convert data types
 	validEntries := make([]ProcessedTimeEntry, 0, len(timeEntries))
+	orphanedEntries := make([]ProcessedTimeEntry, 0)
 	invalidCount := 0
 	missingTaskCount := 0
 
@@ -198,18 +236,28 @@ func SyncTimeEntriesToDatabase(fromDate, toDate string) error {
 		// Check if task exists in the pre-fetched map
 		if _, ok := existingTasks[processed.TaskID]; !ok {
 			missingTaskCount++
+			if includeOrphaned {
+				// Store orphaned entry for later processing
+				orphanedEntries = append(orphanedEntries, processed)
+				continue
+			}
+			// Skip orphaned entries if not in full sync mode
 			continue
 		}
 
 		validEntries = append(validEntries, processed)
 	}
 
-	if len(validEntries) == 0 {
+	if len(validEntries) == 0 && len(orphanedEntries) == 0 {
 		logger.Warnf("No valid time entries to process after validation (total: %d, invalid: %d, missing tasks: %d)", len(timeEntries), invalidCount, missingTaskCount)
 		return nil
 	}
 
-	logger.Infof("Processing %d valid entries (%d invalid entries skipped, %d entries with missing tasks skipped)", len(validEntries), invalidCount, missingTaskCount)
+	logger.Infof("Processing %d valid entries (%d invalid entries skipped, %d entries with missing tasks)", len(validEntries), invalidCount, missingTaskCount)
+
+	if includeOrphaned && len(orphanedEntries) > 0 {
+		logger.Infof("Storing %d orphaned time entries for later processing", len(orphanedEntries))
+	}
 
 	// Use optimized batch processing for better performance
 	err = processBatchTimeEntries(db, validEntries, logger)
@@ -217,8 +265,17 @@ func SyncTimeEntriesToDatabase(fromDate, toDate string) error {
 		return err
 	}
 
+	// Process orphaned entries if in full sync mode
+	if includeOrphaned && len(orphanedEntries) > 0 {
+		err = processBatchOrphanedTimeEntries(db, orphanedEntries, orphanedInsertStatement, logger)
+		if err != nil {
+			logger.Errorf("Failed to store orphaned time entries: %v", err)
+			// Don't fail the entire sync for orphaned entries
+		}
+	}
+
 	// Check for missing task references and suggest remediation
-	if missingTaskCount > 0 {
+	if missingTaskCount > 0 && !includeOrphaned {
 		logger.Warnf("Warning: %d time entries were skipped due to missing task references. Consider running a full tasks sync if this number is high.", missingTaskCount)
 		checkMissingTasksAndSuggestRemediation(db, missingTaskCount, logger)
 	}
@@ -803,4 +860,224 @@ func parseEstimationStatus(currentSeconds, previousSeconds int) string {
 		return "stalled"
 	}
 	return "idle"
+}
+
+// ensureOrphanedTimeEntriesTable creates the orphaned_time_entries table if it doesn't exist
+func ensureOrphanedTimeEntriesTable(db *sql.DB) error {
+	logger := GetGlobalLogger()
+
+	createTableSQL := `CREATE TABLE IF NOT EXISTS orphaned_time_entries (
+		id INTEGER PRIMARY KEY,
+		task_id INTEGER NOT NULL,
+		user_id INTEGER NOT NULL,
+		date TEXT NOT NULL,
+		start_time TEXT,
+		end_time TEXT,
+		duration INTEGER NOT NULL,
+		description TEXT,
+		billable INTEGER DEFAULT 0,
+		locked INTEGER DEFAULT 0,
+		modify_time TEXT,
+		sync_date TEXT NOT NULL
+	);`
+
+	_, err := db.Exec(createTableSQL)
+	if err != nil {
+		return fmt.Errorf("failed to create orphaned_time_entries table: %w", err)
+	}
+
+	// Create index for efficient lookups
+	indexSQL := `CREATE INDEX IF NOT EXISTS idx_orphaned_time_entries_task_id ON orphaned_time_entries(task_id);`
+	_, err = db.Exec(indexSQL)
+	if err != nil {
+		logger.Warnf("Failed to create index on orphaned_time_entries.task_id: %v", err)
+	}
+
+	logger.Debug("Orphaned time entries table ensured")
+	return nil
+}
+
+// processBatchOrphanedTimeEntries performs optimized batch insert of orphaned time entries
+func processBatchOrphanedTimeEntries(db *sql.DB, entries []ProcessedTimeEntry, stmt *sql.Stmt, logger *Logger) error {
+	if len(entries) == 0 {
+		return nil
+	}
+
+	logger.Infof("Starting batch processing for %d orphaned time entries", len(entries))
+
+	syncDate := time.Now().Format("2006-01-02 15:04:05")
+	successCount := 0
+	errorCount := 0
+
+	for _, entry := range entries {
+		_, err := stmt.Exec(
+			entry.ID, entry.TaskID, entry.UserID, entry.Date,
+			entry.Start, entry.End, entry.Duration, entry.Description,
+			entry.Billable, entry.Locked, entry.ModifyTime, syncDate,
+		)
+		if err != nil {
+			logger.Errorf("Failed to store orphaned time entry %d: %v", entry.ID, err)
+			errorCount++
+			continue
+		}
+		successCount++
+	}
+
+	logger.Infof("Orphaned time entries batch complete: %d successful, %d errors", successCount, errorCount)
+	return nil
+}
+
+// ProcessOrphanedTimeEntries attempts to move orphaned time entries to the main table
+// when their tasks become available (useful after task sync or when tasks are reopened)
+func ProcessOrphanedTimeEntries(db *sql.DB) error {
+	logger := GetGlobalLogger()
+
+	// Find orphaned entries whose tasks now exist
+	query := `
+		SELECT ote.id, ote.task_id, ote.user_id, ote.date, ote.start_time, ote.end_time, 
+		       ote.duration, ote.description, ote.billable, ote.locked, ote.modify_time
+		FROM orphaned_time_entries ote
+		INNER JOIN tasks t ON ote.task_id = t.task_id
+	`
+
+	rows, err := db.Query(query)
+	if err != nil {
+		return fmt.Errorf("failed to query processable orphaned entries: %w", err)
+	}
+	defer rows.Close()
+
+	var processableEntries []ProcessedTimeEntry
+	var processableIDs []int
+
+	for rows.Next() {
+		var entry ProcessedTimeEntry
+		err := rows.Scan(
+			&entry.ID, &entry.TaskID, &entry.UserID, &entry.Date,
+			&entry.Start, &entry.End, &entry.Duration, &entry.Description,
+			&entry.Billable, &entry.Locked, &entry.ModifyTime,
+		)
+		if err != nil {
+			logger.Errorf("Failed to scan orphaned entry: %v", err)
+			continue
+		}
+		processableEntries = append(processableEntries, entry)
+		processableIDs = append(processableIDs, entry.ID)
+	}
+
+	if len(processableEntries) == 0 {
+		logger.Debug("No orphaned time entries to process")
+		return nil
+	}
+
+	logger.Infof("Found %d orphaned time entries that can now be processed", len(processableEntries))
+
+	// Start transaction for atomic operation
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Insert into main time_entries table
+	insertStmt, err := tx.Prepare(`INSERT INTO time_entries 
+		(id, task_id, user_id, date, start_time, end_time, duration, description, billable, locked, modify_time) 
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) 
+		ON CONFLICT (id) DO UPDATE SET 
+		task_id = EXCLUDED.task_id,
+		user_id = EXCLUDED.user_id,
+		date = EXCLUDED.date,
+		start_time = EXCLUDED.start_time,
+		end_time = EXCLUDED.end_time,
+		duration = EXCLUDED.duration,
+		description = EXCLUDED.description,
+		billable = EXCLUDED.billable,
+		locked = EXCLUDED.locked,
+		modify_time = EXCLUDED.modify_time`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare insert statement: %w", err)
+	}
+	defer insertStmt.Close()
+
+	successCount := 0
+	for _, entry := range processableEntries {
+		_, err := insertStmt.Exec(
+			entry.ID, entry.TaskID, entry.UserID, entry.Date,
+			entry.Start, entry.End, entry.Duration, entry.Description,
+			entry.Billable, entry.Locked, entry.ModifyTime,
+		)
+		if err != nil {
+			logger.Errorf("Failed to insert orphaned entry %d into main table: %v", entry.ID, err)
+			continue
+		}
+		successCount++
+	}
+
+	// Remove processed entries from orphaned table
+	if successCount > 0 {
+		deleteStmt, err := tx.Prepare(`DELETE FROM orphaned_time_entries WHERE id = ANY($1)`)
+		if err != nil {
+			return fmt.Errorf("failed to prepare delete statement: %w", err)
+		}
+		defer deleteStmt.Close()
+
+		// Only delete IDs that were successfully processed
+		var successfulIDs []int
+		for i, entry := range processableEntries {
+			if i < successCount { // Assumes processing was sequential
+				successfulIDs = append(successfulIDs, entry.ID)
+			}
+		}
+
+		_, err = deleteStmt.Exec(pq.Array(successfulIDs))
+		if err != nil {
+			logger.Errorf("Failed to delete processed orphaned entries: %v", err)
+			// Don't fail the transaction, just log the error
+		}
+	}
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	logger.Infof("Successfully processed %d orphaned time entries", successCount)
+	return nil
+}
+
+// GetOrphanedTimeEntriesCount returns the number of orphaned time entries in the database
+func GetOrphanedTimeEntriesCount(db *sql.DB) (int, error) {
+	var count int
+	err := db.QueryRow("SELECT COUNT(*) FROM orphaned_time_entries").Scan(&count)
+	if err != nil {
+		// If table doesn't exist, return 0
+		if strings.Contains(err.Error(), "no such table") || strings.Contains(err.Error(), "does not exist") {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("failed to count orphaned time entries: %w", err)
+	}
+	return count, nil
+}
+
+// CleanupOldOrphanedEntries removes orphaned time entries older than the specified days
+func CleanupOldOrphanedEntries(db *sql.DB, olderThanDays int) error {
+	logger := GetGlobalLogger()
+
+	query := `DELETE FROM orphaned_time_entries WHERE sync_date < $1`
+	cutoffDate := time.Now().AddDate(0, 0, -olderThanDays).Format("2006-01-02")
+
+	result, err := db.Exec(query, cutoffDate)
+	if err != nil {
+		// If table doesn't exist, that's fine
+		if strings.Contains(err.Error(), "no such table") || strings.Contains(err.Error(), "does not exist") {
+			return nil
+		}
+		return fmt.Errorf("failed to cleanup old orphaned entries: %w", err)
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected > 0 {
+		logger.Infof("Cleaned up %d orphaned time entries older than %d days", rowsAffected, olderThanDays)
+	}
+
+	return nil
 }

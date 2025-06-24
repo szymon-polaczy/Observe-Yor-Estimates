@@ -134,6 +134,67 @@ func handleCliCommands(args []string, logger *Logger) {
 			os.Exit(1)
 		}
 		logger.Info("Threshold monitoring completed successfully")
+	case "process-orphaned":
+		logger.Info("Processing orphaned time entries")
+		db, err := GetDB()
+		if err != nil {
+			logger.Errorf("Failed to get database connection: %v", err)
+			os.Exit(1)
+		}
+
+		// Show current count before processing
+		if count, err := GetOrphanedTimeEntriesCount(db); err != nil {
+			logger.Errorf("Failed to get orphaned entries count: %v", err)
+			os.Exit(1)
+		} else {
+			logger.Infof("Found %d orphaned time entries to process", count)
+			if count == 0 {
+				logger.Info("No orphaned time entries to process")
+				return
+			}
+		}
+
+		if err := ProcessOrphanedTimeEntries(db); err != nil {
+			logger.Errorf("Failed to process orphaned time entries: %v", err)
+			os.Exit(1)
+		}
+
+		// Show remaining count after processing
+		if count, err := GetOrphanedTimeEntriesCount(db); err != nil {
+			logger.Warnf("Failed to get remaining orphaned entries count: %v", err)
+		} else {
+			logger.Infof("Remaining orphaned time entries: %d", count)
+		}
+		logger.Info("Orphaned time entries processing completed successfully")
+	case "cleanup-orphaned":
+		if len(args) < 2 {
+			logger.Error("Error: cleanup-orphaned command requires number of days (e.g., cleanup-orphaned 30)")
+			return
+		}
+
+		var days int
+		if _, err := fmt.Sscanf(args[1], "%d", &days); err != nil {
+			logger.Errorf("Error: invalid number of days '%s'", args[1])
+			return
+		}
+
+		if days < 1 {
+			logger.Error("Error: number of days must be at least 1")
+			return
+		}
+
+		logger.Infof("Cleaning up orphaned time entries older than %d days", days)
+		db, err := GetDB()
+		if err != nil {
+			logger.Errorf("Failed to get database connection: %v", err)
+			os.Exit(1)
+		}
+
+		if err := CleanupOldOrphanedEntries(db, days); err != nil {
+			logger.Errorf("Failed to cleanup orphaned entries: %v", err)
+			os.Exit(1)
+		}
+		logger.Info("Orphaned entries cleanup completed successfully")
 	default:
 		logger.Warnf("Unknown command line argument: %s", command)
 		showHelp()
@@ -174,6 +235,31 @@ func setupCronJobs(logger *Logger) {
 		}
 	})
 
+	// Add orphaned time entries processing cron job (every hour)
+	addCronJob(cronScheduler, "ORPHANED_PROCESSING_SCHEDULE", "0 * * * *", "orphaned time entries processing", logger, func() {
+		db, err := GetDB()
+		if err != nil {
+			logger.Errorf("Failed to get database connection for orphaned processing: %v", err)
+			return
+		}
+
+		// Check if there are any orphaned entries to process
+		count, err := GetOrphanedTimeEntriesCount(db)
+		if err != nil {
+			logger.Errorf("Failed to count orphaned entries: %v", err)
+			return
+		}
+
+		if count > 0 {
+			logger.Infof("Found %d orphaned time entries, processing...", count)
+			if err := ProcessOrphanedTimeEntries(db); err != nil {
+				logger.Errorf("Orphaned time entries processing failed: %v", err)
+			} else {
+				logger.Debug("Orphaned time entries processing completed successfully")
+			}
+		}
+	})
+
 	cronScheduler.Start()
 	logger.Info("Cron scheduler started successfully")
 }
@@ -200,7 +286,8 @@ func showHelp() {
 	fmt.Println("  sync-tasks               - Full sync of all tasks (manual operation)")
 	fmt.Println("  full-sync                - Full sync of all tasks and time entries")
 	fmt.Println("  threshold-check          - Manual threshold monitoring check")
-	fmt.Println("  job-processor            - Run as standalone job processor server")
+	fmt.Println("  process-orphaned         - Process orphaned time entries")
+	fmt.Println("  cleanup-orphaned <days>   - Clean up orphaned time entries older than specified days")
 	fmt.Println("  --version, version         - Show application version")
 	fmt.Println("  --help, -h, help         - Show help message")
 	fmt.Println("\nSync Behavior:")

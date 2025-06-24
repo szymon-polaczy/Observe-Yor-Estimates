@@ -51,8 +51,8 @@ func FullSyncTimeEntriesToDatabase() error {
 
 	logger.Infof("Full sync: retrieving time entries from %s to %s", fromDate, toDate)
 
-	// Use the updated SyncTimeEntriesToDatabase function with custom date range
-	return SyncTimeEntriesToDatabase(fromDate, toDate)
+	// Use the updated SyncTimeEntriesToDatabase function with custom date range and orphaned handling
+	return SyncTimeEntriesToDatabaseWithOptions(fromDate, toDate, true)
 }
 
 // FullSyncAll performs both full tasks sync and full time entries sync with optimizations
@@ -77,12 +77,33 @@ func FullSyncAll() error {
 	}
 	logger.Info("Full tasks sync completed successfully")
 
-	// Then sync time entries
+	// Then sync time entries (including orphaned ones)
 	logger.Info("Starting optimized full time entries sync...")
 	if err := FullSyncTimeEntriesToDatabase(); err != nil {
 		return fmt.Errorf("full time entries sync failed: %w", err)
 	}
 	logger.Info("Full time entries sync completed successfully")
+
+	// Process any orphaned time entries that can now be matched with tasks
+	logger.Info("Processing orphaned time entries...")
+	db, err := GetDB()
+	if err != nil {
+		logger.Errorf("Failed to get database connection for orphaned processing: %v", err)
+	} else {
+		if err := ProcessOrphanedTimeEntries(db); err != nil {
+			logger.Errorf("Failed to process orphaned time entries: %v", err)
+			// Don't fail the entire sync for orphaned processing
+		} else {
+			// Report on remaining orphaned entries
+			if count, err := GetOrphanedTimeEntriesCount(db); err != nil {
+				logger.Warnf("Failed to count remaining orphaned entries: %v", err)
+			} else if count > 0 {
+				logger.Infof("Remaining orphaned time entries: %d (likely for deleted/archived tasks)", count)
+			} else {
+				logger.Info("All orphaned time entries successfully processed")
+			}
+		}
+	}
 
 	duration := time.Since(startTime)
 	logger.Infof("Optimized full synchronization completed successfully in %v", duration.Round(time.Second))
