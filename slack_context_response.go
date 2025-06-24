@@ -241,7 +241,7 @@ func (s *SlackAPIClient) sendProjectSplitMessages(ctx *ConversationContext, proj
 	// Send one message per project
 	for i, project := range projectNames {
 		tasks := projectGroups[project]
-		const maxTasksPerMessage = 45 // Slack limit is 50 blocks, leave a buffer
+		const maxTasksPerMessage = 47 // Slack limit is 50 blocks, leave a small buffer
 
 		if len(tasks) > maxTasksPerMessage {
 			// Split this project into multiple messages (chunks)
@@ -480,21 +480,18 @@ func (s *SlackAPIClient) formatSimpleTaskBlock(task TaskUpdateInfo) []Block {
 	task.Comments = removeEmptyComments(task.Comments)
 
 	if len(task.Comments) > 0 {
-		taskInfo.WriteString("• Recent Comments:\n")
-		// Limit comments for ephemeral messages
-		commentCount := len(task.Comments)
-		if commentCount > 2 {
-			commentCount = 2
-		}
-		for i := 0; i < commentCount; i++ {
-			comment := sanitizeSlackText(task.Comments[i])
-			if len(comment) > 100 {
-				comment = comment[:97] + "..."
+		taskInfo.WriteString("• Comments:\n")
+		// Display all comments for ephemeral messages, but keep them concise
+		for i, comment := range task.Comments {
+			if comment == "" {
+				continue
 			}
-			taskInfo.WriteString(fmt.Sprintf("  - %s\n", comment))
-		}
-		if len(task.Comments) > 2 {
-			taskInfo.WriteString(fmt.Sprintf("  - ... and %d more comments\n", len(task.Comments)-2))
+			comment = sanitizeSlackText(comment)
+			// Keep comments shorter for ephemeral messages but don't limit count
+			if len(comment) > 120 {
+				comment = comment[:117] + "..."
+			}
+			taskInfo.WriteString(fmt.Sprintf("  %d. %s\n", i+1, comment))
 		}
 	}
 

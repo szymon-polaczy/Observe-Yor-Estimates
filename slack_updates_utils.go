@@ -122,8 +122,8 @@ func SendSlackUpdate(period string, responseURL string, asJSON bool) {
 	var messages []SlackMessage
 	for _, project := range projectNames {
 		tasks := projectGroups[project]
-		message := formatProjectMessage(project, tasks, period)
-		messages = append(messages, message)
+		projectMessages := formatProjectMessageWithComments(project, tasks, period)
+		messages = append(messages, projectMessages...)
 	}
 
 	if asJSON {
@@ -249,25 +249,81 @@ func formatSingleTaskBlock(task TaskUpdateInfo) Block {
 	// remove all empty comments
 	task.Comments = removeEmptyComments(task.Comments)
 
-	// Comments (limit to save space)
+	// Comments - display all comments instead of summarizing
 	if len(task.Comments) > 0 {
-		taskInfo.WriteString("• Recent: ")
-		if len(task.Comments) == 1 {
-			comment := sanitizeSlackText(task.Comments[0])
-			if len(comment) > 80 {
-				comment = comment[:77] + "..."
+		taskInfo.WriteString("• Comments:\n")
+		for i, comment := range task.Comments {
+			if comment == "" {
+				continue
 			}
-			taskInfo.WriteString(fmt.Sprintf("%s", comment))
-		} else {
-			taskInfo.WriteString(fmt.Sprintf("%d comments", len(task.Comments)))
+			comment = sanitizeSlackText(comment)
+			// Check if adding this comment would exceed reasonable block size
+			currentText := taskInfo.String()
+			commentText := fmt.Sprintf("  %d. %s\n", i+1, comment)
+
+			// If the current block would be too long, truncate and indicate more comments
+			if len(currentText+commentText) > 2800 {
+				remaining := len(task.Comments) - i
+				taskInfo.WriteString(fmt.Sprintf("  ... and %d more comments (see additional message)\n", remaining))
+				break
+			}
+			taskInfo.WriteString(commentText)
 		}
-		taskInfo.WriteString("\n")
 	}
 
 	return Block{
 		Type: "section",
 		Text: &Text{Type: "mrkdwn", Text: taskInfo.String()},
 	}
+}
+
+// formatTaskCommentsBlocks creates additional blocks for comments that don't fit in the main task block
+func formatTaskCommentsBlocks(task TaskUpdateInfo, startIndex int) []Block {
+	var blocks []Block
+	task.Comments = removeEmptyComments(task.Comments)
+
+	if len(task.Comments) <= startIndex {
+		return blocks
+	}
+
+	var commentText strings.Builder
+	commentText.WriteString(fmt.Sprintf("*%s - Additional Comments:*\n", sanitizeSlackText(task.Name)))
+
+	for i := startIndex; i < len(task.Comments); i++ {
+		comment := task.Comments[i]
+		if comment == "" {
+			continue
+		}
+		comment = sanitizeSlackText(comment)
+		newCommentText := fmt.Sprintf("%d. %s\n", i+1, comment)
+
+		// Check if adding this comment would exceed block size
+		if len(commentText.String()+newCommentText) > 2800 {
+			// Create a block with current comments
+			if commentText.Len() > 0 {
+				blocks = append(blocks, Block{
+					Type: "section",
+					Text: &Text{Type: "mrkdwn", Text: commentText.String()},
+				})
+			}
+
+			// Start a new block
+			commentText.Reset()
+			commentText.WriteString(fmt.Sprintf("*%s - More Comments:*\n", sanitizeSlackText(task.Name)))
+		}
+
+		commentText.WriteString(newCommentText)
+	}
+
+	// Add the final block if there's content
+	if commentText.Len() > 0 {
+		blocks = append(blocks, Block{
+			Type: "section",
+			Text: &Text{Type: "mrkdwn", Text: commentText.String()},
+		})
+	}
+
+	return blocks
 }
 
 func removeEmptyComments(comments []string) []string {
@@ -347,8 +403,8 @@ func sanitizeSlackText(text string) string {
 	text = regexp.MustCompile(`\s+`).ReplaceAllString(text, " ")
 
 	// Limit text length to prevent Slack API issues (Slack has limits on block text length)
-	if len(text) > 2000 {
-		text = text[:1997] + "..."
+	if len(text) > 3000 {
+		text = text[:2997] + "..."
 	}
 
 	return text
@@ -609,4 +665,93 @@ func getAllTasks(db *sql.DB) (map[int]Task, error) {
 		tasks[t.ID] = t
 	}
 	return tasks, nil
+}
+
+// formatProjectMessageWithComments creates multiple messages if needed to display all comments
+func formatProjectMessageWithComments(project string, tasks []TaskUpdateInfo, period string) []SlackMessage {
+	var messages []SlackMessage
+
+	// Create the main message
+	mainMessage := formatProjectMessage(project, tasks, period)
+	messages = append(messages, mainMessage)
+
+	// Check if any tasks have comments that were truncated and need additional messages
+	var additionalBlocks []Block
+	var hasAdditionalComments bool
+
+	for _, task := range tasks {
+		task.Comments = removeEmptyComments(task.Comments)
+		if len(task.Comments) == 0 {
+			continue
+		}
+
+		// Count how many comments fit in the main task block
+		var fittingComments int
+		var currentLength int
+		taskBaseLength := len(fmt.Sprintf("*%s*\n• %s: %s | %s: %s\n",
+			sanitizeSlackText(task.Name),
+			task.CurrentPeriod, task.CurrentTime,
+			task.PreviousPeriod, task.PreviousTime))
+
+		if task.EstimationInfo != "" {
+			taskBaseLength += len(fmt.Sprintf("• %s\n", sanitizeSlackText(task.EstimationInfo)))
+		}
+
+		taskBaseLength += len("• Comments:\n")
+		currentLength = taskBaseLength
+
+		for i, comment := range task.Comments {
+			if comment == "" {
+				continue
+			}
+			commentLength := len(fmt.Sprintf("  %d. %s\n", i+1, sanitizeSlackText(comment)))
+			if currentLength+commentLength > 2800 {
+				break
+			}
+			currentLength += commentLength
+			fittingComments++
+		}
+
+		// If there are more comments than what fit, create additional blocks
+		if fittingComments < len(task.Comments) {
+			commentBlocks := formatTaskCommentsBlocks(task, fittingComments)
+			additionalBlocks = append(additionalBlocks, commentBlocks...)
+			hasAdditionalComments = true
+		}
+	}
+
+	// Create additional messages for overflow comments
+	if hasAdditionalComments {
+		// Split additional blocks into separate messages to respect the 50-block limit
+		const maxBlocksPerMessage = 47 // Leave buffer for header blocks
+
+		for i := 0; i < len(additionalBlocks); i += maxBlocksPerMessage {
+			end := i + maxBlocksPerMessage
+			if end > len(additionalBlocks) {
+				end = len(additionalBlocks)
+			}
+
+			blockChunk := additionalBlocks[i:end]
+
+			// Create message header
+			messageBlocks := []Block{
+				{
+					Type: "section",
+					Text: &Text{Type: "mrkdwn", Text: fmt.Sprintf("📝 *Additional Comments for %s* (Part %d)", project, (i/maxBlocksPerMessage)+1)},
+				},
+				{Type: "divider"},
+			}
+
+			messageBlocks = append(messageBlocks, blockChunk...)
+
+			additionalMessage := SlackMessage{
+				Text:   fmt.Sprintf("Additional Comments for %s", project),
+				Blocks: messageBlocks,
+			}
+
+			messages = append(messages, additionalMessage)
+		}
+	}
+
+	return messages
 }
