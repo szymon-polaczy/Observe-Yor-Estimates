@@ -127,6 +127,13 @@ func handleCliCommands(args []string, logger *Logger) {
 			}
 			logger.Info("Full synchronization completed successfully")
 		}
+	case "threshold-check":
+		logger.Info("Running threshold monitoring check")
+		if err := RunThresholdMonitoring(); err != nil {
+			logger.Errorf("Threshold monitoring failed: %v", err)
+			os.Exit(1)
+		}
+		logger.Info("Threshold monitoring completed successfully")
 	default:
 		logger.Warnf("Unknown command line argument: %s", command)
 		showHelp()
@@ -160,6 +167,13 @@ func setupCronJobs(logger *Logger) {
 		SendSlackUpdate("monthly", "", false)
 	})
 
+	// Add threshold monitoring cron job (every 15 minutes)
+	addCronJob(cronScheduler, "THRESHOLD_MONITORING_SCHEDULE", "*/15 * * * *", "threshold monitoring", logger, func() {
+		if err := RunThresholdMonitoring(); err != nil {
+			logger.Errorf("Threshold monitoring failed: %v", err)
+		}
+	})
+
 	cronScheduler.Start()
 	logger.Info("Cron scheduler started successfully")
 }
@@ -185,6 +199,7 @@ func showHelp() {
 	fmt.Println("  sync-time-entries        - Sync recent time entries (last day)")
 	fmt.Println("  sync-tasks               - Full sync of all tasks (manual operation)")
 	fmt.Println("  full-sync                - Full sync of all tasks and time entries")
+	fmt.Println("  threshold-check          - Manual threshold monitoring check")
 	fmt.Println("  job-processor            - Run as standalone job processor server")
 	fmt.Println("  --version, version         - Show application version")
 	fmt.Println("  --help, -h, help         - Show help message")
@@ -192,6 +207,10 @@ func showHelp() {
 	fmt.Println("  • Cron jobs use incremental sync every 3 hours (only process changed tasks)")
 	fmt.Println("  • Manual commands use full sync (process all tasks)")
 	fmt.Println("  • Uses TimeCamp API minimal option for optimized performance")
+	fmt.Println("\nThreshold Monitoring:")
+	fmt.Println("  • Automatic alerts for tasks crossing 50%, 80%, 90%, and 100% thresholds")
+	fmt.Println("  • Runs every 15 minutes via cron job")
+	fmt.Println("  • Manual Slack commands: /oye over <percentage> <period>")
 	fmt.Println("\nSlack Integration:")
 	fmt.Println("  Set up /oye command in Slack to point to /slack/oye endpoint")
 	fmt.Println("  Requires SLACK_BOT_TOKEN environment variable for direct responses")

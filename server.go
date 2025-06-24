@@ -135,6 +135,17 @@ func handleUnifiedOYECommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if strings.Contains(text, "over ") {
+		// Handle threshold percentage queries like "over 50 daily"
+		if err := globalRouter.HandleThresholdRequest(req); err != nil {
+			logger.Errorf("Failed to handle threshold request: %v", err)
+			sendImmediateResponse(w, "❌ Failed to process threshold request", "ephemeral")
+		} else {
+			sendImmediateResponse(w, "⏳ Checking for tasks over threshold...", "ephemeral")
+		}
+		return
+	}
+
 	// Default to update request (daily, weekly, monthly, or user's default)
 	if err := globalRouter.HandleUpdateRequest(req); err != nil {
 		logger.Errorf("Failed to handle update request: %v", err)
@@ -150,6 +161,10 @@ func sendUnifiedHelp(w http.ResponseWriter, req *SlackCommandRequest) {
 		"• `/oye` or `/oye daily` - Daily task update\n" +
 		"• `/oye weekly` - Weekly task summary\n" +
 		"• `/oye monthly` - Monthly task report\n\n" +
+		"*Threshold Monitoring:*\n" +
+		"• `/oye over 50 daily` - Tasks over 50% of estimation (daily)\n" +
+		"• `/oye over 80 weekly` - Tasks over 80% of estimation (weekly)\n" +
+		"• `/oye over 100 monthly` - Tasks over budget (monthly)\n\n" +
 		"*Data Management:*\n" +
 		"• `/oye sync` - Full data synchronization\n\n" +
 		"*Settings:*\n" +
@@ -160,7 +175,8 @@ func sendUnifiedHelp(w http.ResponseWriter, req *SlackCommandRequest) {
 		"*Tips:*\n" +
 		"• Updates are private by default (only you see them)\n" +
 		"• Use \"public\" in any command to share with channel\n" +
-		"• The system remembers your preferences"
+		"• The system automatically monitors for threshold crossings\n" +
+		"• Threshold format: `/oye over <percentage> <period>`"
 
 	response := SlackCommandResponse{
 		ResponseType: "ephemeral",

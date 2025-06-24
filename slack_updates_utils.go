@@ -68,6 +68,19 @@ type Accessory struct {
 	Text *Text  `json:"text,omitempty"`
 }
 
+// ThresholdAlert represents a task that has crossed a usage threshold
+type ThresholdAlert struct {
+	TaskID           int
+	ParentID         int
+	Name             string
+	EstimationInfo   string
+	CurrentTime      string
+	PreviousTime     string
+	Percentage       float64
+	ThresholdCrossed int  // 50, 80, 90, or 100
+	JustCrossed      bool // true if this threshold was just crossed
+}
+
 func SendSlackUpdate(period string, responseURL string, asJSON bool) {
 	logger := GetGlobalLogger()
 	logger.Infof("Starting %s Slack update", period)
@@ -754,4 +767,439 @@ func formatProjectMessageWithComments(project string, tasks []TaskUpdateInfo, pe
 	}
 
 	return messages
+}
+
+// GetTasksOverThreshold returns tasks that are over a specific percentage of their estimation
+func GetTasksOverThreshold(db *sql.DB, threshold float64, period string) ([]TaskUpdateInfo, error) {
+	logger := GetGlobalLogger()
+
+	var fromDate, toDate string
+	switch period {
+	case "daily":
+		fromDate = time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+		toDate = time.Now().Format("2006-01-02")
+	case "weekly":
+		fromDate = time.Now().AddDate(0, 0, -7).Format("2006-01-02")
+		toDate = time.Now().Format("2006-01-02")
+	case "monthly":
+		fromDate = time.Now().AddDate(0, -1, 0).Format("2006-01-02")
+		toDate = time.Now().Format("2006-01-02")
+	default:
+		// Default to daily
+		fromDate = time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+		toDate = time.Now().Format("2006-01-02")
+	}
+
+	// Simplified query - get all tasks with estimations and let Go handle the threshold logic
+	query := `
+		SELECT 
+			t.task_id,
+			t.parent_id,
+			t.name,
+			COALESCE(SUM(CASE WHEN te.date BETWEEN $1 AND $2 THEN te.duration ELSE 0 END), 0) as current_duration,
+			COALESCE(SUM(CASE WHEN te.date < $1 THEN te.duration ELSE 0 END), 0) as previous_duration
+		FROM tasks t
+		LEFT JOIN time_entries te ON t.task_id = te.task_id
+		WHERE t.name ~ '\[[0-9]+-[0-9]+\]'  -- Only tasks with estimation patterns
+		GROUP BY t.task_id, t.parent_id, t.name
+		HAVING COALESCE(SUM(te.duration), 0) > 0  -- Only tasks with time logged
+		ORDER BY t.task_id
+	`
+
+	rows, err := db.Query(query, fromDate, toDate)
+	if err != nil {
+		return nil, fmt.Errorf("could not query tasks over threshold: %w", err)
+	}
+	defer rows.Close()
+
+	var tasks []TaskUpdateInfo
+	taskIDs := make([]int, 0)
+
+	for rows.Next() {
+		var task TaskUpdateInfo
+		var currentDuration, previousDuration int
+
+		err := rows.Scan(
+			&task.TaskID,
+			&task.ParentID,
+			&task.Name,
+			&currentDuration,
+			&previousDuration,
+		)
+		if err != nil {
+			logger.Warnf("Failed to scan task row: %v", err)
+			continue
+		}
+
+		task.CurrentTime = formatDuration(currentDuration)
+		task.PreviousTime = formatDuration(previousDuration)
+
+		// Calculate percentage using existing Go function
+		percentage, _, err := calculateTimeUsagePercentage(task.CurrentTime, task.PreviousTime, task.Name)
+		if err != nil {
+			logger.Warnf("Failed to calculate percentage for task %s: %v", task.Name, err)
+			continue
+		}
+
+		// Only include tasks that meet the threshold
+		if percentage < threshold {
+			continue
+		}
+
+		// Set period labels based on the period parameter
+		switch period {
+		case "daily":
+			task.CurrentPeriod = "Today"
+			task.PreviousPeriod = "Before today"
+		case "weekly":
+			task.CurrentPeriod = "This week"
+			task.PreviousPeriod = "Before this week"
+		case "monthly":
+			task.CurrentPeriod = "This month"
+			task.PreviousPeriod = "Before this month"
+		default:
+			task.CurrentPeriod = "Recent"
+			task.PreviousPeriod = "Previous"
+		}
+
+		// Parse estimation with usage percentage
+		task.EstimationInfo, task.EstimationStatus = parseEstimationWithUsage(task.Name, task.CurrentTime, task.PreviousTime)
+
+		taskIDs = append(taskIDs, task.TaskID)
+		tasks = append(tasks, task)
+	}
+
+	if len(taskIDs) > 0 {
+		// Get comments for all tasks in batch
+		comments, err := getTaskCommentsBulk(db, taskIDs, fromDate, toDate)
+		if err != nil {
+			logger.Warnf("Failed to get task comments: %v", err)
+		} else {
+			// Assign comments to tasks
+			for i := range tasks {
+				if taskComments, ok := comments[tasks[i].TaskID]; ok {
+					tasks[i].Comments = taskComments
+				}
+			}
+		}
+	}
+
+	logger.Infof("Found %d tasks over %.1f%% threshold for %s period", len(tasks), threshold, period)
+	return tasks, nil
+}
+
+// CheckThresholdAlerts checks for tasks that just crossed specific thresholds
+func CheckThresholdAlerts(db *sql.DB) ([]ThresholdAlert, error) {
+	logger := GetGlobalLogger()
+
+	// Define the thresholds we want to monitor
+	thresholds := []int{50, 80, 90, 100}
+	var allAlerts []ThresholdAlert
+
+	// Get current time for comparison
+	now := time.Now()
+	fifteenMinutesAgo := now.Add(-15 * time.Minute)
+
+	for _, threshold := range thresholds {
+		alerts, err := getTasksJustCrossedThreshold(db, float64(threshold), fifteenMinutesAgo)
+		if err != nil {
+			logger.Errorf("Failed to check %d%% threshold: %v", threshold, err)
+			continue
+		}
+		allAlerts = append(allAlerts, alerts...)
+	}
+
+	return allAlerts, nil
+}
+
+// getTasksJustCrossedThreshold finds tasks that just crossed a threshold in the last 15 minutes
+func getTasksJustCrossedThreshold(db *sql.DB, threshold float64, since time.Time) ([]ThresholdAlert, error) {
+	logger := GetGlobalLogger()
+
+	// Simplified query - get tasks with recent activity and let Go handle the threshold logic
+	query := `
+		WITH recent_entries AS (
+			-- Get time entries from the last 15 minutes
+			SELECT task_id, duration
+			FROM time_entries 
+			WHERE modify_time >= $1
+			  AND duration > 0
+		),
+		tasks_with_recent_activity AS (
+			-- Get tasks that had recent time entries
+			SELECT DISTINCT t.task_id, t.parent_id, t.name
+			FROM tasks t
+			INNER JOIN recent_entries re ON t.task_id = re.task_id
+			WHERE t.name ~ '\[[0-9]+-[0-9]+\]'  -- Only tasks with estimation patterns
+		),
+		task_totals AS (
+			-- Calculate total time and recent time for these tasks
+			SELECT 
+				tra.task_id,
+				tra.parent_id,
+				tra.name,
+				COALESCE(SUM(te.duration), 0) as total_duration,
+				COALESCE(SUM(CASE WHEN te.modify_time >= $1 THEN te.duration ELSE 0 END), 0) as recent_duration
+			FROM tasks_with_recent_activity tra
+			LEFT JOIN time_entries te ON tra.task_id = te.task_id
+			GROUP BY tra.task_id, tra.parent_id, tra.name
+		)
+		SELECT 
+			task_id,
+			parent_id,
+			name,
+			total_duration,
+			recent_duration
+		FROM task_totals
+		WHERE total_duration > 0
+	`
+
+	rows, err := db.Query(query, since)
+	if err != nil {
+		return nil, fmt.Errorf("could not query threshold crossings: %w", err)
+	}
+	defer rows.Close()
+
+	var alerts []ThresholdAlert
+	for rows.Next() {
+		var taskID, parentID int
+		var name string
+		var totalDuration, recentDuration int
+
+		err := rows.Scan(&taskID, &parentID, &name, &totalDuration, &recentDuration)
+		if err != nil {
+			logger.Warnf("Failed to scan task row: %v", err)
+			continue
+		}
+
+		// Parse estimation using existing Go function
+		_, status := parseEstimation(name)
+		if status != "" {
+			// Skip tasks without valid estimations
+			continue
+		}
+
+		// Calculate current and previous totals
+		previousTotal := totalDuration - recentDuration
+
+		// Calculate percentages using existing Go function
+		currentPercentage, _, err := calculateTimeUsagePercentage(
+			formatDuration(recentDuration),
+			formatDuration(previousTotal),
+			name,
+		)
+		if err != nil {
+			logger.Warnf("Failed to calculate percentage for task %s: %v", name, err)
+			continue
+		}
+
+		previousPercentage, _, err := calculateTimeUsagePercentage(
+			"0h 0m",
+			formatDuration(previousTotal),
+			name,
+		)
+		if err != nil {
+			logger.Warnf("Failed to calculate previous percentage for task %s: %v", name, err)
+			continue
+		}
+
+		// Check if this task just crossed the threshold
+		if previousPercentage < threshold && currentPercentage >= threshold {
+			alert := ThresholdAlert{
+				TaskID:           taskID,
+				ParentID:         parentID,
+				Name:             name,
+				CurrentTime:      formatDuration(totalDuration),
+				PreviousTime:     formatDuration(previousTotal),
+				Percentage:       currentPercentage,
+				ThresholdCrossed: int(threshold),
+				JustCrossed:      true,
+			}
+
+			// Parse estimation info
+			alert.EstimationInfo, _ = parseEstimationWithUsage(alert.Name, alert.CurrentTime, alert.PreviousTime)
+
+			alerts = append(alerts, alert)
+		}
+	}
+
+	if len(alerts) > 0 {
+		logger.Infof("Found %d tasks that just crossed %.1f%% threshold", len(alerts), threshold)
+	}
+
+	return alerts, nil
+}
+
+// SendThresholdAlerts sends Slack notifications for threshold crossings
+func SendThresholdAlerts(alerts []ThresholdAlert) error {
+	if len(alerts) == 0 {
+		return nil
+	}
+
+	logger := GetGlobalLogger()
+
+	// Group alerts by threshold
+	thresholdGroups := make(map[int][]ThresholdAlert)
+	for _, alert := range alerts {
+		thresholdGroups[alert.ThresholdCrossed] = append(thresholdGroups[alert.ThresholdCrossed], alert)
+	}
+
+	// Get all tasks for hierarchy mapping
+	db, err := GetDB()
+	if err != nil {
+		return fmt.Errorf("failed to get database connection: %w", err)
+	}
+
+	allTasks, err := getAllTasks(db)
+	if err != nil {
+		return fmt.Errorf("failed to get all tasks for hierarchy mapping: %w", err)
+	}
+
+	// Send a message for each threshold that was crossed
+	for threshold, thresholdAlerts := range thresholdGroups {
+		// Convert ThresholdAlert to TaskUpdateInfo for compatibility with existing functions
+		var taskInfos []TaskUpdateInfo
+		for _, alert := range thresholdAlerts {
+			taskInfo := TaskUpdateInfo{
+				TaskID:           alert.TaskID,
+				ParentID:         alert.ParentID,
+				Name:             alert.Name,
+				EstimationInfo:   alert.EstimationInfo,
+				EstimationStatus: "",
+				CurrentPeriod:    "Current",
+				CurrentTime:      alert.CurrentTime,
+				PreviousPeriod:   "Previous",
+				PreviousTime:     alert.PreviousTime,
+				DaysWorked:       0,
+				Comments:         []string{}, // We could add comments here if needed
+			}
+			taskInfos = append(taskInfos, taskInfo)
+		}
+
+		// Group by project
+		projectGroups := groupTasksByTopParent(taskInfos, allTasks)
+
+		// Format the alert message
+		for project, tasks := range projectGroups {
+			message := formatThresholdAlertMessage(project, tasks, threshold)
+
+			if err := sendSlackMessage(message); err != nil {
+				logger.Errorf("Failed to send threshold alert for %s at %d%%: %v", project, threshold, err)
+			} else {
+				logger.Infof("Sent threshold alert for %s: %d tasks crossed %d%% threshold", project, len(tasks), threshold)
+			}
+
+			// Add a small delay to avoid rate limiting
+			time.Sleep(1 * time.Second)
+		}
+	}
+
+	return nil
+}
+
+// formatThresholdAlertMessage formats a threshold crossing alert message
+func formatThresholdAlertMessage(project string, tasks []TaskUpdateInfo, threshold int) SlackMessage {
+	var emoji string
+	var urgency string
+
+	switch threshold {
+	case 50:
+		emoji = "🟡"
+		urgency = "Warning"
+	case 80:
+		emoji = "🟠"
+		urgency = "High Usage"
+	case 90:
+		emoji = "🔴"
+		urgency = "Critical"
+	case 100:
+		emoji = "🚨"
+		urgency = "Over Budget"
+	default:
+		emoji = "⚠️"
+		urgency = "Alert"
+	}
+
+	title := fmt.Sprintf("%s %s: Tasks Crossed %d%% Threshold", emoji, urgency, threshold)
+	if project != "Other" && project != "" {
+		title = fmt.Sprintf("%s %s: %s Tasks Crossed %d%% Threshold", emoji, urgency, project, threshold)
+	}
+
+	var messageText strings.Builder
+	messageText.WriteString(fmt.Sprintf("*%s*\n", title))
+	messageText.WriteString(fmt.Sprintf("⏰ Detected at %s\n\n", time.Now().Format("15:04 on January 2, 2006")))
+
+	blocks := []Block{
+		{
+			Type: "header",
+			Text: &Text{Type: "plain_text", Text: title},
+		},
+		{
+			Type: "context",
+			Elements: []Element{
+				{Type: "mrkdwn", Text: fmt.Sprintf("⏰ Detected at %s", time.Now().Format("15:04 on January 2, 2006"))},
+			},
+		},
+		{Type: "divider"},
+	}
+
+	for _, task := range tasks {
+		taskBlock := formatSingleTaskBlock(task)
+		blocks = append(blocks, taskBlock)
+		appendTaskTextMessage(&messageText, task)
+	}
+
+	// Add footer with action suggestion
+	var suggestion string
+	switch threshold {
+	case 50:
+		suggestion = "💡 Consider reviewing the remaining work and updating estimates if needed."
+	case 80:
+		suggestion = "⚡ High usage detected. Review task scope and consider breaking down into smaller tasks."
+	case 90:
+		suggestion = "🔍 Critical usage level. Immediate review recommended to assess if additional time is needed."
+	case 100:
+		suggestion = "🎯 Budget exceeded. Please review and update estimates or task scope immediately."
+	}
+
+	blocks = append(blocks, Block{
+		Type: "context",
+		Elements: []Element{
+			{Type: "mrkdwn", Text: suggestion},
+		},
+	})
+
+	return SlackMessage{
+		Text:   messageText.String(),
+		Blocks: blocks,
+	}
+}
+
+// RunThresholdMonitoring checks for tasks that just crossed thresholds and sends alerts
+func RunThresholdMonitoring() error {
+	logger := GetGlobalLogger()
+	logger.Debug("Starting threshold monitoring check")
+
+	db, err := GetDB()
+	if err != nil {
+		return fmt.Errorf("failed to get database connection: %w", err)
+	}
+
+	alerts, err := CheckThresholdAlerts(db)
+	if err != nil {
+		return fmt.Errorf("failed to check threshold alerts: %w", err)
+	}
+
+	if len(alerts) == 0 {
+		logger.Debug("No threshold crossings detected")
+		return nil
+	}
+
+	logger.Infof("Detected %d threshold crossings, sending alerts", len(alerts))
+
+	if err := SendThresholdAlerts(alerts); err != nil {
+		return fmt.Errorf("failed to send threshold alerts: %w", err)
+	}
+
+	return nil
 }

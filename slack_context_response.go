@@ -596,3 +596,124 @@ func (s *SlackAPIClient) sendSlackAPIRequestWithResponse(endpoint string, payloa
 	s.logger.Debugf("Successfully sent %s request to Slack API", endpoint)
 	return &slackResp, nil
 }
+
+// SendThresholdNoResultsMessage sends a message when no tasks are found over the threshold
+func (s *SlackAPIClient) SendThresholdNoResultsMessage(ctx *ConversationContext, threshold float64, period string) error {
+	message := fmt.Sprintf("🎯 No tasks found over %.0f%% threshold for %s period", threshold, period)
+
+	payload := map[string]interface{}{
+		"channel": ctx.ChannelID,
+		"text":    message,
+		"blocks": []Block{
+			{
+				Type: "section",
+				Text: &Text{Type: "mrkdwn", Text: fmt.Sprintf("🎯 *Good news!* No tasks found over %.0f%% threshold for %s period.\n\nAll your estimated tasks are within budget! 🎉", threshold, period)},
+			},
+		},
+	}
+
+	if ctx.ThreadTS != "" {
+		payload["thread_ts"] = ctx.ThreadTS
+	}
+
+	return s.sendSlackAPIRequest("chat.postMessage", payload)
+}
+
+// SendThresholdResults sends the results of a threshold query
+func (s *SlackAPIClient) SendThresholdResults(ctx *ConversationContext, taskInfos []TaskUpdateInfo, threshold float64, period string) error {
+	if len(taskInfos) == 0 {
+		return s.SendThresholdNoResultsMessage(ctx, threshold, period)
+	}
+
+	message := s.formatThresholdMessage(taskInfos, threshold, period)
+
+	payload := map[string]interface{}{
+		"channel": ctx.ChannelID,
+		"text":    message.Text,
+		"blocks":  message.Blocks,
+	}
+
+	if ctx.ThreadTS != "" {
+		payload["thread_ts"] = ctx.ThreadTS
+	}
+
+	return s.sendSlackAPIRequest("chat.postMessage", payload)
+}
+
+// formatThresholdMessage formats a threshold query result message
+func (s *SlackAPIClient) formatThresholdMessage(taskInfos []TaskUpdateInfo, threshold float64, period string) SlackMessage {
+	var emoji string
+	var status string
+
+	switch {
+	case threshold >= 100:
+		emoji = "🚨"
+		status = "Over Budget"
+	case threshold >= 90:
+		emoji = "🔴"
+		status = "Critical Usage"
+	case threshold >= 80:
+		emoji = "🟠"
+		status = "High Usage"
+	case threshold >= 50:
+		emoji = "🟡"
+		status = "Warning Level"
+	default:
+		emoji = "📊"
+		status = "Usage Report"
+	}
+
+	title := fmt.Sprintf("%s %s: %.0f%% Threshold Report", emoji, status, threshold)
+
+	var messageText strings.Builder
+	messageText.WriteString(fmt.Sprintf("*%s*\n", title))
+	messageText.WriteString(fmt.Sprintf("📅 Period: %s | Found %d tasks\n\n", strings.Title(period), len(taskInfos)))
+
+	blocks := []Block{
+		{
+			Type: "header",
+			Text: &Text{Type: "plain_text", Text: title},
+		},
+		{
+			Type: "context",
+			Elements: []Element{
+				{Type: "mrkdwn", Text: fmt.Sprintf("📅 Period: %s | Found %d tasks", strings.Title(period), len(taskInfos))},
+			},
+		},
+		{Type: "divider"},
+	}
+
+	// Format each task
+	for _, task := range taskInfos {
+		taskBlock := formatSingleTaskBlock(task)
+		blocks = append(blocks, taskBlock)
+		appendTaskTextMessage(&messageText, task)
+	}
+
+	// Add footer with suggestion
+	var suggestion string
+	switch {
+	case threshold >= 100:
+		suggestion = "🎯 These tasks have exceeded their estimated time budget. Consider reviewing scope or updating estimates."
+	case threshold >= 90:
+		suggestion = "🔍 These tasks are approaching their time budget limit. Monitor closely and review if additional time is needed."
+	case threshold >= 80:
+		suggestion = "⚡ High usage detected. Consider breaking down tasks or reviewing remaining work scope."
+	case threshold >= 50:
+		suggestion = "💡 These tasks have used significant portions of their estimated time. Monitor progress closely."
+	default:
+		suggestion = "📈 Regular monitoring helps maintain project visibility and accurate estimations."
+	}
+
+	blocks = append(blocks, Block{
+		Type: "context",
+		Elements: []Element{
+			{Type: "mrkdwn", Text: suggestion},
+		},
+	})
+
+	return SlackMessage{
+		Text:   messageText.String(),
+		Blocks: blocks,
+	}
+}

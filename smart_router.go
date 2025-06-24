@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -333,4 +334,141 @@ func (sr *SmartRouter) SetUserPreference(userID, key, value string) {
 
 	prefs.LastInteraction = time.Now()
 	sr.preferences[userID] = prefs
+}
+
+// HandleThresholdRequest processes threshold percentage requests like "over 50 daily"
+func (sr *SmartRouter) HandleThresholdRequest(req *SlackCommandRequest) error {
+	ctx := &ConversationContext{
+		ChannelID:   req.ChannelID,
+		UserID:      req.UserID,
+		CommandType: req.Command,
+	}
+
+	sr.logger.Infof("Processing threshold request from user %s: %s", req.UserName, req.Text)
+
+	// Parse the threshold and period from the text
+	threshold, period, err := sr.parseThresholdCommand(req.Text)
+	if err != nil {
+		return sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("❌ Invalid command format. Use: `/oye over <percentage> <period>`\nExample: `/oye over 50 daily`\nError: %v", err))
+	}
+
+	// Send initial progress message
+	progressResp, err := sr.slackClient.SendProgressMessage(ctx,
+		fmt.Sprintf("🔍 Searching for tasks over %.0f%% threshold for %s period...", threshold, period))
+	if err != nil {
+		return sr.slackClient.SendErrorResponse(ctx, "Failed to start threshold check")
+	}
+
+	// Update context with message timestamp for threading
+	if progressResp != nil {
+		ctx.ThreadTS = progressResp.Timestamp
+	}
+
+	// Process in background
+	go func() {
+		sr.processThresholdWithProgress(ctx, threshold, period)
+	}()
+
+	return nil
+}
+
+func (sr *SmartRouter) processThresholdWithProgress(ctx *ConversationContext, threshold float64, period string) {
+	// Show progress updates
+	sr.slackClient.UpdateProgress(ctx, "📊 Querying database for tasks with estimations...")
+	time.Sleep(500 * time.Millisecond)
+
+	// Get database connection
+	db, err := GetDB()
+	if err != nil {
+		sr.slackClient.SendErrorResponse(ctx, "Database connection failed")
+		return
+	}
+
+	sr.slackClient.UpdateProgress(ctx, fmt.Sprintf("📈 Analyzing tasks over %.0f%% threshold...", threshold))
+	time.Sleep(1 * time.Second)
+
+	// Get tasks over threshold
+	taskInfos, err := GetTasksOverThreshold(db, threshold, period)
+	if err != nil {
+		errorMessage := fmt.Sprintf("Failed to get tasks over threshold: ```%v```", err)
+		sr.slackClient.SendErrorResponse(ctx, errorMessage)
+		return
+	}
+
+	sr.slackClient.UpdateProgress(ctx, "✍️ Formatting threshold report...")
+	time.Sleep(500 * time.Millisecond)
+
+	// Handle the case where there are no tasks
+	if len(taskInfos) == 0 {
+		err = sr.slackClient.SendThresholdNoResultsMessage(ctx, threshold, period)
+		if err != nil {
+			sr.logger.Errorf("Failed to send 'no results' message: %v", err)
+			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send threshold report"))
+		}
+		return
+	}
+
+	// Send final result
+	err = sr.slackClient.SendThresholdResults(ctx, taskInfos, threshold, period)
+	if err != nil {
+		sr.logger.Errorf("Failed to send threshold results via Slack API: %v", err)
+
+		// Try webhook fallback
+		message := sr.slackClient.formatThresholdMessage(taskInfos, threshold, period)
+		if webhookErr := sendSlackMessage(message); webhookErr != nil {
+			sr.logger.Errorf("Webhook fallback also failed: %v", webhookErr)
+			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send threshold report"))
+			return
+		}
+		sr.logger.Info("Successfully sent threshold report via webhook fallback")
+	}
+
+	sr.logger.Infof("Completed threshold check for user %s: %.0f%% threshold, %s period, %d tasks found",
+		ctx.UserID, threshold, period, len(taskInfos))
+}
+
+// parseThresholdCommand parses commands like "over 50 daily" to extract threshold and period
+func (sr *SmartRouter) parseThresholdCommand(text string) (float64, string, error) {
+	text = strings.ToLower(strings.TrimSpace(text))
+
+	// Remove "over" from the beginning if present
+	text = strings.TrimPrefix(text, "over ")
+	text = strings.TrimSpace(text)
+
+	// Split into parts
+	parts := strings.Fields(text)
+	if len(parts) < 1 {
+		return 0, "", fmt.Errorf("missing threshold percentage")
+	}
+
+	// Parse threshold percentage
+	thresholdStr := parts[0]
+	// Remove % sign if present
+	thresholdStr = strings.TrimSuffix(thresholdStr, "%")
+
+	threshold, err := strconv.ParseFloat(thresholdStr, 64)
+	if err != nil {
+		return 0, "", fmt.Errorf("invalid threshold percentage '%s'", parts[0])
+	}
+
+	if threshold < 0 || threshold > 1000 {
+		return 0, "", fmt.Errorf("threshold percentage must be between 0 and 1000")
+	}
+
+	// Determine period
+	period := "daily" // default
+	if len(parts) >= 2 {
+		switch parts[1] {
+		case "daily", "day":
+			period = "daily"
+		case "weekly", "week":
+			period = "weekly"
+		case "monthly", "month":
+			period = "monthly"
+		default:
+			return 0, "", fmt.Errorf("invalid period '%s'. Use: daily, weekly, or monthly", parts[1])
+		}
+	}
+
+	return threshold, period, nil
 }
