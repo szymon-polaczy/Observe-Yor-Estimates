@@ -55,11 +55,11 @@ func FullSyncTimeEntriesToDatabase() error {
 	return SyncTimeEntriesToDatabase(fromDate, toDate)
 }
 
-// FullSyncAll performs both full tasks sync and full time entries sync
+// FullSyncAll performs both full tasks sync and full time entries sync with optimizations
 func FullSyncAll() error {
 	logger := GetGlobalLogger()
 
-	logger.Info("Starting full synchronization of all data from TimeCamp")
+	logger.Info("Starting optimized full synchronization of all data from TimeCamp")
 
 	// Validate database write access before attempting sync operations
 	logger.Debug("Validating database write access...")
@@ -68,21 +68,24 @@ func FullSyncAll() error {
 	}
 	logger.Debug("Database write access validated successfully")
 
-	// Sync tasks first
-	logger.Info("Starting full tasks sync...")
+	startTime := time.Now()
+
+	// Sync tasks first (time entries depend on tasks)
+	logger.Info("Starting optimized full tasks sync...")
 	if err := FullSyncTasksToDatabase(); err != nil {
 		return fmt.Errorf("full tasks sync failed: %w", err)
 	}
 	logger.Info("Full tasks sync completed successfully")
 
 	// Then sync time entries
-	logger.Info("Starting full time entries sync...")
+	logger.Info("Starting optimized full time entries sync...")
 	if err := FullSyncTimeEntriesToDatabase(); err != nil {
 		return fmt.Errorf("full time entries sync failed: %w", err)
 	}
 	logger.Info("Full time entries sync completed successfully")
 
-	logger.Info("Full synchronization completed successfully")
+	duration := time.Since(startTime)
+	logger.Infof("Optimized full synchronization completed successfully in %v", duration.Round(time.Second))
 	return nil
 }
 

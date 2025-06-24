@@ -117,9 +117,11 @@ func GetDB() (*sql.DB, error) {
 		}
 
 		// Set connection pool settings with timeouts optimized for serverless
-		db.SetConnMaxLifetime(time.Minute * 1) // Reduced from 3 minutes
-		db.SetMaxOpenConns(5)                  // Reduced from 10
-		db.SetMaxIdleConns(2)                  // Reduced from 5
+		// Optimized connection pool settings for batch operations
+		db.SetConnMaxLifetime(time.Minute * 5)  // Increased for better performance
+		db.SetMaxOpenConns(25)                  // Increased for concurrent batch operations
+		db.SetMaxIdleConns(10)                  // Increased to keep connections alive
+		db.SetConnMaxIdleTime(90 * time.Second) // Close idle connections after 90s
 
 		// Test the connection with shorter timeout for faster failure detection
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -206,8 +208,10 @@ func migrateTasksTable(db *sql.DB) error {
 		return createTasksTable(db)
 	}
 
-	logger.Debug("Tasks table already exists")
-	return nil
+	logger.Debug("Tasks table already exists, checking for archived column")
+
+	// Check if archived column exists and add it if missing
+	return ensureArchivedColumn(db)
 }
 
 func createTasksTable(db *sql.DB) error {
@@ -219,7 +223,8 @@ parent_id INTEGER NOT NULL,
 assigned_by INTEGER NOT NULL,
 name TEXT NOT NULL,
 level INTEGER NOT NULL,
-root_group_id INTEGER NOT NULL
+root_group_id INTEGER NOT NULL,
+archived INTEGER DEFAULT 0
 );`
 
 	_, err := db.Exec(createTableSQL)
@@ -228,6 +233,38 @@ root_group_id INTEGER NOT NULL
 	}
 
 	logger.Info("Tasks table created successfully")
+	return nil
+}
+
+// ensureArchivedColumn checks if the archived column exists in the tasks table and adds it if missing
+func ensureArchivedColumn(db *sql.DB) error {
+	logger := GetGlobalLogger()
+
+	// Check if archived column exists
+	checkColumnSQL := `SELECT column_name 
+		FROM information_schema.columns 
+		WHERE table_schema = 'public' 
+		AND table_name = 'tasks' 
+		AND column_name = 'archived';`
+
+	var columnName string
+	err := db.QueryRow(checkColumnSQL).Scan(&columnName)
+
+	if err == sql.ErrNoRows {
+		// Column doesn't exist, add it
+		logger.Info("Adding archived column to tasks table")
+		alterTableSQL := `ALTER TABLE tasks ADD COLUMN archived INTEGER DEFAULT 0;`
+		_, err := db.Exec(alterTableSQL)
+		if err != nil {
+			return fmt.Errorf("failed to add archived column to tasks table: %w", err)
+		}
+		logger.Info("Archived column added successfully to tasks table")
+	} else if err != nil {
+		return fmt.Errorf("error checking for archived column: %w", err)
+	} else {
+		logger.Debug("Archived column already exists in tasks table")
+	}
+
 	return nil
 }
 

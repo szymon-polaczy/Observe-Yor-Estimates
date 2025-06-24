@@ -165,19 +165,22 @@ func SyncTimeEntriesToDatabase(fromDate, toDate string) error {
 	}
 	defer CloseWithErrorLog(insertStatement, "prepared statement")
 
-	// Build an in-memory set of existing task IDs to avoid per-entry queries
+	// Build an optimized in-memory set of existing task IDs to avoid per-entry queries
 	existingTasks := make(map[int]struct{})
 	rowsTasks, err := db.Query(`SELECT task_id FROM tasks`)
 	if err != nil {
 		return fmt.Errorf("failed to fetch existing tasks: %w", err)
 	}
+	defer rowsTasks.Close()
+
 	for rowsTasks.Next() {
 		var id int
 		if err := rowsTasks.Scan(&id); err == nil {
 			existingTasks[id] = struct{}{}
 		}
 	}
-	rowsTasks.Close()
+
+	logger.Debugf("Loaded %d existing task IDs for validation", len(existingTasks))
 
 	// Pre-process entries to validate and convert data types
 	validEntries := make([]ProcessedTimeEntry, 0, len(timeEntries))
@@ -208,30 +211,91 @@ func SyncTimeEntriesToDatabase(fromDate, toDate string) error {
 
 	logger.Infof("Processing %d valid entries (%d invalid entries skipped, %d entries with missing tasks skipped)", len(validEntries), invalidCount, missingTaskCount)
 
-	// Batch insert valid entries
-	successCount := 0
-	errorCount := 0
-
-	for _, processed := range validEntries {
-		_, err = insertStatement.Exec(
-			processed.ID, processed.TaskID, processed.UserID, processed.Date,
-			processed.Start, processed.End, processed.Duration, processed.Description,
-			processed.Billable, processed.Locked, processed.ModifyTime,
-		)
-		if err != nil {
-			logger.Errorf("Failed to insert time entry %d: %v", processed.ID, err)
-			errorCount++
-			continue
-		}
-		successCount++
+	// Use optimized batch processing for better performance
+	err = processBatchTimeEntries(db, validEntries, logger)
+	if err != nil {
+		return err
 	}
 
-	logger.Infof("Time entries sync completed: %d entries processed successfully, %d errors encountered", successCount, errorCount)
-
+	// Check for missing task references and suggest remediation
 	if missingTaskCount > 0 {
 		logger.Warnf("Warning: %d time entries were skipped due to missing task references. Consider running a full tasks sync if this number is high.", missingTaskCount)
 		checkMissingTasksAndSuggestRemediation(db, missingTaskCount, logger)
 	}
+
+	return nil
+}
+
+// processBatchTimeEntries performs optimized batch insert of time entries
+func processBatchTimeEntries(db *sql.DB, entries []ProcessedTimeEntry, logger *Logger) error {
+	if len(entries) == 0 {
+		return nil
+	}
+
+	logger.Infof("Starting optimized batch processing for %d time entries", len(entries))
+
+	// Start a transaction for better performance
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback() // Will be ignored if tx.Commit() succeeds
+
+	// Prepare the UPSERT statement
+	stmt, err := tx.Prepare(`INSERT INTO time_entries 
+		(id, task_id, user_id, date, start_time, end_time, duration, description, billable, locked, modify_time) 
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) 
+		ON CONFLICT (id) DO UPDATE SET 
+		task_id = EXCLUDED.task_id,
+		user_id = EXCLUDED.user_id,
+		date = EXCLUDED.date,
+		start_time = EXCLUDED.start_time,
+		end_time = EXCLUDED.end_time,
+		duration = EXCLUDED.duration,
+		description = EXCLUDED.description,
+		billable = EXCLUDED.billable,
+		locked = EXCLUDED.locked,
+		modify_time = EXCLUDED.modify_time`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare batch statement: %w", err)
+	}
+	defer stmt.Close()
+
+	// Process entries in batches
+	const batchSize = 500 // Larger batch size for time entries since they're simpler
+	successCount := 0
+	errorCount := 0
+
+	for i := 0; i < len(entries); i += batchSize {
+		end := i + batchSize
+		if end > len(entries) {
+			end = len(entries)
+		}
+
+		batch := entries[i:end]
+		logger.Debugf("Processing time entries batch %d-%d of %d", i+1, end, len(entries))
+
+		for _, entry := range batch {
+			_, err = stmt.Exec(
+				entry.ID, entry.TaskID, entry.UserID, entry.Date,
+				entry.Start, entry.End, entry.Duration, entry.Description,
+				entry.Billable, entry.Locked, entry.ModifyTime,
+			)
+			if err != nil {
+				logger.Errorf("Failed to upsert time entry %d: %v", entry.ID, err)
+				errorCount++
+				continue
+			}
+			successCount++
+		}
+	}
+
+	// Commit the transaction
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	logger.Infof("Optimized time entries sync completed: %d entries processed successfully, %d errors encountered", successCount, errorCount)
 
 	if errorCount > 0 && successCount == 0 {
 		return fmt.Errorf("all time entry operations failed during sync")
@@ -276,9 +340,19 @@ func getTimeCampTimeEntries(fromDate, toDate string) ([]JsonTimeEntry, error) {
 
 	logger.Debugf("Fetching time entries from TimeCamp API: %s", request.URL.String())
 
+	// Use optimized HTTP client for better performance
+	client := &http.Client{
+		Timeout: time.Second * 30,
+		Transport: &http.Transport{
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 10,
+			IdleConnTimeout:     90 * time.Second,
+		},
+	}
+
 	// Use retry mechanism for API calls
 	retryConfig := DefaultRetryConfig()
-	response, err := DoHTTPWithRetry(http.DefaultClient, request, retryConfig)
+	response, err := DoHTTPWithRetry(client, request, retryConfig)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request to TimeCamp API failed after retries: %w", err)
 	}

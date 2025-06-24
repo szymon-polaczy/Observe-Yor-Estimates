@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/joho/godotenv"
 )
@@ -18,6 +19,7 @@ type JsonTask struct {
 	Name        string `json:"name"`
 	Level       int    `json:"level"`
 	RootGroupID int    `json:"root_group_id"`
+	Archived    int    `json:"archived,omitempty"` // Optional field for archived status
 }
 
 // SyncTasksToDatabase fetches tasks from TimeCamp and stores them in the database
@@ -33,9 +35,9 @@ func SyncTasksToDatabase(fullSync bool) error {
 	}
 
 	if fullSync {
-		logger.Debug("Starting FULL task synchronization with TimeCamp")
+		logger.Debug("Starting FULL task synchronization with TimeCamp (including archived tasks)")
 	} else {
-		logger.Debug("Starting INCREMENTAL task synchronization with TimeCamp (cron mode)")
+		logger.Debug("Starting INCREMENTAL task synchronization with TimeCamp (including archived tasks)")
 	}
 
 	timecampTasks, err := getTimecampTasks()
@@ -54,117 +56,133 @@ func SyncTasksToDatabase(fullSync bool) error {
 	}
 	// Note: Using shared database connection, no need to close here
 
-	// Prepare statements based on sync type
-	var insertStatement *sql.Stmt
 	if fullSync {
-		// For full sync, use INSERT ... ON CONFLICT DO UPDATE to update existing tasks
-		insertStatement, err = db.Prepare(`INSERT INTO tasks (task_id, parent_id, assigned_by, name, level, root_group_id) 
-			VALUES ($1, $2, $3, $4, $5, $6) 
-			ON CONFLICT (task_id) DO UPDATE SET 
-			parent_id = EXCLUDED.parent_id,
-			assigned_by = EXCLUDED.assigned_by,
-			name = EXCLUDED.name,
-			level = EXCLUDED.level,
-			root_group_id = EXCLUDED.root_group_id`)
+		return performFullSyncBatch(db, timecampTasks, logger)
 	} else {
-		// For incremental sync, use INSERT ... ON CONFLICT DO NOTHING to only add new tasks
-		insertStatement, err = db.Prepare(`INSERT INTO tasks (task_id, parent_id, assigned_by, name, level, root_group_id) 
-			VALUES ($1, $2, $3, $4, $5, $6) 
-			ON CONFLICT (task_id) DO NOTHING`)
+		return performIncrementalSync(db, timecampTasks, logger)
 	}
+}
+
+// performFullSyncBatch performs optimized batch operations for full sync
+func performFullSyncBatch(db *sql.DB, tasks []JsonTask, logger *Logger) error {
+	logger.Infof("Starting optimized batch full sync for %d tasks", len(tasks))
+
+	// Start a transaction for better performance
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback() // Will be ignored if tx.Commit() succeeds
+
+	// Prepare the UPSERT statement for batch operations
+	stmt, err := tx.Prepare(`INSERT INTO tasks (task_id, parent_id, assigned_by, name, level, root_group_id, archived) 
+		VALUES ($1, $2, $3, $4, $5, $6, $7) 
+		ON CONFLICT (task_id) DO UPDATE SET 
+		parent_id = EXCLUDED.parent_id,
+		assigned_by = EXCLUDED.assigned_by,
+		name = EXCLUDED.name,
+		level = EXCLUDED.level,
+		root_group_id = EXCLUDED.root_group_id,
+		archived = EXCLUDED.archived`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare batch statement: %w", err)
+	}
+	defer stmt.Close()
+
+	// Process tasks in batches for better performance
+	const batchSize = 100
+	successCount := 0
+	errorCount := 0
+
+	for i := 0; i < len(tasks); i += batchSize {
+		end := i + batchSize
+		if end > len(tasks) {
+			end = len(tasks)
+		}
+
+		batch := tasks[i:end]
+		logger.Debugf("Processing batch %d-%d of %d tasks", i+1, end, len(tasks))
+
+		for _, task := range batch {
+			_, err := stmt.Exec(task.TaskID, task.ParentID, task.AssignedBy, task.Name, task.Level, task.RootGroupID, task.Archived)
+			if err != nil {
+				logger.Errorf("Failed to upsert task %d (%s): %v", task.TaskID, task.Name, err)
+				errorCount++
+				continue
+			}
+			successCount++
+		}
+	}
+
+	// Commit the transaction
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	logger.Infof("Optimized full task sync completed: %d tasks processed successfully, %d errors encountered", successCount, errorCount)
+
+	if errorCount > 0 && successCount == 0 {
+		return fmt.Errorf("all task operations failed during sync")
+	}
+
+	return nil
+}
+
+// performIncrementalSync performs the original incremental sync logic
+func performIncrementalSync(db *sql.DB, timecampTasks []JsonTask, logger *Logger) error {
+	// For incremental sync, get existing tasks to compare changes
+	existingTasks, err := getExistingTasks(db)
+	if err != nil {
+		logger.Warnf("Failed to fetch existing tasks for comparison: %v", err)
+		// Continue with full processing if we can't get existing tasks
+		existingTasks = make(map[int]JsonTask)
+	}
+
+	// Prepare insert statement for incremental sync
+	insertStatement, err := db.Prepare(`INSERT INTO tasks (task_id, parent_id, assigned_by, name, level, root_group_id, archived) 
+		VALUES ($1, $2, $3, $4, $5, $6, $7) 
+		ON CONFLICT (task_id) DO NOTHING`)
 	if err != nil {
 		return fmt.Errorf("failed to prepare insert statement: %w", err)
 	}
 	defer CloseWithErrorLog(insertStatement, "prepared statement")
 
-	// For incremental sync, get existing tasks to compare changes
-	var existingTasks map[int]JsonTask
-	if !fullSync {
-		existingTasks, err = getExistingTasks(db)
-		if err != nil {
-			logger.Warnf("Failed to fetch existing tasks for comparison: %v", err)
-			// Continue with full processing if we can't get existing tasks
-			existingTasks = make(map[int]JsonTask)
-		}
-	}
-
-	index := 0
-	errorCount := 0
 	newTaskCount := 0
 	updatedTaskCount := 0
 	skippedTaskCount := 0
+	errorCount := 0
 
 	for _, task := range timecampTasks {
-		if !fullSync {
-			// For incremental sync, check if task needs processing
-			if existingTask, exists := existingTasks[task.TaskID]; exists {
-				// Task exists, check if it needs updating
-				if !taskNeedsUpdate(existingTask, task) {
-					skippedTaskCount++
-					continue
-				}
-				// Task needs update, process it
-				updatedTaskCount++
-			} else {
-				// New task
-				newTaskCount++
+		// For incremental sync, check if task needs processing
+		if existingTask, exists := existingTasks[task.TaskID]; exists {
+			// Task exists, check if it needs updating
+			if !taskNeedsUpdate(existingTask, task) {
+				skippedTaskCount++
+				continue
 			}
-		}
-
-		// Check if task already exists to track changes
-		var existingName string
-		checkQuery := "SELECT name FROM tasks WHERE task_id = $1"
-		err := db.QueryRow(checkQuery, task.TaskID).Scan(&existingName)
-
-		if err == sql.ErrNoRows {
+			// Task needs update, process it
+			updateQuery := "UPDATE tasks SET parent_id = $1, assigned_by = $2, name = $3, level = $4, root_group_id = $5, archived = $6 WHERE task_id = $7"
+			_, err := db.Exec(updateQuery, task.ParentID, task.AssignedBy, task.Name, task.Level, task.RootGroupID, task.Archived, task.TaskID)
+			if err != nil {
+				logger.Errorf("Failed to update task %d: %v", task.TaskID, err)
+				errorCount++
+				continue
+			}
+			updatedTaskCount++
+		} else {
 			// New task
-			_, err := insertStatement.Exec(task.TaskID, task.ParentID, task.AssignedBy, task.Name, task.Level, task.RootGroupID)
+			_, err := insertStatement.Exec(task.TaskID, task.ParentID, task.AssignedBy, task.Name, task.Level, task.RootGroupID, task.Archived)
 			if err != nil {
 				logger.Errorf("Failed to insert task %d (%s): %v", task.TaskID, task.Name, err)
 				errorCount++
 				continue
 			}
-			// Track new task creation
-			if trackErr := TrackTaskChange(db, task.TaskID, task.Name, "created", "", task.Name); trackErr != nil {
-				logger.Errorf("Failed to track task creation for task %d: %v", task.TaskID, trackErr)
-			}
-		} else if err != nil {
-			logger.Errorf("Failed to check existing task %d: %v", task.TaskID, err)
-			errorCount++
-			continue
-		} else if existingName != task.Name {
-			// Task name changed, update it (only for full sync or when name actually changed)
-			if fullSync {
-				updateQuery := "UPDATE tasks SET parent_id = $1, assigned_by = $2, name = $3, level = $4, root_group_id = $5 WHERE task_id = $6"
-				_, err := db.Exec(updateQuery, task.ParentID, task.AssignedBy, task.Name, task.Level, task.RootGroupID, task.TaskID)
-				if err != nil {
-					logger.Errorf("Failed to update task %d: %v", task.TaskID, err)
-					errorCount++
-					continue
-				}
-			} else {
-				updateQuery := "UPDATE tasks SET name = $1 WHERE task_id = $2"
-				_, err := db.Exec(updateQuery, task.Name, task.TaskID)
-				if err != nil {
-					logger.Errorf("Failed to update task %d name: %v", task.TaskID, err)
-					errorCount++
-					continue
-				}
-			}
-			// Track name change
-			if trackErr := TrackTaskChange(db, task.TaskID, task.Name, "name_changed", existingName, task.Name); trackErr != nil {
-				logger.Errorf("Failed to track task name change for task %d: %v", task.TaskID, trackErr)
-			}
+			newTaskCount++
 		}
-		index++
 	}
 
-	if fullSync {
-		logger.Infof("Full task sync completed: %d tasks processed, %d errors encountered", index, errorCount)
-	} else {
-		logger.Infof("Incremental task sync completed: %d new tasks, %d updated tasks, %d skipped (unchanged), %d errors",
-			newTaskCount, updatedTaskCount, skippedTaskCount, errorCount)
-	}
+	logger.Infof("Incremental task sync completed: %d new tasks, %d updated tasks, %d skipped (unchanged), %d errors",
+		newTaskCount, updatedTaskCount, skippedTaskCount, errorCount)
 
 	if errorCount > 0 && errorCount == len(timecampTasks) {
 		return fmt.Errorf("all task operations failed during sync")
@@ -175,7 +193,7 @@ func SyncTasksToDatabase(fullSync bool) error {
 
 // getExistingTasks fetches all existing tasks from database for comparison
 func getExistingTasks(db *sql.DB) (map[int]JsonTask, error) {
-	query := "SELECT task_id, parent_id, assigned_by, name, level, root_group_id FROM tasks"
+	query := "SELECT task_id, parent_id, assigned_by, name, level, root_group_id, COALESCE(archived, 0) FROM tasks"
 	rows, err := db.Query(query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query existing tasks: %w", err)
@@ -185,7 +203,7 @@ func getExistingTasks(db *sql.DB) (map[int]JsonTask, error) {
 	existingTasks := make(map[int]JsonTask)
 	for rows.Next() {
 		var task JsonTask
-		err := rows.Scan(&task.TaskID, &task.ParentID, &task.AssignedBy, &task.Name, &task.Level, &task.RootGroupID)
+		err := rows.Scan(&task.TaskID, &task.ParentID, &task.AssignedBy, &task.Name, &task.Level, &task.RootGroupID, &task.Archived)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan task row: %w", err)
 		}
@@ -201,7 +219,8 @@ func taskNeedsUpdate(existing, fetched JsonTask) bool {
 		existing.AssignedBy != fetched.AssignedBy ||
 		existing.Name != fetched.Name ||
 		existing.Level != fetched.Level ||
-		existing.RootGroupID != fetched.RootGroupID
+		existing.RootGroupID != fetched.RootGroupID ||
+		existing.Archived != fetched.Archived
 }
 
 // TrackTaskChange records a task change in the history table
@@ -240,19 +259,30 @@ func getTimecampTasks() ([]JsonTask, error) {
 		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
 	}
 
-	// Add minimal parameter to optimize API response size
+	// Add parameters to optimize API response size and include archived tasks
 	q := request.URL.Query()
 	q.Add("minimal", "1")
+	q.Add("archived", "1") // Include archived tasks in the sync
 	request.URL.RawQuery = q.Encode()
 
 	request.Header.Add("Authorization", authBearer)
 	request.Header.Add("Accept", "application/json")
 
-	logger.Debugf("Fetching tasks from TimeCamp API with minimal option: %s", request.URL.String())
+	logger.Debugf("Fetching tasks from TimeCamp API with minimal option and archived tasks: %s", request.URL.String())
+
+	// Use optimized HTTP client for better performance
+	client := &http.Client{
+		Timeout: time.Second * 30,
+		Transport: &http.Transport{
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 10,
+			IdleConnTimeout:     90 * time.Second,
+		},
+	}
 
 	// Use retry mechanism for API calls
 	retryConfig := DefaultRetryConfig()
-	response, err := DoHTTPWithRetry(http.DefaultClient, request, retryConfig)
+	response, err := DoHTTPWithRetry(client, request, retryConfig)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request to TimeCamp API failed after retries: %w", err)
 	}
@@ -286,7 +316,15 @@ func getTimecampTasks() ([]JsonTask, error) {
 		tasks = append(tasks, task)
 	}
 
-	logger.Debugf("Successfully fetched %d tasks from TimeCamp", len(tasks))
+	// Count archived tasks for logging
+	archivedCount := 0
+	for _, task := range tasks {
+		if task.Archived == 1 {
+			archivedCount++
+		}
+	}
+
+	logger.Debugf("Successfully fetched %d tasks from TimeCamp (%d active, %d archived)", len(tasks), len(tasks)-archivedCount, archivedCount)
 
 	return tasks, nil
 }
