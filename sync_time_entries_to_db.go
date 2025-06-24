@@ -1,4 +1,4 @@
-THIS SHOULD BE A LINTER ERRORpackage main
+package main
 
 import (
 	"database/sql"
@@ -779,6 +779,56 @@ func GetMonthlyTaskTimeEntries(db *sql.DB) ([]TaskUpdateInfo, error) {
 	logger := GetGlobalLogger()
 	logger.Debug("Querying database for monthly task time entries")
 
+	// First get user breakdown data
+	userBreakdownQuery := `
+WITH current_month AS (
+    SELECT task_id, user_id, SUM(duration) AS total_duration
+    FROM time_entries
+    WHERE date::date >= CURRENT_DATE - INTERVAL '30 days' AND date::date < CURRENT_DATE
+    GROUP BY task_id, user_id
+),
+previous_month AS (
+    SELECT task_id, user_id, SUM(duration) AS total_duration
+    FROM time_entries
+    WHERE date::date >= CURRENT_DATE - INTERVAL '60 days' AND date::date < CURRENT_DATE - INTERVAL '30 days'
+    GROUP BY task_id, user_id
+)
+SELECT 
+    COALESCE(cm.task_id, pm.task_id) AS task_id,
+    COALESCE(cm.user_id, pm.user_id) AS user_id,
+    COALESCE(cm.total_duration, 0) AS current_month_duration, 
+    COALESCE(pm.total_duration, 0) AS previous_month_duration
+FROM current_month cm
+FULL OUTER JOIN previous_month pm ON cm.task_id = pm.task_id AND cm.user_id = pm.user_id
+WHERE COALESCE(cm.total_duration, 0) > 0 OR COALESCE(pm.total_duration, 0) > 0;
+`
+
+	userRows, err := db.Query(userBreakdownQuery)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query monthly user breakdown: %w", err)
+	}
+	defer userRows.Close()
+
+	// Build user breakdown map: taskID -> userID -> contribution
+	userBreakdowns := make(map[int]map[int]UserTimeContribution)
+	for userRows.Next() {
+		var taskID, userID, currentMonthDuration, previousMonthDuration int
+		err := userRows.Scan(&taskID, &userID, &currentMonthDuration, &previousMonthDuration)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan monthly user breakdown row: %w", err)
+		}
+
+		if _, exists := userBreakdowns[taskID]; !exists {
+			userBreakdowns[taskID] = make(map[int]UserTimeContribution)
+		}
+
+		userBreakdowns[taskID][userID] = UserTimeContribution{
+			UserID:       userID,
+			CurrentTime:  formatDuration(currentMonthDuration),
+			PreviousTime: formatDuration(previousMonthDuration),
+		}
+	}
+
 	// Monthly changes: compare last 30 days with the 30 days before that
 	query := `
 WITH current_month AS (
@@ -837,6 +887,12 @@ WHERE COALESCE(cm.total_duration, 0) > 0 OR COALESCE(pm.total_duration, 0) > 0;
 		if comments.Valid {
 			info.Comments = strings.Split(comments.String, " | ")
 		}
+		
+		// Add user breakdown
+		if breakdown, exists := userBreakdowns[info.TaskID]; exists {
+			info.UserBreakdown = breakdown
+		}
+		
 		taskInfos = append(taskInfos, info)
 	}
 
