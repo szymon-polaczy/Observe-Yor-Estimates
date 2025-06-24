@@ -427,6 +427,27 @@ func parseEstimation(taskName string) (string, string) {
 	return fmt.Sprintf("Estimation: %d-%d hours", optimistic, pessimistic), ""
 }
 
+// parseEstimationWithUsage enhances parseEstimation by adding usage percentage calculation
+func parseEstimationWithUsage(taskName, currentTime, previousTime string) (string, string) {
+	estimation, status := parseEstimation(taskName)
+
+	if status != "" {
+		return estimation, status
+	}
+
+	// Calculate usage percentage
+	percentage, _, err := calculateTimeUsagePercentage(currentTime, previousTime, taskName)
+	if err != nil {
+		return estimation, status
+	}
+
+	// Get color indicator
+	emoji, description, _ := getColorIndicator(percentage)
+
+	// Enhanced estimation info with percentage and indicator
+	return fmt.Sprintf("%s | %s %.1f%% (%s)", estimation, emoji, percentage, description), status
+}
+
 func sendFailureNotification(operation string, err error) {
 	logger := GetGlobalLogger()
 

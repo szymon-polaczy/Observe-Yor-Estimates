@@ -411,7 +411,7 @@ WHERE COALESCE(y.total_duration, 0) > 0 OR COALESCE(db.total_duration, 0) > 0;
 		info.CurrentTime = formatDuration(yesterdayDuration)
 		info.PreviousPeriod = "Day Before"
 		info.PreviousTime = formatDuration(dayBeforeDuration)
-		info.EstimationInfo, info.EstimationStatus = parseEstimation(info.Name)
+		info.EstimationInfo, info.EstimationStatus = parseEstimationWithUsage(info.Name, info.CurrentTime, info.PreviousTime)
 		if comments.Valid {
 			info.Comments = strings.Split(comments.String, " | ")
 		}
@@ -501,7 +501,7 @@ WHERE COALESCE(cw.total_duration, 0) > 0 OR COALESCE(pw.total_duration, 0) > 0;
 		info.CurrentTime = formatDuration(currentWeekDuration)
 		info.PreviousPeriod = "Last Week"
 		info.PreviousTime = formatDuration(previousWeekDuration)
-		info.EstimationInfo, info.EstimationStatus = parseEstimation(info.Name)
+		info.EstimationInfo, info.EstimationStatus = parseEstimationWithUsage(info.Name, info.CurrentTime, info.PreviousTime)
 		if comments.Valid {
 			info.Comments = strings.Split(comments.String, " | ")
 		}
@@ -590,7 +590,7 @@ WHERE COALESCE(cm.total_duration, 0) > 0 OR COALESCE(pm.total_duration, 0) > 0;
 		info.CurrentTime = formatDuration(currentMonthDuration)
 		info.PreviousPeriod = "Last Month"
 		info.PreviousTime = formatDuration(previousMonthDuration)
-		info.EstimationInfo, info.EstimationStatus = parseEstimation(info.Name)
+		info.EstimationInfo, info.EstimationStatus = parseEstimationWithUsage(info.Name, info.CurrentTime, info.PreviousTime)
 		if comments.Valid {
 			info.Comments = strings.Split(comments.String, " | ")
 		}
