@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lib/pq"
 	_ "github.com/lib/pq"
 )
 
@@ -153,6 +154,12 @@ func GetDB() (*sql.DB, error) {
 		if err := migrateTimeEntriesTable(db); err != nil {
 			db.Close()
 			initErr = fmt.Errorf("failed to migrate time_entries table: %w", err)
+			return
+		}
+
+		if err := migrateUsersTable(db); err != nil {
+			db.Close()
+			initErr = fmt.Errorf("failed to migrate users table: %w", err)
 			return
 		}
 
@@ -360,6 +367,141 @@ FOREIGN KEY (task_id) REFERENCES tasks(task_id)
 
 	logger.Info("Time entries table created successfully")
 	return nil
+}
+
+// migrateUsersTable ensures the users table exists and matches the desired schema.
+func migrateUsersTable(db *sql.DB) error {
+	logger := GetGlobalLogger()
+
+	// Check if table exists (PostgreSQL way)
+	row := db.QueryRow("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'users');")
+	var exists bool
+	err := row.Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("error checking if users table exists: %w", err)
+	}
+
+	if !exists {
+		// Table does not exist, create it
+		logger.Info("Users table does not exist, creating it")
+		return createUsersTable(db)
+	}
+
+	logger.Debug("Users table already exists")
+	return nil
+}
+
+func createUsersTable(db *sql.DB) error {
+	logger := GetGlobalLogger()
+
+	createTableSQL := `CREATE TABLE users (
+user_id INTEGER PRIMARY KEY,
+username TEXT NOT NULL,
+display_name TEXT,
+created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);`
+
+	_, err := db.Exec(createTableSQL)
+	if err != nil {
+		return fmt.Errorf("failed to create users table: %w", err)
+	}
+
+	logger.Info("Users table created successfully")
+	return nil
+}
+
+// GetUserDisplayName returns the display name for a user ID, falling back to username or user ID
+func GetUserDisplayName(db *sql.DB, userID int) string {
+	var displayName, username sql.NullString
+	
+	query := `SELECT username, display_name FROM users WHERE user_id = $1`
+	err := db.QueryRow(query, userID).Scan(&username, &displayName)
+	
+	if err != nil {
+		// User not found in database, return user ID format as fallback
+		return fmt.Sprintf("user%d", userID)
+	}
+	
+	// Return display_name if available, otherwise username, otherwise user ID
+	if displayName.Valid && displayName.String != "" {
+		return displayName.String
+	}
+	if username.Valid && username.String != "" {
+		return username.String
+	}
+	return fmt.Sprintf("user%d", userID)
+}
+
+// UpsertUser creates or updates a user record
+func UpsertUser(db *sql.DB, userID int, username, displayName string) error {
+	query := `
+		INSERT INTO users (user_id, username, display_name, updated_at) 
+		VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+		ON CONFLICT (user_id) 
+		DO UPDATE SET 
+			username = EXCLUDED.username,
+			display_name = EXCLUDED.display_name,
+			updated_at = CURRENT_TIMESTAMP`
+	
+	_, err := db.Exec(query, userID, username, displayName)
+	return err
+}
+
+// GetAllUserDisplayNames returns a map of user ID to display name for bulk operations
+func GetAllUserDisplayNames(db *sql.DB, userIDs []int) map[int]string {
+	if len(userIDs) == 0 {
+		return make(map[int]string)
+	}
+	
+	result := make(map[int]string)
+	
+	// Convert int slice to interface slice for pq.Array
+	userIDsInterface := make([]interface{}, len(userIDs))
+	for i, id := range userIDs {
+		userIDsInterface[i] = id
+	}
+	
+	query := `SELECT user_id, username, display_name FROM users WHERE user_id = ANY($1)`
+	rows, err := db.Query(query, pq.Array(userIDs))
+	if err != nil {
+		// If query fails, return fallback names
+		for _, userID := range userIDs {
+			result[userID] = fmt.Sprintf("user%d", userID)
+		}
+		return result
+	}
+	defer rows.Close()
+	
+	foundUsers := make(map[int]bool)
+	for rows.Next() {
+		var userID int
+		var username, displayName sql.NullString
+		
+		err := rows.Scan(&userID, &username, &displayName)
+		if err != nil {
+			continue
+		}
+		
+		// Priority: display_name > username > user ID
+		if displayName.Valid && displayName.String != "" {
+			result[userID] = displayName.String
+		} else if username.Valid && username.String != "" {
+			result[userID] = username.String
+		} else {
+			result[userID] = fmt.Sprintf("user%d", userID)
+		}
+		foundUsers[userID] = true
+	}
+	
+	// Add fallback names for users not found in the database
+	for _, userID := range userIDs {
+		if !foundUsers[userID] {
+			result[userID] = fmt.Sprintf("user%d", userID)
+		}
+	}
+	
+	return result
 }
 
 // CheckDatabaseHasTasks returns true if the database has any tasks, false otherwise

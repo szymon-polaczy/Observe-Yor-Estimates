@@ -286,11 +286,24 @@ func formatSingleTaskBlock(task TaskUpdateInfo) Block {
 		}
 		sort.Ints(sortedUserIDs)
 		
+		// Get database connection for user name lookups
+		db, err := GetDB()
+		var userDisplayNames map[int]string
+		if err == nil {
+			userDisplayNames = GetAllUserDisplayNames(db, sortedUserIDs)
+		}
+		
 		for _, userID := range sortedUserIDs {
 			contrib := task.UserBreakdown[userID]
 			// Only show users who contributed time in the current period
 			if contrib.CurrentTime != "0h 0m" {
-				userContribs = append(userContribs, fmt.Sprintf("user%d: %s", userID, contrib.CurrentTime))
+				userName := fmt.Sprintf("user%d", userID) // fallback
+				if userDisplayNames != nil {
+					if displayName, exists := userDisplayNames[userID]; exists {
+						userName = displayName
+					}
+				}
+				userContribs = append(userContribs, fmt.Sprintf("%s: %s", userName, contrib.CurrentTime))
 			}
 		}
 		
@@ -464,11 +477,24 @@ func appendTaskTextMessage(builder *strings.Builder, task TaskUpdateInfo) {
 		}
 		sort.Ints(sortedUserIDs)
 		
+		// Get database connection for user name lookups
+		db, err := GetDB()
+		var userDisplayNames map[int]string
+		if err == nil {
+			userDisplayNames = GetAllUserDisplayNames(db, sortedUserIDs)
+		}
+		
 		for _, userID := range sortedUserIDs {
 			contrib := task.UserBreakdown[userID]
 			// Only show users who contributed time in the current period
 			if contrib.CurrentTime != "0h 0m" {
-				userContribs = append(userContribs, fmt.Sprintf("user%d: %s", userID, contrib.CurrentTime))
+				userName := fmt.Sprintf("user%d", userID) // fallback
+				if userDisplayNames != nil {
+					if displayName, exists := userDisplayNames[userID]; exists {
+						userName = displayName
+					}
+				}
+				userContribs = append(userContribs, fmt.Sprintf("%s: %s", userName, contrib.CurrentTime))
 			}
 		}
 		
