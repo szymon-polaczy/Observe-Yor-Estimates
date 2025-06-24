@@ -481,32 +481,108 @@ func outputJSON(messages []SlackMessage) {
 func parseEstimation(taskName string) (string, string) {
 	logger := GetGlobalLogger()
 
-	re := regexp.MustCompile(`\[(\d+)-(\d+)\]`)
-	matches := re.FindStringSubmatch(taskName)
-
-	if len(matches) != 3 {
-		logger.Debugf("No estimation pattern found in task name: %s", taskName)
-		return "", "no estimation given"
+	// Helper function to parse float from string, supporting both . and , as decimal separators
+	parseFloat := func(s string) (float64, error) {
+		// Replace comma with dot for consistent parsing
+		s = strings.ReplaceAll(s, ",", ".")
+		return strconv.ParseFloat(s, 64)
 	}
 
-	optimistic, err1 := strconv.Atoi(matches[1])
-	pessimistic, err2 := strconv.Atoi(matches[2])
-
-	if err1 != nil || err2 != nil {
-		logger.Warnf("Failed to parse estimation numbers from task name '%s': optimistic=%v, pessimistic=%v",
-			taskName, err1, err2)
-		return "", "invalid estimation format"
+	// Helper function to format float for display (remove unnecessary decimals)
+	formatFloat := func(f float64) string {
+		if f == float64(int(f)) {
+			return fmt.Sprintf("%.0f", f)
+		}
+		return fmt.Sprintf("%.1f", f)
 	}
 
-	if optimistic > pessimistic {
-		logger.Warnf("Invalid estimation range in task '%s': optimistic (%d) > pessimistic (%d)",
-			taskName, optimistic, pessimistic)
-		return fmt.Sprintf("Estimation: %d-%d hours", optimistic, pessimistic), "broken estimation (optimistic > pessimistic)"
+	// Try to match different estimation patterns
+	patterns := []struct {
+		regex      *regexp.Regexp
+		format     string
+		isRange    bool
+		isAddition bool
+	}{
+		// Range formats (supporting floats with . or , as decimal separator)
+		{regexp.MustCompile(`\[([0-9]+(?:[.,][0-9]+)?)-([0-9]+(?:[.,][0-9]+)?)\]`), "hours", true, false},   // [number-number]
+		{regexp.MustCompile(`\[([0-9]+(?:[.,][0-9]+)?)h-([0-9]+(?:[.,][0-9]+)?)h\]`), "hours", true, false}, // [numberh-numberh]
+		{regexp.MustCompile(`\[([0-9]+(?:[.,][0-9]+)?)-([0-9]+(?:[.,][0-9]+)?)h\]`), "hours", true, false},  // [number-numberh]
+		{regexp.MustCompile(`\[([0-9]+(?:[.,][0-9]+)?)h-([0-9]+(?:[.,][0-9]+)?)\]`), "hours", true, false},  // [numberh-number]
+
+		// Addition formats (min + addition = max)
+		{regexp.MustCompile(`\[([0-9]+(?:[.,][0-9]+)?)\+([0-9]+(?:[.,][0-9]+)?)\]`), "hours", true, true},   // [number+number]
+		{regexp.MustCompile(`\[([0-9]+(?:[.,][0-9]+)?)\+([0-9]+(?:[.,][0-9]+)?)h\]`), "hours", true, true},  // [number+numberh]
+		{regexp.MustCompile(`\[([0-9]+(?:[.,][0-9]+)?)h\+([0-9]+(?:[.,][0-9]+)?)\]`), "hours", true, true},  // [numberh+number]
+		{regexp.MustCompile(`\[([0-9]+(?:[.,][0-9]+)?)h\+([0-9]+(?:[.,][0-9]+)?)h\]`), "hours", true, true}, // [numberh+numberh]
+
+		// Single number formats (supporting floats)
+		{regexp.MustCompile(`\[([0-9]+(?:[.,][0-9]+)?)\]`), "hours", false, false},  // [number]
+		{regexp.MustCompile(`\[([0-9]+(?:[.,][0-9]+)?)h\]`), "hours", false, false}, // [numberh]
 	}
 
-	logger.Debugf("Parsed estimation for task '%s': %d-%d hours", taskName, optimistic, pessimistic)
+	for _, pattern := range patterns {
+		matches := pattern.regex.FindStringSubmatch(taskName)
 
-	return fmt.Sprintf("Estimation: %d-%d hours", optimistic, pessimistic), ""
+		if pattern.isRange && len(matches) == 3 {
+			// Handle range and addition formats
+			first, err1 := parseFloat(matches[1])
+			second, err2 := parseFloat(matches[2])
+
+			if err1 != nil || err2 != nil {
+				logger.Warnf("Failed to parse estimation numbers from task name '%s': first=%v, second=%v",
+					taskName, err1, err2)
+				continue
+			}
+
+			var optimistic, pessimistic float64
+			if pattern.isAddition {
+				// Addition format: min = first, max = first + second
+				optimistic = first
+				pessimistic = first + second
+			} else {
+				// Range format: min = first, max = second
+				optimistic = first
+				pessimistic = second
+			}
+
+			// Validate numbers are not bigger than 100
+			if optimistic > 100 || pessimistic > 100 {
+				logger.Warnf("Estimation numbers too large in task '%s': min=%s, max=%s (max allowed: 100)",
+					taskName, formatFloat(optimistic), formatFloat(pessimistic))
+				return fmt.Sprintf("Estimation: %s-%s hours", formatFloat(optimistic), formatFloat(pessimistic)), "estimation numbers too large (max: 100)"
+			}
+
+			if optimistic > pessimistic {
+				logger.Warnf("Invalid estimation range in task '%s': optimistic (%s) > pessimistic (%s)",
+					taskName, formatFloat(optimistic), formatFloat(pessimistic))
+				return fmt.Sprintf("Estimation: %s-%s hours", formatFloat(optimistic), formatFloat(pessimistic)), "broken estimation (optimistic > pessimistic)"
+			}
+
+			logger.Debugf("Parsed estimation for task '%s': %s-%s hours", taskName, formatFloat(optimistic), formatFloat(pessimistic))
+			return fmt.Sprintf("Estimation: %s-%s hours", formatFloat(optimistic), formatFloat(pessimistic)), ""
+
+		} else if !pattern.isRange && len(matches) == 2 {
+			// Handle single number formats
+			estimate, err := parseFloat(matches[1])
+
+			if err != nil {
+				logger.Warnf("Failed to parse estimation number from task name '%s': %v", taskName, err)
+				continue
+			}
+
+			// Validate number is not bigger than 100
+			if estimate > 100 {
+				logger.Warnf("Estimation number too large in task '%s': %s (max allowed: 100)", taskName, formatFloat(estimate))
+				return fmt.Sprintf("Estimation: %s hours", formatFloat(estimate)), "estimation number too large (max: 100)"
+			}
+
+			logger.Debugf("Parsed single estimation for task '%s': %s hours", taskName, formatFloat(estimate))
+			return fmt.Sprintf("Estimation: %s hours", formatFloat(estimate)), ""
+		}
+	}
+
+	logger.Debugf("No estimation pattern found in task name: %s", taskName)
+	return "", "no estimation given"
 }
 
 // parseEstimationWithUsage enhances parseEstimation by adding usage percentage calculation
@@ -628,30 +704,109 @@ func getColorIndicator(percentage float64) (string, string, bool) {
 }
 
 func calculateTimeUsagePercentage(currentTime, previousTime, estimation string) (float64, int, error) {
-	re := regexp.MustCompile(`\[(\d+)-(\d+)\]`)
-	matches := re.FindStringSubmatch(estimation)
-
-	if len(matches) != 3 {
-		return 0, 0, fmt.Errorf("no estimation pattern found")
+	// Helper function to parse float from string, supporting both . and , as decimal separators
+	parseFloat := func(s string) (float64, error) {
+		// Replace comma with dot for consistent parsing
+		s = strings.ReplaceAll(s, ",", ".")
+		return strconv.ParseFloat(s, 64)
 	}
 
-	pessimistic, err := strconv.Atoi(matches[2])
-	if err != nil {
-		return 0, 0, fmt.Errorf("failed to parse pessimistic estimation: %w", err)
+	// Try range patterns first (including addition patterns)
+	rangePatterns := []*regexp.Regexp{
+		regexp.MustCompile(`\[([0-9]+(?:[.,][0-9]+)?)-([0-9]+(?:[.,][0-9]+)?)\]`),   // [number-number]
+		regexp.MustCompile(`\[([0-9]+(?:[.,][0-9]+)?)h-([0-9]+(?:[.,][0-9]+)?)h\]`), // [numberh-numberh]
+		regexp.MustCompile(`\[([0-9]+(?:[.,][0-9]+)?)-([0-9]+(?:[.,][0-9]+)?)h\]`),  // [number-numberh]
+		regexp.MustCompile(`\[([0-9]+(?:[.,][0-9]+)?)h-([0-9]+(?:[.,][0-9]+)?)\]`),  // [numberh-number]
 	}
 
-	currentSeconds := parseTimeToSeconds(currentTime)
-	previousSeconds := parseTimeToSeconds(previousTime)
-	totalSeconds := currentSeconds + previousSeconds
+	for _, re := range rangePatterns {
+		matches := re.FindStringSubmatch(estimation)
+		if len(matches) == 3 {
+			pessimistic, err := parseFloat(matches[2])
+			if err != nil {
+				continue
+			}
 
-	pessimisticSeconds := pessimistic * 3600
+			currentSeconds := parseTimeToSeconds(currentTime)
+			previousSeconds := parseTimeToSeconds(previousTime)
+			totalSeconds := currentSeconds + previousSeconds
 
-	if pessimisticSeconds == 0 {
-		return 0, totalSeconds, nil
+			pessimisticSeconds := pessimistic * 3600
+
+			if pessimisticSeconds == 0 {
+				return 0, totalSeconds, nil
+			}
+
+			percentage := (float64(totalSeconds) / pessimisticSeconds) * 100
+			return percentage, totalSeconds, nil
+		}
 	}
 
-	percentage := (float64(totalSeconds) / float64(pessimisticSeconds)) * 100
-	return percentage, totalSeconds, nil
+	// Try addition patterns (min + addition = max)
+	additionPatterns := []*regexp.Regexp{
+		regexp.MustCompile(`\[([0-9]+(?:[.,][0-9]+)?)\+([0-9]+(?:[.,][0-9]+)?)\]`),   // [number+number]
+		regexp.MustCompile(`\[([0-9]+(?:[.,][0-9]+)?)\+([0-9]+(?:[.,][0-9]+)?)h\]`),  // [number+numberh]
+		regexp.MustCompile(`\[([0-9]+(?:[.,][0-9]+)?)h\+([0-9]+(?:[.,][0-9]+)?)\]`),  // [numberh+number]
+		regexp.MustCompile(`\[([0-9]+(?:[.,][0-9]+)?)h\+([0-9]+(?:[.,][0-9]+)?)h\]`), // [numberh+numberh]
+	}
+
+	for _, re := range additionPatterns {
+		matches := re.FindStringSubmatch(estimation)
+		if len(matches) == 3 {
+			first, err1 := parseFloat(matches[1])
+			second, err2 := parseFloat(matches[2])
+			if err1 != nil || err2 != nil {
+				continue
+			}
+
+			// For addition patterns: max = first + second
+			pessimistic := first + second
+
+			currentSeconds := parseTimeToSeconds(currentTime)
+			previousSeconds := parseTimeToSeconds(previousTime)
+			totalSeconds := currentSeconds + previousSeconds
+
+			pessimisticSeconds := pessimistic * 3600
+
+			if pessimisticSeconds == 0 {
+				return 0, totalSeconds, nil
+			}
+
+			percentage := (float64(totalSeconds) / pessimisticSeconds) * 100
+			return percentage, totalSeconds, nil
+		}
+	}
+
+	// Try single number patterns
+	singlePatterns := []*regexp.Regexp{
+		regexp.MustCompile(`\[([0-9]+(?:[.,][0-9]+)?)\]`),  // [number]
+		regexp.MustCompile(`\[([0-9]+(?:[.,][0-9]+)?)h\]`), // [numberh]
+	}
+
+	for _, re := range singlePatterns {
+		matches := re.FindStringSubmatch(estimation)
+		if len(matches) == 2 {
+			estimate, err := parseFloat(matches[1])
+			if err != nil {
+				continue
+			}
+
+			currentSeconds := parseTimeToSeconds(currentTime)
+			previousSeconds := parseTimeToSeconds(previousTime)
+			totalSeconds := currentSeconds + previousSeconds
+
+			estimateSeconds := estimate * 3600
+
+			if estimateSeconds == 0 {
+				return 0, totalSeconds, nil
+			}
+
+			percentage := (float64(totalSeconds) / estimateSeconds) * 100
+			return percentage, totalSeconds, nil
+		}
+	}
+
+	return 0, 0, fmt.Errorf("no estimation pattern found")
 }
 
 // Task is a simplified struct for holding task hierarchy data
@@ -800,7 +955,7 @@ func GetTasksOverThreshold(db *sql.DB, threshold float64, period string) ([]Task
 			COALESCE(SUM(CASE WHEN te.date < $1 THEN te.duration ELSE 0 END), 0) as previous_duration
 		FROM tasks t
 		LEFT JOIN time_entries te ON t.task_id = te.task_id
-		WHERE t.name ~ '\[[0-9]+-[0-9]+\]'  -- Only tasks with estimation patterns
+		WHERE t.name ~ '\[([0-9]+(?:[.,][0-9]+)?h?[-+][0-9]+(?:[.,][0-9]+)?h?|[0-9]+(?:[.,][0-9]+)?h?)\]'  -- Only tasks with estimation patterns
 		GROUP BY t.task_id, t.parent_id, t.name
 		HAVING COALESCE(SUM(te.duration), 0) > 0  -- Only tasks with time logged
 		ORDER BY t.task_id
@@ -930,7 +1085,7 @@ func getTasksJustCrossedThreshold(db *sql.DB, threshold float64, since time.Time
 			SELECT DISTINCT t.task_id, t.parent_id, t.name
 			FROM tasks t
 			INNER JOIN recent_entries re ON t.task_id = re.task_id
-			WHERE t.name ~ '\[[0-9]+-[0-9]+\]'  -- Only tasks with estimation patterns
+			WHERE t.name ~ '\[([0-9]+(?:[.,][0-9]+)?h?[-+][0-9]+(?:[.,][0-9]+)?h?|[0-9]+(?:[.,][0-9]+)?h?)\]'  -- Only tasks with estimation patterns
 		),
 		task_totals AS (
 			-- Calculate total time and recent time for these tasks
