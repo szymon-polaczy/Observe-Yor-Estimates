@@ -1,4 +1,4 @@
-package main
+THIS SHOULD BE A LINTER ERRORpackage main
 
 import (
 	"database/sql"
@@ -497,7 +497,57 @@ func GetTaskTimeEntries(db *sql.DB) ([]TaskUpdateInfo, error) {
 	logger := GetGlobalLogger()
 	logger.Debug("Querying database for daily task time entries")
 
-	// Daily changes: compare yesterday with the day before
+	// First get user breakdown data
+	userBreakdownQuery := `
+WITH yesterday AS (
+    SELECT task_id, user_id, SUM(duration) AS total_duration
+    FROM time_entries
+    WHERE date::date = CURRENT_DATE - INTERVAL '1 day'
+    GROUP BY task_id, user_id
+),
+day_before AS (
+    SELECT task_id, user_id, SUM(duration) AS total_duration
+    FROM time_entries
+    WHERE date::date = CURRENT_DATE - INTERVAL '2 days'
+    GROUP BY task_id, user_id
+)
+SELECT 
+    COALESCE(y.task_id, db.task_id) AS task_id,
+    COALESCE(y.user_id, db.user_id) AS user_id,
+    COALESCE(y.total_duration, 0) AS yesterday_duration, 
+    COALESCE(db.total_duration, 0) AS day_before_duration
+FROM yesterday y
+FULL OUTER JOIN day_before db ON y.task_id = db.task_id AND y.user_id = db.user_id
+WHERE COALESCE(y.total_duration, 0) > 0 OR COALESCE(db.total_duration, 0) > 0;
+`
+
+	userRows, err := db.Query(userBreakdownQuery)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query user breakdown: %w", err)
+	}
+	defer userRows.Close()
+
+	// Build user breakdown map: taskID -> userID -> contribution
+	userBreakdowns := make(map[int]map[int]UserTimeContribution)
+	for userRows.Next() {
+		var taskID, userID, yesterdayDuration, dayBeforeDuration int
+		err := userRows.Scan(&taskID, &userID, &yesterdayDuration, &dayBeforeDuration)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan user breakdown row: %w", err)
+		}
+
+		if _, exists := userBreakdowns[taskID]; !exists {
+			userBreakdowns[taskID] = make(map[int]UserTimeContribution)
+		}
+
+		userBreakdowns[taskID][userID] = UserTimeContribution{
+			UserID:       userID,
+			CurrentTime:  formatDuration(yesterdayDuration),
+			PreviousTime: formatDuration(dayBeforeDuration),
+		}
+	}
+
+	// Now get aggregated task data
 	query := `
 WITH yesterday AS (
     SELECT task_id, SUM(duration) AS total_duration
@@ -546,6 +596,12 @@ WHERE COALESCE(y.total_duration, 0) > 0 OR COALESCE(db.total_duration, 0) > 0;
 		if comments.Valid {
 			info.Comments = strings.Split(comments.String, " | ")
 		}
+		
+		// Add user breakdown
+		if breakdown, exists := userBreakdowns[info.TaskID]; exists {
+			info.UserBreakdown = breakdown
+		}
+		
 		taskInfos = append(taskInfos, info)
 	}
 
@@ -577,6 +633,56 @@ WHERE COALESCE(y.total_duration, 0) > 0 OR COALESCE(db.total_duration, 0) > 0;
 func GetWeeklyTaskTimeEntries(db *sql.DB) ([]TaskUpdateInfo, error) {
 	logger := GetGlobalLogger()
 	logger.Debug("Querying database for weekly task time entries")
+
+	// First get user breakdown data
+	userBreakdownQuery := `
+WITH current_week AS (
+    SELECT task_id, user_id, SUM(duration) AS total_duration
+    FROM time_entries
+    WHERE date::date >= CURRENT_DATE - INTERVAL '7 days' AND date::date < CURRENT_DATE
+    GROUP BY task_id, user_id
+),
+previous_week AS (
+    SELECT task_id, user_id, SUM(duration) AS total_duration
+    FROM time_entries
+    WHERE date::date >= CURRENT_DATE - INTERVAL '14 days' AND date::date < CURRENT_DATE - INTERVAL '7 days'
+    GROUP BY task_id, user_id
+)
+SELECT 
+    COALESCE(cw.task_id, pw.task_id) AS task_id,
+    COALESCE(cw.user_id, pw.user_id) AS user_id,
+    COALESCE(cw.total_duration, 0) AS current_week_duration, 
+    COALESCE(pw.total_duration, 0) AS previous_week_duration
+FROM current_week cw
+FULL OUTER JOIN previous_week pw ON cw.task_id = pw.task_id AND cw.user_id = pw.user_id
+WHERE COALESCE(cw.total_duration, 0) > 0 OR COALESCE(pw.total_duration, 0) > 0;
+`
+
+	userRows, err := db.Query(userBreakdownQuery)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query weekly user breakdown: %w", err)
+	}
+	defer userRows.Close()
+
+	// Build user breakdown map: taskID -> userID -> contribution
+	userBreakdowns := make(map[int]map[int]UserTimeContribution)
+	for userRows.Next() {
+		var taskID, userID, currentWeekDuration, previousWeekDuration int
+		err := userRows.Scan(&taskID, &userID, &currentWeekDuration, &previousWeekDuration)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan weekly user breakdown row: %w", err)
+		}
+
+		if _, exists := userBreakdowns[taskID]; !exists {
+			userBreakdowns[taskID] = make(map[int]UserTimeContribution)
+		}
+
+		userBreakdowns[taskID][userID] = UserTimeContribution{
+			UserID:       userID,
+			CurrentTime:  formatDuration(currentWeekDuration),
+			PreviousTime: formatDuration(previousWeekDuration),
+		}
+	}
 
 	// Weekly changes: compare last 7 days with the 7 days before that
 	query := `
@@ -636,6 +742,12 @@ WHERE COALESCE(cw.total_duration, 0) > 0 OR COALESCE(pw.total_duration, 0) > 0;
 		if comments.Valid {
 			info.Comments = strings.Split(comments.String, " | ")
 		}
+		
+		// Add user breakdown
+		if breakdown, exists := userBreakdowns[info.TaskID]; exists {
+			info.UserBreakdown = breakdown
+		}
+		
 		taskInfos = append(taskInfos, info)
 	}
 

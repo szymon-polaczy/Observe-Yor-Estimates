@@ -27,6 +27,15 @@ type TaskUpdateInfo struct {
 	PreviousTime     string
 	DaysWorked       int
 	Comments         []string
+	// User breakdown: map of user_id to time contributions
+	UserBreakdown    map[int]UserTimeContribution
+}
+
+// UserTimeContribution represents time contributed by a specific user
+type UserTimeContribution struct {
+	UserID       int
+	CurrentTime  string
+	PreviousTime string
 }
 
 // SlackMessage represents the structure of a Slack message
