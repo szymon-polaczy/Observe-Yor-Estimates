@@ -638,19 +638,76 @@ func (s *SlackAPIClient) SendThresholdResults(ctx *ConversationContext, taskInfo
 		return s.SendThresholdNoResultsMessage(ctx, threshold, period)
 	}
 
-	message := s.formatThresholdMessage(taskInfos, threshold, period)
+	// Get all tasks for hierarchy mapping
+	db, err := GetDB()
+	if err != nil {
+		return fmt.Errorf("failed to get database connection: %w", err)
+	}
 
-	payload := map[string]interface{}{
+	allTasks, err := getAllTasks(db)
+	if err != nil {
+		return fmt.Errorf("failed to get all tasks for hierarchy mapping: %w", err)
+	}
+
+	// Group tasks by project like normal updates do
+	projectGroups := groupTasksByTopParent(taskInfos, allTasks)
+
+	// Sort project names for consistent output
+	var projectNames []string
+	for project := range projectGroups {
+		projectNames = append(projectNames, project)
+	}
+	sort.Slice(projectNames, func(i, j int) bool {
+		if projectNames[i] == "Other" {
+			return false
+		}
+		if projectNames[j] == "Other" {
+			return true
+		}
+		return projectNames[i] < projectNames[j]
+	})
+
+	// Send project header message first
+	headerMessage := s.formatThresholdHeaderMessage(threshold, period, len(taskInfos), len(projectGroups))
+	
+	headerPayload := map[string]interface{}{
 		"channel": ctx.ChannelID,
-		"text":    message.Text,
-		"blocks":  message.Blocks,
+		"text":    headerMessage.Text,
+		"blocks":  headerMessage.Blocks,
 	}
 
 	if ctx.ThreadTS != "" {
-		payload["thread_ts"] = ctx.ThreadTS
+		headerPayload["thread_ts"] = ctx.ThreadTS
 	}
 
-	return s.sendSlackAPIRequest("chat.postMessage", payload)
+	if err := s.sendSlackAPIRequest("chat.postMessage", headerPayload); err != nil {
+		return fmt.Errorf("failed to send threshold header: %w", err)
+	}
+
+	// Send one message per project
+	for i, project := range projectNames {
+		tasks := projectGroups[project]
+		projectMessage := s.formatThresholdProjectMessage(project, tasks, threshold, period, i+1, len(projectNames))
+
+		projectPayload := map[string]interface{}{
+			"channel": ctx.ChannelID,
+			"text":    projectMessage.Text,
+			"blocks":  projectMessage.Blocks,
+		}
+
+		if ctx.ThreadTS != "" {
+			projectPayload["thread_ts"] = ctx.ThreadTS
+		}
+
+		if err := s.sendSlackAPIRequest("chat.postMessage", projectPayload); err != nil {
+			s.logger.Errorf("Failed to send threshold project message for %s: %v", project, err)
+		}
+
+		// Add delay between project messages for better visual separation
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	return nil
 }
 
 // formatThresholdMessage formats a threshold query result message
@@ -723,6 +780,139 @@ func (s *SlackAPIClient) formatThresholdMessage(taskInfos []TaskUpdateInfo, thre
 		Elements: []Element{
 			{Type: "mrkdwn", Text: suggestion},
 		},
+	})
+
+	return SlackMessage{
+		Text:   messageText.String(),
+		Blocks: blocks,
+	}
+}
+
+// formatThresholdHeaderMessage creates the header message for threshold reports
+func (s *SlackAPIClient) formatThresholdHeaderMessage(threshold float64, period string, totalTasks, totalProjects int) SlackMessage {
+	var emoji string
+	var status string
+
+	switch {
+	case threshold >= 100:
+		emoji = "🚨"
+		status = "Over Budget"
+	case threshold >= 90:
+		emoji = "🔴"
+		status = "Critical Usage"
+	case threshold >= 80:
+		emoji = "🟠"
+		status = "High Usage"
+	case threshold >= 50:
+		emoji = "🟡"
+		status = "Warning Level"
+	default:
+		emoji = "📊"
+		status = "Usage Report"
+	}
+
+	title := fmt.Sprintf("%s %s: %.0f%% Threshold Report", emoji, status, threshold)
+	headerText := fmt.Sprintf("*%s*\n📅 Period: %s | Found %d tasks across %d projects", title, strings.Title(period), totalTasks, totalProjects)
+
+	blocks := []Block{
+		{
+			Type: "header",
+			Text: &Text{Type: "plain_text", Text: title},
+		},
+		{
+			Type: "section",
+			Text: &Text{Type: "mrkdwn", Text: headerText},
+		},
+		{
+			Type: "context",
+			Elements: []Element{
+				{Type: "mrkdwn", Text: "_Tasks split by project for better readability_"},
+			},
+		},
+		{Type: "divider"},
+	}
+
+	return SlackMessage{
+		Text:   headerText,
+		Blocks: blocks,
+	}
+}
+
+// formatThresholdProjectMessage creates a message for a single project in threshold reports
+func (s *SlackAPIClient) formatThresholdProjectMessage(project string, tasks []TaskUpdateInfo, threshold float64, period string, projectNum, totalProjects int) SlackMessage {
+	var emoji string
+	switch {
+	case threshold >= 100:
+		emoji = "🚨"
+	case threshold >= 90:
+		emoji = "🔴"
+	case threshold >= 80:
+		emoji = "🟠"
+	case threshold >= 50:
+		emoji = "🟡"
+	default:
+		emoji = "📊"
+	}
+
+	var projectTitle string
+	if project == "Other" {
+		projectTitle = "📋 Other Tasks"
+	} else {
+		projectTitle = fmt.Sprintf("📁 %s Project", project)
+	}
+
+	headerText := fmt.Sprintf("%s %s (%d/%d)", emoji, projectTitle, projectNum, totalProjects)
+
+	var messageText strings.Builder
+	messageText.WriteString(fmt.Sprintf("*%s*\n", headerText))
+	messageText.WriteString(fmt.Sprintf("_%d tasks over %.0f%% threshold_\n\n", len(tasks), threshold))
+
+	blocks := []Block{
+		// Add spacing at the top for better separation
+		{
+			Type: "section",
+			Text: &Text{Type: "mrkdwn", Text: " "},
+		},
+		{
+			Type: "section",
+			Text: &Text{Type: "mrkdwn", Text: fmt.Sprintf("*%s*\n_%d tasks over %.0f%% threshold_", headerText, len(tasks), threshold)},
+		},
+		{Type: "divider"},
+	}
+
+	// Format each task
+	for _, task := range tasks {
+		taskBlock := formatSingleTaskBlock(task)
+		blocks = append(blocks, taskBlock)
+		appendTaskTextMessage(&messageText, task)
+	}
+
+	// Add footer with suggestion for this project
+	var suggestion string
+	switch {
+	case threshold >= 100:
+		suggestion = "🎯 These tasks have exceeded their estimated time budget. Consider reviewing scope or updating estimates."
+	case threshold >= 90:
+		suggestion = "🔍 Critical usage level. Immediate review recommended to assess if additional time is needed."
+	case threshold >= 80:
+		suggestion = "⚡ High usage detected. Consider breaking down tasks or reviewing remaining work scope."
+	case threshold >= 50:
+		suggestion = "💡 These tasks have used significant portions of their estimated time. Monitor progress closely."
+	default:
+		suggestion = "📈 Regular monitoring helps maintain project visibility and accurate estimations."
+	}
+
+	blocks = append(blocks, Block{
+		Type: "context",
+		Elements: []Element{
+			{Type: "mrkdwn", Text: suggestion},
+		},
+	})
+
+	// Add spacing at the bottom for better separation between projects
+	blocks = append(blocks, Block{
+		Type: "section",
+		Text: &Text{Type: "mrkdwn", Text: " "},
 	})
 
 	return SlackMessage{
