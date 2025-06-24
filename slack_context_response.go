@@ -299,13 +299,13 @@ func (s *SlackAPIClient) formatReportHeaderMessage(period, userID string, totalT
 		},
 		{
 			Type: "section",
-			Text: &Text{Type: "mrkdwn", Text: fmt.Sprintf("*%s*\n📋 **%d tasks** across **%d projects**\n_Report split by project for better readability_", headerText, totalTasks, totalProjects)},
+			Text: &Text{Type: "mrkdwn", Text: fmt.Sprintf("*%s*\n📋 **%d tasks**\n_Report split by project for better readability_", headerText, totalTasks)},
 		},
 		{Type: "divider"},
 	}
 
 	return SlackMessage{
-		Text:   fmt.Sprintf("%s - %d tasks across %d projects", headerText, totalTasks, totalProjects),
+		Text:   fmt.Sprintf("%s - %d tasks", headerText, totalTasks),
 		Blocks: blocks,
 	}
 }
@@ -476,6 +476,8 @@ func (s *SlackAPIClient) formatSimpleTaskBlock(task TaskUpdateInfo) []Block {
 		estimationInfo := sanitizeSlackText(task.EstimationInfo)
 		taskInfo.WriteString(fmt.Sprintf("• %s\n", estimationInfo))
 	}
+	// remove all empty comments
+	task.Comments = removeEmptyComments(task.Comments)
 
 	if len(task.Comments) > 0 {
 		taskInfo.WriteString("• Recent Comments:\n")

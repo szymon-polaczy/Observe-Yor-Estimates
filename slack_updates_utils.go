@@ -246,6 +246,9 @@ func formatSingleTaskBlock(task TaskUpdateInfo) Block {
 		taskInfo.WriteString(fmt.Sprintf("• %s\n", estimationInfo))
 	}
 
+	// remove all empty comments
+	task.Comments = removeEmptyComments(task.Comments)
+
 	// Comments (limit to save space)
 	if len(task.Comments) > 0 {
 		taskInfo.WriteString("• Recent: ")
@@ -265,6 +268,16 @@ func formatSingleTaskBlock(task TaskUpdateInfo) Block {
 		Type: "section",
 		Text: &Text{Type: "mrkdwn", Text: taskInfo.String()},
 	}
+}
+
+func removeEmptyComments(comments []string) []string {
+	var nonEmptyComments []string
+	for _, comment := range comments {
+		if comment != "" {
+			nonEmptyComments = append(nonEmptyComments, comment)
+		}
+	}
+	return nonEmptyComments
 }
 
 // getProjectNameForTask finds the project-level parent for a task.
