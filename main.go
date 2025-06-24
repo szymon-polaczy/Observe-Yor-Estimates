@@ -195,6 +195,49 @@ func handleCliCommands(args []string, logger *Logger) {
 			os.Exit(1)
 		}
 		logger.Info("Orphaned entries cleanup completed successfully")
+
+	case "sync-users":
+		logger.Info("Syncing users from TimeCamp")
+		if err := SyncUsersFromTimeCamp(); err != nil {
+			logger.Errorf("Error syncing users: %v", err)
+			os.Exit(1)
+		}
+		logger.Info("Users synced successfully")
+	case "list-users":
+		logger.Info("Listing users from database")
+		if err := ListUsers(); err != nil {
+			logger.Errorf("Error listing users: %v", err)
+			os.Exit(1)
+		}
+	case "active-users":
+		logger.Info("Getting active user IDs from time entries")
+		userIDs, err := GetActiveUserIDs()
+		if err != nil {
+			logger.Errorf("Error getting active user IDs: %v", err)
+			os.Exit(1)
+		}
+		fmt.Println("Active user IDs from time entries:")
+		for _, userID := range userIDs {
+			fmt.Printf("- %d\n", userID)
+		}
+	case "add-user":
+		if len(args) < 4 {
+			logger.Error("Error: add-user command requires: <user_id> <username> <display_name>")
+			return
+		}
+		var userID int
+		if _, err := fmt.Sscanf(args[1], "%d", &userID); err != nil {
+			logger.Errorf("Error: invalid user ID '%s'", args[1])
+			return
+		}
+		username := args[2]
+		displayName := args[3]
+		logger.Infof("Adding user: %d - %s (%s)", userID, displayName, username)
+		if err := AddUser(userID, username, displayName); err != nil {
+			logger.Errorf("Error adding user: %v", err)
+			os.Exit(1)
+		}
+		logger.Info("User added successfully")
 	default:
 		logger.Warnf("Unknown command line argument: %s", command)
 		showHelp()
@@ -288,6 +331,13 @@ func showHelp() {
 	fmt.Println("  threshold-check          - Manual threshold monitoring check")
 	fmt.Println("  process-orphaned         - Process orphaned time entries")
 	fmt.Println("  cleanup-orphaned <days>   - Clean up orphaned time entries older than specified days")
+	fmt.Println("")
+	fmt.Println("User management commands:")
+	fmt.Println("  sync-users               - Sync users from TimeCamp to the database")
+	fmt.Println("  list-users               - Show all users in the database")
+	fmt.Println("  active-users             - Show user IDs that have time entries")
+	fmt.Println("  add-user <id> <user> <name> - Add a specific user to the database")
+	fmt.Println("")
 	fmt.Println("  --version, version         - Show application version")
 	fmt.Println("  --help, -h, help         - Show help message")
 	fmt.Println("\nSync Behavior:")
