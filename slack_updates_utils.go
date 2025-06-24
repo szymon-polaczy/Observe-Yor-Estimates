@@ -149,7 +149,7 @@ func SendSlackUpdate(period string, responseURL string, asJSON bool) {
 			if err := sendDelayedResponseShared(responseURL, message); err != nil {
 				logger.Errorf("Failed to send delayed response: %v", err)
 			}
-			time.Sleep(1 * time.Second) // Avoid rate-limiting
+			time.Sleep(1 * time.Second) // Increased spacing between project messages
 		}
 		return
 	}
@@ -171,7 +171,7 @@ func SendSlackUpdate(period string, responseURL string, asJSON bool) {
 			logger.Errorf("Failed to send Slack message: %v", err)
 			// Continue sending other messages
 		}
-		time.Sleep(1 * time.Second) // Avoid rate-limiting
+		time.Sleep(1500 * time.Millisecond) // Increased delay for better visual separation between projects
 	}
 
 	logger.Infof("%s Slack update sent successfully", period)
@@ -215,6 +215,11 @@ func formatProjectMessage(project string, tasks []TaskUpdateInfo, period string)
 	messageText.WriteString(fmt.Sprintf("*%s* - %s\n\n", title, date))
 
 	blocks := []Block{
+		// Add spacing at the top for better separation between projects
+		{
+			Type: "section",
+			Text: &Text{Type: "mrkdwn", Text: " "},
+		},
 		{
 			Type: "header",
 			Text: &Text{Type: "plain_text", Text: title},
@@ -233,6 +238,12 @@ func formatProjectMessage(project string, tasks []TaskUpdateInfo, period string)
 		blocks = append(blocks, taskBlock)
 		appendTaskTextMessage(&messageText, task)
 	}
+
+	// Add spacing at the bottom for better separation between projects
+	blocks = append(blocks, Block{
+		Type: "section",
+		Text: &Text{Type: "mrkdwn", Text: " "},
+	})
 
 	return SlackMessage{
 		Text:   messageText.String(),
@@ -616,7 +627,7 @@ func sendFailureNotification(operation string, err error) {
 	}
 
 	message := SlackMessage{
-		Text: fmt.Sprintf("⚠️ System Alert: %s failed", operation),
+		Text: fmt.Sprintf("⚠️ System Alert: %s failed"),
 		Blocks: []Block{
 			{
 				Type: "header",
@@ -1244,8 +1255,8 @@ func SendThresholdAlerts(alerts []ThresholdAlert) error {
 				logger.Infof("Sent threshold alert for %s: %d tasks crossed %d%% threshold", project, len(tasks), threshold)
 			}
 
-			// Add a small delay to avoid rate limiting
-			time.Sleep(1 * time.Second)
+			// Increased delay for better visual separation between projects
+			time.Sleep(1500 * time.Millisecond)
 		}
 	}
 
@@ -1285,6 +1296,11 @@ func formatThresholdAlertMessage(project string, tasks []TaskUpdateInfo, thresho
 	messageText.WriteString(fmt.Sprintf("⏰ Detected at %s\n\n", time.Now().Format("15:04 on January 2, 2006")))
 
 	blocks := []Block{
+		// Add spacing at the top for better separation
+		{
+			Type: "section",
+			Text: &Text{Type: "mrkdwn", Text: " "},
+		},
 		{
 			Type: "header",
 			Text: &Text{Type: "plain_text", Text: title},
@@ -1322,6 +1338,12 @@ func formatThresholdAlertMessage(project string, tasks []TaskUpdateInfo, thresho
 		Elements: []Element{
 			{Type: "mrkdwn", Text: suggestion},
 		},
+	})
+
+	// Add spacing at the bottom for better separation
+	blocks = append(blocks, Block{
+		Type: "section",
+		Text: &Text{Type: "mrkdwn", Text: " "},
 	})
 
 	return SlackMessage{

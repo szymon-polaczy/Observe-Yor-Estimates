@@ -284,8 +284,8 @@ func (s *SlackAPIClient) sendChunkedMessage(ctx *ConversationContext, message Sl
 		s.logger.Errorf("Failed to send project message chunk: %v", err)
 	}
 
-	// Small delay between messages to avoid rate limiting
-	time.Sleep(200 * time.Millisecond)
+	// Increased delay between project messages for better visual separation
+	time.Sleep(500 * time.Millisecond)
 }
 
 // formatReportHeaderMessage creates the header message for split reports
@@ -325,10 +325,17 @@ func (s *SlackAPIClient) formatSingleProjectMessage(project string, tasks []Task
 	}
 
 	blocks := []Block{
+		// Add spacing at the top for better separation
+		{
+			Type: "section",
+			Text: &Text{Type: "mrkdwn", Text: " "},
+		},
 		{
 			Type: "section",
 			Text: &Text{Type: "mrkdwn", Text: fmt.Sprintf("*%s*\n_%d tasks in this project_", headerText, len(tasks))},
 		},
+		// Add divider for clear separation between project header and tasks
+		{Type: "divider"},
 	}
 
 	var messageText strings.Builder
@@ -342,6 +349,12 @@ func (s *SlackAPIClient) formatSingleProjectMessage(project string, tasks []Task
 		// Build text version
 		appendTaskTextMessage(&messageText, task)
 	}
+
+	// Add spacing at the bottom for better separation between projects
+	blocks = append(blocks, Block{
+		Type: "section",
+		Text: &Text{Type: "mrkdwn", Text: " "},
+	})
 
 	return SlackMessage{
 		Text:   messageText.String(),
