@@ -124,17 +124,6 @@ func handleUnifiedOYECommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if strings.Contains(text, "config") || strings.Contains(text, "preferences") || strings.Contains(text, "settings") {
-		// Handle configuration request
-		if err := globalRouter.HandleConfigRequest(req); err != nil {
-			logger.Errorf("Failed to handle config request: %v", err)
-			sendImmediateResponse(w, "❌ Failed to process config request", "ephemeral")
-		} else {
-			sendImmediateResponse(w, "✅ Preferences updated!", "ephemeral")
-		}
-		return
-	}
-
 	if strings.Contains(text, "over ") {
 		// Handle threshold percentage queries like "over 50 daily"
 		if err := globalRouter.HandleThresholdRequest(req); err != nil {
@@ -167,11 +156,6 @@ func sendUnifiedHelp(w http.ResponseWriter, req *SlackCommandRequest) {
 		"• `/oye over 100 monthly` - Tasks over budget (monthly)\n\n" +
 		"*Data Management:*\n" +
 		"• `/oye sync` - Full data synchronization\n\n" +
-		"*Settings:*\n" +
-		"• `/oye config` - View your preferences\n" +
-		"• `/oye config public` - Share updates in channel\n" +
-		"• `/oye config private` - Keep updates private\n" +
-		"• `/oye config daily/weekly/monthly` - Set default period\n\n" +
 		"*Tips:*\n" +
 		"• Updates are private by default (only you see them)\n" +
 		"• Use \"public\" in any command to share with channel\n" +

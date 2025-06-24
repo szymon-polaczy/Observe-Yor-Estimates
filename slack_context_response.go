@@ -458,10 +458,7 @@ func (s *SlackAPIClient) formatPersonalMessage(taskInfos []TaskUpdateInfo, perio
 	// Don't add action buttons for ephemeral messages as they're not supported
 	// Instead, add a simple text section with instructions
 	if len(taskInfos) > 0 {
-		blocks = append(blocks, Block{
-			Type: "section",
-			Text: &Text{Type: "mrkdwn", Text: "_💡 Tip: Use `/oye config public` to share updates with the channel_"},
-		})
+
 	}
 
 	return SlackMessage{
@@ -478,28 +475,28 @@ func (s *SlackAPIClient) formatSimpleTaskBlock(task TaskUpdateInfo) []Block {
 	// Create a simple text-based representation for ephemeral messages
 	var taskInfo strings.Builder
 	taskInfo.WriteString(fmt.Sprintf("*%s*\n", taskName))
-	
+
 	// Time information with user breakdown if multiple users
 	timeInfo := fmt.Sprintf("• %s: %s\n• %s: %s\n", task.CurrentPeriod, task.CurrentTime, task.PreviousPeriod, task.PreviousTime)
-	
+
 	// Add user breakdown if there are multiple users
 	if len(task.UserBreakdown) > 1 {
 		var userContribs []string
 		var sortedUserIDs []int
-		
+
 		// Collect and sort user IDs for consistent ordering
 		for userID := range task.UserBreakdown {
 			sortedUserIDs = append(sortedUserIDs, userID)
 		}
 		sort.Ints(sortedUserIDs)
-		
+
 		// Get database connection for user name lookups
 		db, err := GetDB()
 		var userDisplayNames map[int]string
 		if err == nil {
 			userDisplayNames = GetAllUserDisplayNames(db, sortedUserIDs)
 		}
-		
+
 		for _, userID := range sortedUserIDs {
 			contrib := task.UserBreakdown[userID]
 			// Only show users who contributed time in the current period
@@ -513,9 +510,9 @@ func (s *SlackAPIClient) formatSimpleTaskBlock(task TaskUpdateInfo) []Block {
 				userContribs = append(userContribs, fmt.Sprintf("%s: %s", userName, contrib.CurrentTime))
 			}
 		}
-		
+
 		if len(userContribs) > 0 {
-			timeInfo = fmt.Sprintf("• %s: %s [%s]\n• %s: %s\n", 
+			timeInfo = fmt.Sprintf("• %s: %s [%s]\n• %s: %s\n",
 				task.CurrentPeriod, task.CurrentTime, strings.Join(userContribs, ", "),
 				task.PreviousPeriod, task.PreviousTime)
 		}
@@ -710,7 +707,7 @@ func (s *SlackAPIClient) SendThresholdResults(ctx *ConversationContext, taskInfo
 
 	// Send project header message first
 	headerMessage := s.formatThresholdHeaderMessage(threshold, period, len(taskInfos), len(projectGroups))
-	
+
 	headerPayload := map[string]interface{}{
 		"channel": ctx.ChannelID,
 		"text":    headerMessage.Text,
