@@ -478,8 +478,36 @@ func (s *SlackAPIClient) formatSimpleTaskBlock(task TaskUpdateInfo) []Block {
 	// Create a simple text-based representation for ephemeral messages
 	var taskInfo strings.Builder
 	taskInfo.WriteString(fmt.Sprintf("*%s*\n", taskName))
-	taskInfo.WriteString(fmt.Sprintf("• %s: %s\n", task.CurrentPeriod, task.CurrentTime))
-	taskInfo.WriteString(fmt.Sprintf("• %s: %s\n", task.PreviousPeriod, task.PreviousTime))
+	
+	// Time information with user breakdown if multiple users
+	timeInfo := fmt.Sprintf("• %s: %s\n• %s: %s\n", task.CurrentPeriod, task.CurrentTime, task.PreviousPeriod, task.PreviousTime)
+	
+	// Add user breakdown if there are multiple users
+	if len(task.UserBreakdown) > 1 {
+		var userContribs []string
+		var sortedUserIDs []int
+		
+		// Collect and sort user IDs for consistent ordering
+		for userID := range task.UserBreakdown {
+			sortedUserIDs = append(sortedUserIDs, userID)
+		}
+		sort.Ints(sortedUserIDs)
+		
+		for _, userID := range sortedUserIDs {
+			contrib := task.UserBreakdown[userID]
+			// Only show users who contributed time in the current period
+			if contrib.CurrentTime != "0h 0m" {
+				userContribs = append(userContribs, fmt.Sprintf("user%d: %s", userID, contrib.CurrentTime))
+			}
+		}
+		
+		if len(userContribs) > 0 {
+			timeInfo = fmt.Sprintf("• %s: %s [%s]\n• %s: %s\n", 
+				task.CurrentPeriod, task.CurrentTime, strings.Join(userContribs, ", "),
+				task.PreviousPeriod, task.PreviousTime)
+		}
+	}
+	taskInfo.WriteString(timeInfo)
 
 	if task.DaysWorked > 0 {
 		taskInfo.WriteString(fmt.Sprintf("• Days Worked: %d\n", task.DaysWorked))
