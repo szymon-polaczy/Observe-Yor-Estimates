@@ -518,7 +518,7 @@ SELECT
     COALESCE(db.total_duration, 0) AS day_before_duration
 FROM yesterday y
 FULL OUTER JOIN day_before db ON y.task_id = db.task_id AND y.user_id = db.user_id
-WHERE COALESCE(y.total_duration, 0) > 0 OR COALESCE(db.total_duration, 0) > 0;
+WHERE COALESCE(y.total_duration, 0) > 0;
 `
 
 	userRows, err := db.Query(userBreakdownQuery)
@@ -571,7 +571,7 @@ SELECT
 FROM tasks t
 LEFT JOIN yesterday y ON t.task_id = y.task_id
 LEFT JOIN day_before db ON t.task_id = db.task_id
-WHERE COALESCE(y.total_duration, 0) > 0 OR COALESCE(db.total_duration, 0) > 0;
+WHERE COALESCE(y.total_duration, 0) > 0;
 `
 	rows, err := db.Query(query)
 	if err != nil {
@@ -655,7 +655,7 @@ SELECT
     COALESCE(pw.total_duration, 0) AS previous_week_duration
 FROM current_week cw
 FULL OUTER JOIN previous_week pw ON cw.task_id = pw.task_id AND cw.user_id = pw.user_id
-WHERE COALESCE(cw.total_duration, 0) > 0 OR COALESCE(pw.total_duration, 0) > 0;
+WHERE COALESCE(cw.total_duration, 0) > 0;
 `
 
 	userRows, err := db.Query(userBreakdownQuery)
@@ -709,7 +709,7 @@ SELECT
 FROM tasks t
 LEFT JOIN current_week cw ON t.task_id = cw.task_id
 LEFT JOIN previous_week pw ON t.task_id = pw.task_id
-WHERE COALESCE(cw.total_duration, 0) > 0 OR COALESCE(pw.total_duration, 0) > 0;
+WHERE COALESCE(cw.total_duration, 0) > 0;
 `
 	rows, err := db.Query(query)
 	if err != nil {
@@ -800,7 +800,7 @@ SELECT
     COALESCE(pm.total_duration, 0) AS previous_month_duration
 FROM current_month cm
 FULL OUTER JOIN previous_month pm ON cm.task_id = pm.task_id AND cm.user_id = pm.user_id
-WHERE COALESCE(cm.total_duration, 0) > 0 OR COALESCE(pm.total_duration, 0) > 0;
+WHERE COALESCE(cm.total_duration, 0) > 0;
 `
 
 	userRows, err := db.Query(userBreakdownQuery)
@@ -854,7 +854,7 @@ SELECT
 FROM tasks t
 LEFT JOIN current_month cm ON t.task_id = cm.task_id
 LEFT JOIN previous_month pm ON t.task_id = pm.task_id
-WHERE COALESCE(cm.total_duration, 0) > 0 OR COALESCE(pm.total_duration, 0) > 0;
+WHERE COALESCE(cm.total_duration, 0) > 0;
 `
 	rows, err := db.Query(query)
 	if err != nil {
