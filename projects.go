@@ -318,8 +318,8 @@ func ParseProjectFromCommand(commandText string) (projectName string, remainingT
 			return "all", strings.TrimSpace(strings.Join(parts[1:], " "))
 		}
 		
-		// Try to find where the project name ends (before "over", "daily", "weekly", "monthly")
-		endKeywords := []string{"over", "daily", "weekly", "monthly"}
+		// Try to find where the project name ends (before "over", "daily", "weekly", "monthly" or time keywords)
+		endKeywords := []string{"over", "daily", "weekly", "monthly", "this", "last", "today", "yesterday", "week", "month", "day", "days"}
 		projectParts := []string{}
 		
 		for i, part := range parts {
