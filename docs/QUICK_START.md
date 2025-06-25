@@ -48,8 +48,8 @@ createdb oye_db
 Create `.env` file:
 ```bash
 cat > .env << EOF
-DATABASE_URL=postgresql://oye_user:oye_pass@localhost:5432/oye_db
-TIMECAMP_API_KEY=your_timecamp_key_here
+DATABASE_URL=postgresql://your_user:your_password@localhost:5432/your_database
+TIMECAMP_API_KEY=your_timecamp_api_key_here
 SLACK_BOT_TOKEN=xoxb-your-bot-token-here
 SLACK_VERIFICATION_TOKEN=your_verification_token_here
 EOF
@@ -93,10 +93,10 @@ go run .
 
 4. **Configure Environment** (2 minutes)
    ```
-   DATABASE_URL=<from_railway_postgres>
-   TIMECAMP_API_KEY=<from_timecamp>
-   SLACK_BOT_TOKEN=<from_slack_app>
-   SLACK_VERIFICATION_TOKEN=<from_slack_app>
+   DATABASE_URL=<your_railway_postgres_url>
+   TIMECAMP_API_KEY=<your_timecamp_api_key>
+   SLACK_BOT_TOKEN=<your_slack_bot_token>
+   SLACK_VERIFICATION_TOKEN=<your_slack_verification_token>
    ```
 
 5. **Get Public URL** (30 seconds)

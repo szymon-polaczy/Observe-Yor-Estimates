@@ -44,9 +44,9 @@ sudo apt install postgresql postgresql-contrib
 
 # Create database and user
 sudo -u postgres psql
-CREATE DATABASE oye_db;
-CREATE USER oye_user WITH PASSWORD 'your_password';
-GRANT ALL PRIVILEGES ON DATABASE oye_db TO oye_user;
+CREATE DATABASE your_database_name;
+CREATE USER your_database_user WITH PASSWORD 'your_secure_password';
+GRANT ALL PRIVILEGES ON DATABASE your_database_name TO your_database_user;
 \q
 ```
 
@@ -54,9 +54,9 @@ GRANT ALL PRIVILEGES ON DATABASE oye_db TO oye_user;
 ```bash
 # Run PostgreSQL in Docker
 docker run --name oye-postgres \
-  -e POSTGRES_DB=oye_db \
-  -e POSTGRES_USER=oye_user \
-  -e POSTGRES_PASSWORD=your_password \
+  -e POSTGRES_DB=your_database_name \
+  -e POSTGRES_USER=your_database_user \
+  -e POSTGRES_PASSWORD=your_secure_password \
   -p 5432:5432 \
   -d postgres:14
 ```
@@ -67,14 +67,14 @@ Create a `.env` file in the project root:
 
 ```bash
 # Database Configuration
-DATABASE_URL=postgresql://oye_user:your_password@localhost:5432/oye_db
+DATABASE_URL=postgresql://your_database_user:your_secure_password@localhost:5432/your_database_name
 
 # TimeCamp API
-TIMECAMP_API_KEY=your_timecamp_api_key
+TIMECAMP_API_KEY=your_timecamp_api_key_here
 
 # Slack Configuration
-SLACK_BOT_TOKEN=xoxb-your-bot-token
-SLACK_VERIFICATION_TOKEN=your_slack_verification_token
+SLACK_BOT_TOKEN=xoxb-your-bot-token-here
+SLACK_VERIFICATION_TOKEN=your_verification_token_here
 
 # Optional: Custom Schedules (cron format)
 TASK_SYNC_SCHEDULE="*/5 * * * *"
@@ -283,7 +283,7 @@ Should show help message.
 ```bash
 # Check database URL format
 echo $DATABASE_URL
-# Should be: postgresql://user:pass@host:port/dbname
+# Should be: postgresql://your_user:your_password@your_host:port/your_database
 
 # Test connection directly
 psql $DATABASE_URL -c "SELECT 1;"

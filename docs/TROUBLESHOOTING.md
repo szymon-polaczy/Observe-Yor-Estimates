@@ -17,7 +17,7 @@ ERROR: database connection failed
 ```bash
 # 1. Check database URL format
 echo $DATABASE_URL
-# Should be: postgresql://user:pass@host:port/dbname
+# Should be: postgresql://your_user:your_password@your_host:port/your_database
 
 # 2. Test direct connection
 psql $DATABASE_URL -c "SELECT 1;"

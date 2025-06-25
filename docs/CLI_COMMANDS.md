@@ -286,7 +286,7 @@ Remove old orphaned time entries.
 ### Required Variables
 ```bash
 # Database connection
-DATABASE_URL=postgresql://user:pass@host:port/dbname
+DATABASE_URL=postgresql://your_user:your_password@your_host:port/your_database
 
 # TimeCamp API access
 TIMECAMP_API_KEY=your_api_key

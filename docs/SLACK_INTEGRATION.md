@@ -76,11 +76,11 @@ Add these variables to your `.env` file:
 
 ```bash
 # Slack Bot Configuration
-SLACK_BOT_TOKEN=xoxb-1234567890-1234567890123-abcdefghijklmnopqrstuvwx
-SLACK_VERIFICATION_TOKEN=abcdefghijklmnopqrstuvwx
+SLACK_BOT_TOKEN=xoxb-your-bot-token-here
+SLACK_VERIFICATION_TOKEN=your_verification_token_here
 
 # Optional: Default channel for direct API usage
-SLACK_DEFAULT_CHANNEL=C1234567890
+SLACK_DEFAULT_CHANNEL=your_channel_id_here
 ```
 
 ## 📝 Command Reference
@@ -217,12 +217,12 @@ For long-running operations, OYE sends progress updates:
 **Store tokens securely**:
 ```bash
 # Use environment variables
-export SLACK_BOT_TOKEN="xoxb-..."
-export SLACK_VERIFICATION_TOKEN="abc..."
+export SLACK_BOT_TOKEN="xoxb-your-bot-token-here"
+export SLACK_VERIFICATION_TOKEN="your-verification-token-here"
 
 # Or .env file (not committed)
-echo "SLACK_BOT_TOKEN=xoxb-..." >> .env
-echo "SLACK_VERIFICATION_TOKEN=abc..." >> .env
+echo "SLACK_BOT_TOKEN=xoxb-your-bot-token-here" >> .env
+echo "SLACK_VERIFICATION_TOKEN=your-verification-token-here" >> .env
 ```
 
 ### Request Verification
@@ -383,8 +383,8 @@ curl -X POST https://your-domain.com/slack/oye \
 ./oye update daily
 
 # Test with Slack context
-export SLACK_BOT_TOKEN="xoxb-..."
-export CHANNEL_ID="C1234567890"
+export SLACK_BOT_TOKEN="xoxb-your-bot-token-here"
+export CHANNEL_ID="your-channel-id-here"
 ./oye update daily
 ```
 

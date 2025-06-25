@@ -12,9 +12,9 @@ This guide covers all configuration options for the OYE (Observe-Yor-Estimates) 
 DATABASE_URL=postgresql://username:password@hostname:port/database_name
 
 # Examples:
-DATABASE_URL=postgresql://oye_user:oye_pass@localhost:5432/oye_db
-DATABASE_URL=postgresql://user:pass@db.railway.app:5432/railway
-DATABASE_URL=postgresql://user:pass@aws-rds-endpoint:5432/production
+DATABASE_URL=postgresql://your_user:your_password@localhost:5432/your_database
+DATABASE_URL=postgresql://your_user:your_password@your_host:5432/your_database
+DATABASE_URL=postgresql://your_user:your_password@your_production_host:5432/your_database
 ```
 
 #### TimeCamp API Configuration
@@ -23,16 +23,16 @@ DATABASE_URL=postgresql://user:pass@aws-rds-endpoint:5432/production
 TIMECAMP_API_KEY=your_api_key_here
 
 # API key format: Long alphanumeric string
-# Example: TIMECAMP_API_KEY=abcd1234efgh5678ijkl9012mnop3456
+# Example: TIMECAMP_API_KEY=your_timecamp_api_key_here
 ```
 
 #### Slack Integration Configuration
 ```bash
 # Slack Bot User OAuth Token (starts with xoxb-)
-SLACK_BOT_TOKEN=xoxb-1234567890-1234567890123-abcdefghijklmnopqrstuvwx
+SLACK_BOT_TOKEN=xoxb-your-bot-token-here
 
 # Slack Verification Token (for request validation)
-SLACK_VERIFICATION_TOKEN=abcdefghijklmnopqrstuvwx
+SLACK_VERIFICATION_TOKEN=your_verification_token_here
 ```
 
 ### Optional Variables
@@ -77,10 +77,10 @@ WRITE_TIMEOUT=30s
 #### Slack Channel Configuration
 ```bash
 # Default channel for direct API usage
-SLACK_DEFAULT_CHANNEL=C1234567890
+SLACK_DEFAULT_CHANNEL=your_channel_id_here
 
 # Custom response URL override
-RESPONSE_URL=https://hooks.slack.com/commands/1234/5678
+RESPONSE_URL=https://hooks.slack.com/commands/your/webhook/url
 ```
 
 #### Data Sync Configuration
@@ -144,12 +144,12 @@ Create a `.env` file in the project root:
 
 ```bash
 # Database
-DATABASE_URL=postgresql://oye_user:oye_pass@localhost:5432/oye_db
+DATABASE_URL=postgresql://your_user:your_password@localhost:5432/your_database
 
 # APIs
-TIMECAMP_API_KEY=your_timecamp_key
-SLACK_BOT_TOKEN=xoxb-your-bot-token
-SLACK_VERIFICATION_TOKEN=your_verification_token
+TIMECAMP_API_KEY=your_timecamp_api_key_here
+SLACK_BOT_TOKEN=xoxb-your-bot-token-here
+SLACK_VERIFICATION_TOKEN=your_verification_token_here
 
 # Schedules (optional)
 TASK_SYNC_SCHEDULE="*/5 * * * *"
@@ -184,9 +184,9 @@ services:
   postgres:
     image: postgres:14
     environment:
-      POSTGRES_DB: oye_db
-      POSTGRES_USER: oye_user
-      POSTGRES_PASSWORD: oye_pass
+      POSTGRES_DB: your_database_name
+      POSTGRES_USER: your_database_user
+      POSTGRES_PASSWORD: your_database_password
 ```
 
 ## 🔐 Security Configuration
@@ -196,8 +196,8 @@ services:
 **Best Practices:**
 ```bash
 # Use environment variables, never hardcode
-export TIMECAMP_API_KEY="your_key"
-export SLACK_BOT_TOKEN="xoxb-your_token"
+export TIMECAMP_API_KEY="your_timecamp_api_key_here"
+export SLACK_BOT_TOKEN="xoxb-your-bot-token-here"
 
 # Rotate keys regularly
 # Monitor for unauthorized usage
@@ -221,13 +221,13 @@ echo $SLACK_VERIFICATION_TOKEN | wc -c
 **Connection Security:**
 ```bash
 # Use SSL for production databases
-DATABASE_URL=postgresql://user:pass@host:5432/db?sslmode=require
+DATABASE_URL=postgresql://your_user:your_password@your_host:5432/your_database?sslmode=require
 
 # Restrict database user permissions
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO oye_user;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO your_database_user;
 
 # Use connection pooling
-DATABASE_URL=postgresql://user:pass@host:5432/db?pool_max_conns=20
+DATABASE_URL=postgresql://your_user:your_password@your_host:5432/your_database?pool_max_conns=20
 ```
 
 ## 🎛️ Advanced Configuration
@@ -254,9 +254,9 @@ TASK_SYNC_SCHEDULE="0 */2 8-18 * * 1-5" # Every 2 hours, 8AM-6PM, weekdays
 #### Development Environment
 ```bash
 # .env.development
-DATABASE_URL=postgresql://dev_user:dev_pass@localhost:5432/oye_dev
-TIMECAMP_API_KEY=dev_api_key
-SLACK_BOT_TOKEN=xoxb-dev-token
+DATABASE_URL=postgresql://dev_user:dev_password@localhost:5432/dev_database
+TIMECAMP_API_KEY=your_dev_timecamp_api_key
+SLACK_BOT_TOKEN=xoxb-your-dev-bot-token
 LOG_LEVEL=debug
 TASK_SYNC_SCHEDULE="*/1 * * * *"  # More frequent for testing
 ```
@@ -264,18 +264,18 @@ TASK_SYNC_SCHEDULE="*/1 * * * *"  # More frequent for testing
 #### Staging Environment
 ```bash
 # .env.staging
-DATABASE_URL=postgresql://staging_user:pass@staging-db:5432/oye_staging
-TIMECAMP_API_KEY=staging_api_key
-SLACK_BOT_TOKEN=xoxb-staging-token
+DATABASE_URL=postgresql://staging_user:staging_password@staging-db:5432/staging_database
+TIMECAMP_API_KEY=your_staging_timecamp_api_key
+SLACK_BOT_TOKEN=xoxb-your-staging-bot-token
 LOG_LEVEL=info
 ```
 
 #### Production Environment
 ```bash
 # .env.production
-DATABASE_URL=postgresql://prod_user:secure_pass@prod-db:5432/oye_prod
-TIMECAMP_API_KEY=prod_api_key
-SLACK_BOT_TOKEN=xoxb-prod-token
+DATABASE_URL=postgresql://prod_user:secure_password@prod-db:5432/prod_database
+TIMECAMP_API_KEY=your_production_timecamp_api_key
+SLACK_BOT_TOKEN=xoxb-your-production-bot-token
 LOG_LEVEL=warn
 ```
 
@@ -360,19 +360,19 @@ go run . --validate-schedules
 ### Minimal Configuration
 ```bash
 # Absolute minimum required
-DATABASE_URL=postgresql://user:pass@host:5432/db
-TIMECAMP_API_KEY=your_key
-SLACK_BOT_TOKEN=xoxb-token
-SLACK_VERIFICATION_TOKEN=verification_token
+DATABASE_URL=postgresql://your_user:your_password@your_host:5432/your_database
+TIMECAMP_API_KEY=your_timecamp_api_key_here
+SLACK_BOT_TOKEN=xoxb-your-bot-token-here
+SLACK_VERIFICATION_TOKEN=your_verification_token_here
 ```
 
 ### Complete Configuration
 ```bash
 # Full configuration with all options
-DATABASE_URL=postgresql://user:pass@host:5432/db?sslmode=require
-TIMECAMP_API_KEY=your_timecamp_key
-SLACK_BOT_TOKEN=xoxb-your-bot-token
-SLACK_VERIFICATION_TOKEN=your_verification_token
+DATABASE_URL=postgresql://your_user:your_password@your_host:5432/your_database?sslmode=require
+TIMECAMP_API_KEY=your_timecamp_api_key_here
+SLACK_BOT_TOKEN=xoxb-your-bot-token-here
+SLACK_VERIFICATION_TOKEN=your_verification_token_here
 
 # Schedules
 TASK_SYNC_SCHEDULE="*/5 * * * *"
