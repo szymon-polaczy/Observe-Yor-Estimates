@@ -203,6 +203,31 @@ func splitTasksByBlockLimit(tasks []TaskUpdateInfo, headerBlocks int) [][]TaskUp
 			chunks = append(chunks, currentChunk)
 			currentChunk = []TaskUpdateInfo{task}
 			currentBlockCount = headerBlocks + taskBlocks
+			
+			// Check if even a single task exceeds limits
+			singleTaskMessage := formatProjectMessage("Test", []TaskUpdateInfo{task}, "test")
+			singleTaskValidation := validateSlackMessage(singleTaskMessage)
+			if singleTaskValidation.CharacterCount > MaxSlackMessageChars {
+				// This single task is too large - we need to truncate its comments
+				logger := GetGlobalLogger()
+				logger.Warnf("Task '%s' exceeds character limit even alone (%d chars), truncating comments", 
+					task.Name, singleTaskValidation.CharacterCount)
+				
+				// Truncate comments to make it fit
+				truncatedTask := task
+				truncatedTask.Comments = truncateCommentsToFit(task, MaxSlackMessageChars-500) // Leave buffer for headers
+				
+				// Verify the truncated task now fits
+				verifyMessage := formatProjectMessage("Test", []TaskUpdateInfo{truncatedTask}, "test")
+				verifyValidation := validateSlackMessage(verifyMessage)
+				if verifyValidation.CharacterCount > MaxSlackMessageChars {
+					logger.Errorf("Task still exceeds limit even after comment truncation: %d chars", verifyValidation.CharacterCount)
+					// As last resort, remove all comments
+					truncatedTask.Comments = []string{}
+				}
+				
+				currentChunk = []TaskUpdateInfo{truncatedTask}
+			}
 		} else {
 			currentChunk = newChunk
 			currentBlockCount += taskBlocks
@@ -220,6 +245,58 @@ func splitTasksByBlockLimit(tasks []TaskUpdateInfo, headerBlocks int) [][]TaskUp
 	}
 	
 	return chunks
+}
+
+// truncateCommentsToFit reduces comments until the task fits within character limits
+func truncateCommentsToFit(task TaskUpdateInfo, maxChars int) []string {
+	if len(task.Comments) == 0 {
+		return task.Comments
+	}
+	
+	// Try reducing comments one by one until it fits
+	for commentsToKeep := len(task.Comments); commentsToKeep >= 0; commentsToKeep-- {
+		testTask := task
+		if commentsToKeep == 0 {
+			testTask.Comments = []string{}
+		} else {
+			testTask.Comments = task.Comments[:commentsToKeep]
+			// Add truncation notice if we removed comments
+			if commentsToKeep < len(task.Comments) {
+				remaining := len(task.Comments) - commentsToKeep
+				testTask.Comments = append(testTask.Comments, 
+					fmt.Sprintf("... and %d more comments (truncated due to size limits)", remaining))
+			}
+		}
+		
+		// Test if this fits using the actual message format that will be used
+		testMessage := formatProjectMessage("Test", []TaskUpdateInfo{testTask}, "test")
+		validation := validateSlackMessage(testMessage)
+		
+		if validation.CharacterCount <= maxChars {
+			return testTask.Comments
+		}
+	}
+	
+	// If even with no comments it doesn't fit, we need to truncate the comment text itself
+	logger := GetGlobalLogger()
+	logger.Warnf("Task still too large even with no comments, will truncate individual comment text")
+	
+	// Try with very short comments
+	if len(task.Comments) > 0 {
+		shortComments := []string{"[Comments truncated - too large to display]"}
+		testTask := task
+		testTask.Comments = shortComments
+		
+		testMessage := formatProjectMessage("Test", []TaskUpdateInfo{testTask}, "test")
+		validation := validateSlackMessage(testMessage)
+		
+		if validation.CharacterCount <= maxChars {
+			return shortComments
+		}
+	}
+	
+	// If even with minimal comments it doesn't fit, return empty comments
+	return []string{}
 }
 
 func SendSlackUpdate(period string, responseURL string, asJSON bool) {
@@ -1183,8 +1260,8 @@ func formatProjectMessageWithComments(project string, tasks []TaskUpdateInfo, pe
 	
 	// Split tasks into chunks that respect block limits
 	headerBlockCount := 4 // spacing, header, context, divider
-	footerBlockCount := 1 // spacing
-	taskChunks := splitTasksByBlockLimit(tasks, headerBlockCount + footerBlockCount)
+	// Note: splitTasksByBlockLimit internally accounts for footer blocks
+	taskChunks := splitTasksByBlockLimit(tasks, headerBlockCount)
 	
 	// Create messages for each chunk
 	for i, taskChunk := range taskChunks {

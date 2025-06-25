@@ -242,27 +242,15 @@ func (s *SlackAPIClient) sendProjectSplitMessages(ctx *ConversationContext, proj
 	// Send one message per project
 	for i, project := range projectNames {
 		tasks := projectGroups[project]
-		// Use the constant from slack_updates_utils.go and account for header/footer blocks
-		headerFooterBlocks := 5 // 3 header blocks + 2 spacing blocks  
-		maxTasksPerMessage := MaxBlocksPerMessage - headerFooterBlocks
-
-		if len(tasks) > maxTasksPerMessage {
-			// Split this project into multiple messages (chunks)
-			numChunks := (len(tasks) + maxTasksPerMessage - 1) / maxTasksPerMessage
-			for chunkIndex := 0; chunkIndex < numChunks; chunkIndex++ {
-				start := chunkIndex * maxTasksPerMessage
-				end := start + maxTasksPerMessage
-				if end > len(tasks) {
-					end = len(tasks)
-				}
-				taskChunk := tasks[start:end]
-
-				projectMessage := s.formatSingleProjectMessage(project, taskChunk, period, i+1, len(projectNames), chunkIndex+1, numChunks)
-				s.sendChunkedMessage(ctx, projectMessage)
-			}
-		} else {
-			// Send as a single message
-			projectMessage := s.formatSingleProjectMessage(project, tasks, period, i+1, len(projectNames), 0, 0)
+		
+		// Use the intelligent splitting logic that respects both block and character limits
+		headerBlocks := 3 // spacing, section, divider (splitTasksByBlockLimit accounts for footer internally)
+		taskChunks := splitTasksByBlockLimit(tasks, headerBlocks)
+		
+		// Send each chunk
+		for chunkIndex, taskChunk := range taskChunks {
+			numChunks := len(taskChunks)
+			projectMessage := s.formatSingleProjectMessage(project, taskChunk, period, i+1, len(projectNames), chunkIndex+1, numChunks)
 			s.sendChunkedMessage(ctx, projectMessage)
 		}
 	}
@@ -277,25 +265,35 @@ func (s *SlackAPIClient) sendChunkedMessage(ctx *ConversationContext, message Sl
 	if !validation.IsValid {
 		s.logger.Errorf("Message chunk validation failed: %s", validation.ErrorMessage)
 		
-		// Try to fix the message if possible
+		// Try one more aggressive fix for character limits
 		if validation.ExceedsChars {
-			truncatedText := message.Text
-			if len(truncatedText) > MaxSlackMessageChars-100 {
-				truncatedText = truncatedText[:MaxSlackMessageChars-100] + "...\n\n(Message truncated due to size limit)"
+			s.logger.Warnf("Attempting emergency character truncation for message with %d characters", validation.CharacterCount)
+			
+			// Create a minimal fallback message that will definitely fit
+			fallbackMessage := SlackMessage{
+				Text: "⚠️ Task data too large to display",
+				Blocks: []Block{
+					{
+						Type: "section",
+						Text: &Text{Type: "mrkdwn", Text: "⚠️ *Message Too Large*\n\nSome tasks in this report contain extensive data that exceeds Slack's message limits. Please check these tasks directly in TimeCamp for full details."},
+					},
+				},
 			}
-			message.Text = truncatedText
+			
+			// Replace the problematic message with the fallback
+			message = fallbackMessage
+			
+			// Re-validate the fallback message (should always pass)
+			validation = validateSlackMessage(message)
+			if validation.ExceedsChars {
+				s.logger.Errorf("Even fallback message exceeds limits - this should never happen")
+				return // Skip this message as last resort
+			}
 		}
 		
 		if validation.ExceedsBlocks {
-			// Truncate blocks as last resort
-			if len(message.Blocks) > MaxSlackBlocks {
-				message.Blocks = message.Blocks[:MaxSlackBlocks-1]
-				// Add a truncation notice
-				message.Blocks = append(message.Blocks, Block{
-					Type: "section",
-					Text: &Text{Type: "mrkdwn", Text: "_... (Some content truncated due to message size limits)_"},
-				})
-			}
+			s.logger.Errorf("Message exceeds block limit after chunking - this should not happen")
+			return // Skip this message to prevent API errors
 		}
 	}
 

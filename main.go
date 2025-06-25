@@ -494,6 +494,11 @@ func handleCliCommands(args []string, logger *Logger) {
 		tasksWithComments := generateTestTasksWithComments(10, 20) // 10 tasks with 20 comments each
 		commentMessages := formatProjectMessageWithComments("Comment Heavy Project", tasksWithComments, "daily")
 		
+		// Test extreme comment overflow
+		fmt.Println("\n--- Testing Extreme Comment Overflow ---")
+		extremeTasks := generateTestTasksWithComments(3, 50) // 3 tasks with 50 comments each
+		extremeMessages := formatProjectMessageWithComments("Extreme Project", extremeTasks, "daily")
+		
 		fmt.Printf("Generated %d messages for comment-heavy tasks\n", len(commentMessages))
 		
 		for i, message := range commentMessages {
@@ -511,11 +516,28 @@ func handleCliCommands(args []string, logger *Logger) {
 			}
 		}
 		
+		fmt.Printf("\nGenerated %d messages for extreme comment tasks\n", len(extremeMessages))
+		
+		for i, message := range extremeMessages {
+			validation := validateSlackMessage(message)
+			status := "✅ VALID"
+			if !validation.IsValid {
+				status = "❌ INVALID"
+			}
+			
+			fmt.Printf("Extreme Message %d: %s\n", i+1, status)
+			fmt.Printf("  - Blocks: %d/%d\n", validation.BlockCount, MaxSlackBlocks)
+			fmt.Printf("  - Characters: %d/%d\n", validation.CharacterCount, MaxSlackMessageChars)
+			if !validation.IsValid {
+				fmt.Printf("  - Error: %s\n", validation.ErrorMessage)
+			}
+		}
+		
 		fmt.Println("\n=== Message Limits Test Completed ===")
 		
 		// Summary
 		allValid := true
-		for _, messages := range [][]SlackMessage{messages, commentMessages, {largeMessage}} {
+		for _, messages := range [][]SlackMessage{messages, commentMessages, extremeMessages, {largeMessage}} {
 			for _, message := range messages {
 				if !validateSlackMessage(message).IsValid {
 					allValid = false
