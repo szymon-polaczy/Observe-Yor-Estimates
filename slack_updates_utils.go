@@ -1173,7 +1173,7 @@ func GetTasksOverThresholdWithProject(db *sql.DB, threshold float64, period stri
 		}
 	}
 
-	// Main query - get all tasks with estimations and let Go handle the threshold logic
+	// Main query - get all tasks with estimations and time entries in the current period
 	query := fmt.Sprintf(`
 		SELECT 
 			t.task_id,
@@ -1182,10 +1182,10 @@ func GetTasksOverThresholdWithProject(db *sql.DB, threshold float64, period stri
 			COALESCE(SUM(CASE WHEN te.date BETWEEN $1 AND $2 THEN te.duration ELSE 0 END), 0) as current_duration,
 			COALESCE(SUM(CASE WHEN te.date < $1 THEN te.duration ELSE 0 END), 0) as previous_duration
 		FROM tasks t
-		LEFT JOIN time_entries te ON t.task_id = te.task_id
+		INNER JOIN time_entries te ON t.task_id = te.task_id
 		WHERE t.name ~ '\[([0-9]+(?:[.,][0-9]+)?h?[-+][0-9]+(?:[.,][0-9]+)?h?|[0-9]+(?:[.,][0-9]+)?h?)\]'%s  -- Only tasks with estimation patterns
+		  AND te.date BETWEEN $1 AND $2  -- Only tasks with time entries in current period
 		GROUP BY t.task_id, t.parent_id, t.name
-		HAVING COALESCE(SUM(te.duration), 0) > 0  -- Only tasks with time logged
 		ORDER BY t.task_id
 	`, projectFilterClause)
 
