@@ -201,6 +201,19 @@ func getTaskChanges(db *sql.DB, period string) ([]TaskUpdateInfo, error) {
 	}
 }
 
+func getTaskChangesWithProject(db *sql.DB, period string, projectTaskID *int) ([]TaskUpdateInfo, error) {
+	switch period {
+	case "daily":
+		return GetTaskTimeEntriesWithProject(db, projectTaskID)
+	case "weekly":
+		return GetWeeklyTaskTimeEntriesWithProject(db, projectTaskID)
+	case "monthly":
+		return GetMonthlyTaskTimeEntriesWithProject(db, projectTaskID)
+	default:
+		return nil, fmt.Errorf("invalid period: %s", period)
+	}
+}
+
 func formatProjectMessage(project string, tasks []TaskUpdateInfo, period string) SlackMessage {
 	var title string
 	var date string

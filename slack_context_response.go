@@ -22,6 +22,7 @@ type ConversationContext struct {
 	UserID      string
 	ThreadTS    string
 	CommandType string
+	ProjectName string // For project-specific filtering
 }
 
 type SlackAPIResponse struct {

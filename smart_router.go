@@ -25,12 +25,18 @@ func (sr *SmartRouter) HandleUpdateRequest(req *SlackCommandRequest) error {
 		ChannelID:   req.ChannelID,
 		UserID:      req.UserID,
 		CommandType: req.Command,
+		ProjectName: req.ProjectName, // Add project context
 	}
 
 	// Determine period from command
 	period := sr.determinePeriod(req.Text, req.Command)
 
-	sr.logger.Infof("Processing %s update request from user %s in channel %s", period, req.UserName, req.ChannelName)
+	if req.ProjectName != "" {
+		sr.logger.Infof("Processing %s update request for project '%s' from user %s in channel %s", 
+			period, req.ProjectName, req.UserName, req.ChannelName)
+	} else {
+		sr.logger.Infof("Processing %s update request from user %s in channel %s", period, req.UserName, req.ChannelName)
+	}
 
 	// Handle long-running updates with progress tracking
 	return sr.HandleLongRunningUpdate(ctx, period)
@@ -60,7 +66,11 @@ func (sr *SmartRouter) HandleLongRunningUpdate(ctx *ConversationContext, period 
 
 func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, period string) {
 	// Show progress updates
-	sr.slackClient.UpdateProgress(ctx, "📊 Querying database...")
+	if ctx.ProjectName != "" {
+		sr.slackClient.UpdateProgress(ctx, fmt.Sprintf("📊 Querying database for project '%s'...", ctx.ProjectName))
+	} else {
+		sr.slackClient.UpdateProgress(ctx, "📊 Querying database...")
+	}
 	time.Sleep(500 * time.Millisecond)
 
 	// Get database connection
@@ -70,15 +80,58 @@ func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, perio
 		return
 	}
 
-	sr.slackClient.UpdateProgress(ctx, "📈 Analyzing time entries...")
-	time.Sleep(1 * time.Second)
-
-	// Get task data
-	taskInfos, err := getTaskChanges(db, period)
-	if err != nil {
-		errorMessage := fmt.Sprintf("Failed to get %s changes: ```%v```", period, err)
-		sr.slackClient.SendErrorResponse(ctx, errorMessage)
-		return
+	var taskInfos []TaskUpdateInfo
+	
+	if ctx.ProjectName != "" && ctx.ProjectName != "all" {
+		// Project-specific query
+		sr.slackClient.UpdateProgress(ctx, fmt.Sprintf("🔍 Finding project '%s'...", ctx.ProjectName))
+		time.Sleep(500 * time.Millisecond)
+		
+		// Find the project
+		projects, err := FindProjectsByName(db, ctx.ProjectName)
+		if err != nil {
+			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to find project: %v", err))
+			return
+		}
+		
+		if len(projects) == 0 {
+			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Project '%s' not found. Use `/oye help` to see available commands.", ctx.ProjectName))
+			return
+		}
+		
+		if len(projects) > 1 {
+			// Multiple matches found, suggest more specific search
+			projectNames := make([]string, len(projects))
+			for i, p := range projects {
+				projectNames[i] = p.Name
+			}
+			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Multiple projects found matching '%s': %s. Please be more specific.", ctx.ProjectName, strings.Join(projectNames, ", ")))
+			return
+		}
+		
+		project := projects[0]
+		sr.slackClient.UpdateProgress(ctx, fmt.Sprintf("📈 Analyzing time entries for '%s'...", project.Name))
+		time.Sleep(1 * time.Second)
+		
+		// Get project-specific task data
+		taskInfos, err = getTaskChangesWithProject(db, period, &project.TimeCampTaskID)
+		if err != nil {
+			errorMessage := fmt.Sprintf("Failed to get %s changes for project '%s': ```%v```", period, project.Name, err)
+			sr.slackClient.SendErrorResponse(ctx, errorMessage)
+			return
+		}
+	} else {
+		// All projects query
+		sr.slackClient.UpdateProgress(ctx, "📈 Analyzing time entries...")
+		time.Sleep(1 * time.Second)
+		
+		// Get task data for all projects
+		taskInfos, err = getTaskChanges(db, period)
+		if err != nil {
+			errorMessage := fmt.Sprintf("Failed to get %s changes: ```%v```", period, err)
+			sr.slackClient.SendErrorResponse(ctx, errorMessage)
+			return
+		}
 	}
 
 	sr.slackClient.UpdateProgress(ctx, "✍️ Formatting report...")

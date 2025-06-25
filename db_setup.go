@@ -163,6 +163,12 @@ func GetDB() (*sql.DB, error) {
 			return
 		}
 
+		if err := migrateProjectsTable(db); err != nil {
+			db.Close()
+			initErr = fmt.Errorf("failed to migrate projects table: %w", err)
+			return
+		}
+
 		logger.Info("Database connection established and tables migrated successfully")
 
 		dbMutex.Lock()
@@ -534,4 +540,107 @@ func CheckDatabaseHasTimeEntries() (bool, error) {
 	}
 
 	return count > 0, nil
+}
+
+// migrateProjectsTable ensures the projects table exists and matches the desired schema.
+func migrateProjectsTable(db *sql.DB) error {
+	logger := GetGlobalLogger()
+
+	// Check if table exists (PostgreSQL way)
+	row := db.QueryRow("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'projects');")
+	var exists bool
+	err := row.Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("error checking if projects table exists: %w", err)
+	}
+
+	if !exists {
+		// Table does not exist, create it
+		logger.Info("Projects table does not exist, creating it")
+		if err := createProjectsTable(db); err != nil {
+			return err
+		}
+		
+		// Populate projects from existing task hierarchy
+		logger.Info("Populating projects table from existing task hierarchy")
+		return populateProjectsFromTasks(db)
+	}
+
+	logger.Debug("Projects table already exists")
+	return nil
+}
+
+func createProjectsTable(db *sql.DB) error {
+	logger := GetGlobalLogger()
+
+	createTableSQL := `CREATE TABLE projects (
+id SERIAL PRIMARY KEY,
+name TEXT NOT NULL UNIQUE,
+timecamp_task_id INTEGER NOT NULL UNIQUE,
+created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+FOREIGN KEY (timecamp_task_id) REFERENCES tasks(task_id)
+);`
+
+	_, err := db.Exec(createTableSQL)
+	if err != nil {
+		return fmt.Errorf("failed to create projects table: %w", err)
+	}
+
+	logger.Info("Projects table created successfully")
+	return nil
+}
+
+// populateProjectsFromTasks extracts project-level tasks and populates the projects table
+func populateProjectsFromTasks(db *sql.DB) error {
+	logger := GetGlobalLogger()
+
+	// Find all project-level tasks (tasks whose parent_id points to a root task)
+	query := `
+		SELECT DISTINCT p.task_id, p.name
+		FROM tasks p
+		JOIN tasks root ON p.parent_id = root.task_id
+		WHERE root.parent_id = 0  -- root tasks have parent_id = 0
+		AND p.archived = 0        -- only active projects
+		ORDER BY p.name
+	`
+
+	rows, err := db.Query(query)
+	if err != nil {
+		return fmt.Errorf("failed to query project-level tasks: %w", err)
+	}
+	defer rows.Close()
+
+	projectCount := 0
+	for rows.Next() {
+		var taskID int
+		var name string
+		
+		if err := rows.Scan(&taskID, &name); err != nil {
+			logger.Warnf("Failed to scan project row: %v", err)
+			continue
+		}
+
+		// Insert project into projects table
+		insertQuery := `
+			INSERT INTO projects (name, timecamp_task_id) 
+			VALUES ($1, $2) 
+			ON CONFLICT (timecamp_task_id) DO NOTHING
+		`
+		
+		_, err := db.Exec(insertQuery, name, taskID)
+		if err != nil {
+			logger.Warnf("Failed to insert project %s (task_id: %d): %v", name, taskID, err)
+			continue
+		}
+		
+		projectCount++
+	}
+
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("error iterating project rows: %w", err)
+	}
+
+	logger.Infof("Successfully populated %d projects from task hierarchy", projectCount)
+	return nil
 }

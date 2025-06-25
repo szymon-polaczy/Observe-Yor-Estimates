@@ -58,6 +58,7 @@ type SlackCommandRequest struct {
 	Command     string `json:"command"`
 	Text        string `json:"text"`
 	ResponseURL string `json:"response_url"`
+	ProjectName string `json:"project_name,omitempty"` // Parsed project name for filtering
 	TriggerID   string `json:"trigger_id"`
 }
 
@@ -105,10 +106,31 @@ func handleUnifiedOYECommand(w http.ResponseWriter, r *http.Request) {
 
 	logger.Infof("Received /oye command from user %s: %s", req.UserName, req.Text)
 
+	// Parse project name from command if present
+	projectName, remainingText := ParseProjectFromCommand(req.Text)
+	
+	// Update the request with parsed project info
+	if projectName != "" && projectName != "all" {
+		req.ProjectName = projectName
+		req.Text = remainingText  // Update text to remaining command after project name
+	}
+
 	text := strings.ToLower(strings.TrimSpace(req.Text))
 
 	// Route to appropriate handler based on command content
 	if text == "" || text == "help" {
+		// If no remaining text after project name, treat as update request
+		if projectName != "" && projectName != "all" {
+			// Project-specific update request with default period
+			if err := globalRouter.HandleUpdateRequest(req); err != nil {
+				logger.Errorf("Failed to handle project update request: %v", err)
+				sendImmediateResponse(w, "❌ Failed to process project update request", "ephemeral")
+			} else {
+				sendImmediateResponse(w, fmt.Sprintf("⏳ Generating %s project update...", projectName), "ephemeral")
+			}
+			return
+		}
+		
 		sendUnifiedHelp(w, req)
 		return
 	}
@@ -150,6 +172,11 @@ func sendUnifiedHelp(w http.ResponseWriter, req *SlackCommandRequest) {
 		"• `/oye` or `/oye daily` - Daily task update\n" +
 		"• `/oye weekly` - Weekly task summary\n" +
 		"• `/oye monthly` - Monthly task report\n\n" +
+		"*Project Filtering:*\n" +
+		"• `/oye \"project name\" daily` - Daily update for specific project\n" +
+		"• `/oye marketing weekly` - Weekly update for project (fuzzy match)\n" +
+		"• `/oye all monthly` - Monthly update for all projects\n" +
+		"• `/oye \"3dconnexion\" over 90 monthly` - Project-specific thresholds\n\n" +
 		"*Threshold Monitoring:*\n" +
 		"• `/oye over 50 daily` - Tasks over 50% of estimation (daily)\n" +
 		"• `/oye over 80 weekly` - Tasks over 80% of estimation (weekly)\n" +
@@ -159,8 +186,9 @@ func sendUnifiedHelp(w http.ResponseWriter, req *SlackCommandRequest) {
 		"*Tips:*\n" +
 		"• Updates are private by default (only you see them)\n" +
 		"• Use \"public\" in any command to share with channel\n" +
-		"• The system automatically monitors for threshold crossings\n" +
-		"• Threshold format: `/oye over <percentage> <period>`"
+		"• Quote project names with spaces: `/oye \"My Project\" daily`\n" +
+		"• Project names support fuzzy matching\n" +
+		"• The system automatically monitors for threshold crossings"
 
 	response := SlackCommandResponse{
 		ResponseType: "ephemeral",

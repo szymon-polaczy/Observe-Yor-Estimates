@@ -1249,3 +1249,517 @@ func CleanupOldOrphanedEntries(db *sql.DB, olderThanDays int) error {
 
 	return nil
 }
+
+// GetTaskTimeEntriesWithProject retrieves time entry information for tasks with optional project filtering
+func GetTaskTimeEntriesWithProject(db *sql.DB, projectTaskID *int) ([]TaskUpdateInfo, error) {
+	logger := GetGlobalLogger()
+	logger.Debug("Querying database for daily task time entries with project filtering")
+
+	var projectTaskIDs []int
+	if projectTaskID != nil {
+		// Get all task IDs that belong to this project
+		var err error
+		projectTaskIDs, err = GetProjectTaskIDs(db, *projectTaskID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get project task IDs: %w", err)
+		}
+		if len(projectTaskIDs) == 0 {
+			// No tasks found for this project
+			return []TaskUpdateInfo{}, nil
+		}
+	}
+
+	// Build the WHERE clause for project filtering
+	var whereClause string
+	var args []interface{}
+	argIndex := 1
+
+	if len(projectTaskIDs) > 0 {
+		placeholders := make([]string, len(projectTaskIDs))
+		for i, taskID := range projectTaskIDs {
+			placeholders[i] = fmt.Sprintf("$%d", argIndex)
+			args = append(args, taskID)
+			argIndex++
+		}
+		whereClause = fmt.Sprintf("AND task_id IN (%s)", strings.Join(placeholders, ","))
+	}
+
+	// User breakdown query with project filtering
+	userBreakdownQuery := fmt.Sprintf(`
+WITH yesterday AS (
+    SELECT task_id, user_id, SUM(duration) AS total_duration
+    FROM time_entries
+    WHERE date::date = CURRENT_DATE - INTERVAL '1 day' %s
+    GROUP BY task_id, user_id
+),
+day_before AS (
+    SELECT task_id, user_id, SUM(duration) AS total_duration
+    FROM time_entries
+    WHERE date::date = CURRENT_DATE - INTERVAL '2 days' %s
+    GROUP BY task_id, user_id
+)
+SELECT 
+    COALESCE(y.task_id, db.task_id) AS task_id,
+    COALESCE(y.user_id, db.user_id) AS user_id,
+    COALESCE(y.total_duration, 0) AS yesterday_duration, 
+    COALESCE(db.total_duration, 0) AS day_before_duration
+FROM yesterday y
+FULL OUTER JOIN day_before db ON y.task_id = db.task_id AND y.user_id = db.user_id
+WHERE COALESCE(y.total_duration, 0) > 0 OR COALESCE(db.total_duration, 0) > 0;`, whereClause, whereClause)
+
+	userRows, err := db.Query(userBreakdownQuery, append(args, args...)...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query user breakdown: %w", err)
+	}
+	defer userRows.Close()
+
+	// Build user breakdown map: taskID -> userID -> contribution
+	userBreakdowns := make(map[int]map[int]UserTimeContribution)
+	for userRows.Next() {
+		var taskID, userID, yesterdayDuration, dayBeforeDuration int
+		err := userRows.Scan(&taskID, &userID, &yesterdayDuration, &dayBeforeDuration)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan user breakdown row: %w", err)
+		}
+
+		if _, exists := userBreakdowns[taskID]; !exists {
+			userBreakdowns[taskID] = make(map[int]UserTimeContribution)
+		}
+
+		userBreakdowns[taskID][userID] = UserTimeContribution{
+			UserID:       userID,
+			CurrentTime:  formatDuration(yesterdayDuration),
+			PreviousTime: formatDuration(dayBeforeDuration),
+		}
+	}
+
+	// Main query with project filtering
+	mainQuery := fmt.Sprintf(`
+WITH yesterday AS (
+    SELECT task_id, SUM(duration) AS total_duration, string_agg(DISTINCT description, '; ' ORDER BY description) AS descriptions
+    FROM time_entries
+    WHERE date::date = CURRENT_DATE - INTERVAL '1 day' 
+      AND description IS NOT NULL 
+      AND description != '' %s
+    GROUP BY task_id
+),
+day_before AS (
+    SELECT task_id, SUM(duration) AS total_duration
+    FROM time_entries
+    WHERE date::date = CURRENT_DATE - INTERVAL '2 days' %s
+    GROUP BY task_id
+),
+days_worked AS (
+    SELECT task_id, COUNT(DISTINCT date::date) AS days_worked
+    FROM time_entries
+    WHERE date::date >= CURRENT_DATE - INTERVAL '7 days' 
+      AND date::date <= CURRENT_DATE - INTERVAL '1 day' %s
+    GROUP BY task_id
+)
+SELECT 
+    COALESCE(y.task_id, db.task_id) AS task_id,
+    t.parent_id,
+    t.name,
+    COALESCE(y.total_duration, 0) AS yesterday_duration, 
+    COALESCE(db.total_duration, 0) AS day_before_duration,
+    COALESCE(dw.days_worked, 0) AS days_worked,
+    COALESCE(y.descriptions, '') AS descriptions
+FROM yesterday y
+FULL OUTER JOIN day_before db ON y.task_id = db.task_id
+LEFT JOIN days_worked dw ON COALESCE(y.task_id, db.task_id) = dw.task_id
+LEFT JOIN tasks t ON COALESCE(y.task_id, db.task_id) = t.task_id
+WHERE (COALESCE(y.total_duration, 0) > 0 OR COALESCE(db.total_duration, 0) > 0)
+  AND t.task_id IS NOT NULL
+ORDER BY COALESCE(y.total_duration, 0) DESC;`, whereClause, whereClause, whereClause)
+
+	rows, err := db.Query(mainQuery, append(append(args, args...), args...)...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query daily task time entries: %w", err)
+	}
+	defer rows.Close()
+
+	var taskInfos []TaskUpdateInfo
+	for rows.Next() {
+		var taskID, parentID, yesterdayDuration, dayBeforeDuration, daysWorked int
+		var name, descriptions string
+		err := rows.Scan(&taskID, &parentID, &name, &yesterdayDuration, &dayBeforeDuration, &daysWorked, &descriptions)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan task time entry row: %w", err)
+		}
+
+		comments := []string{}
+		if descriptions != "" {
+			comments = strings.Split(descriptions, "; ")
+		}
+
+		// Get user breakdown for this task
+		userBreakdown := userBreakdowns[taskID]
+		if userBreakdown == nil {
+			userBreakdown = make(map[int]UserTimeContribution)
+		}
+
+		taskInfo := TaskUpdateInfo{
+			TaskID:         taskID,
+			ParentID:       parentID,
+			Name:           name,
+			CurrentPeriod:  "Yesterday",
+			CurrentTime:    formatDuration(yesterdayDuration),
+			PreviousPeriod: "Day Before",
+			PreviousTime:   formatDuration(dayBeforeDuration),
+			DaysWorked:     daysWorked,
+			Comments:       comments,
+			UserBreakdown:  userBreakdown,
+		}
+
+		taskInfos = append(taskInfos, taskInfo)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating rows: %w", err)
+	}
+
+	logger.Debugf("Found %d daily task updates with project filtering", len(taskInfos))
+	return taskInfos, nil
+}
+
+// GetWeeklyTaskTimeEntriesWithProject retrieves weekly time entry information for tasks with optional project filtering
+func GetWeeklyTaskTimeEntriesWithProject(db *sql.DB, projectTaskID *int) ([]TaskUpdateInfo, error) {
+	logger := GetGlobalLogger()
+	logger.Debug("Querying database for weekly task time entries with project filtering")
+
+	var projectTaskIDs []int
+	if projectTaskID != nil {
+		var err error
+		projectTaskIDs, err = GetProjectTaskIDs(db, *projectTaskID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get project task IDs: %w", err)
+		}
+		if len(projectTaskIDs) == 0 {
+			return []TaskUpdateInfo{}, nil
+		}
+	}
+
+	var whereClause string
+	var args []interface{}
+	argIndex := 1
+
+	if len(projectTaskIDs) > 0 {
+		placeholders := make([]string, len(projectTaskIDs))
+		for i, taskID := range projectTaskIDs {
+			placeholders[i] = fmt.Sprintf("$%d", argIndex)
+			args = append(args, taskID)
+			argIndex++
+		}
+		whereClause = fmt.Sprintf("AND task_id IN (%s)", strings.Join(placeholders, ","))
+	}
+
+	// User breakdown query
+	userBreakdownQuery := fmt.Sprintf(`
+WITH this_week AS (
+    SELECT task_id, user_id, SUM(duration) AS total_duration
+    FROM time_entries
+    WHERE date::date >= date_trunc('week', CURRENT_DATE)::date
+      AND date::date < date_trunc('week', CURRENT_DATE)::date + INTERVAL '7 days' %s
+    GROUP BY task_id, user_id
+),
+last_week AS (
+    SELECT task_id, user_id, SUM(duration) AS total_duration
+    FROM time_entries
+    WHERE date::date >= date_trunc('week', CURRENT_DATE - INTERVAL '7 days')::date
+      AND date::date < date_trunc('week', CURRENT_DATE)::date %s
+    GROUP BY task_id, user_id
+)
+SELECT 
+    COALESCE(tw.task_id, lw.task_id) AS task_id,
+    COALESCE(tw.user_id, lw.user_id) AS user_id,
+    COALESCE(tw.total_duration, 0) AS this_week_duration, 
+    COALESCE(lw.total_duration, 0) AS last_week_duration
+FROM this_week tw
+FULL OUTER JOIN last_week lw ON tw.task_id = lw.task_id AND tw.user_id = lw.user_id
+WHERE COALESCE(tw.total_duration, 0) > 0 OR COALESCE(lw.total_duration, 0) > 0;`, whereClause, whereClause)
+
+	userRows, err := db.Query(userBreakdownQuery, append(args, args...)...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query user breakdown: %w", err)
+	}
+	defer userRows.Close()
+
+	userBreakdowns := make(map[int]map[int]UserTimeContribution)
+	for userRows.Next() {
+		var taskID, userID, thisWeekDuration, lastWeekDuration int
+		err := userRows.Scan(&taskID, &userID, &thisWeekDuration, &lastWeekDuration)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan user breakdown row: %w", err)
+		}
+
+		if _, exists := userBreakdowns[taskID]; !exists {
+			userBreakdowns[taskID] = make(map[int]UserTimeContribution)
+		}
+
+		userBreakdowns[taskID][userID] = UserTimeContribution{
+			UserID:       userID,
+			CurrentTime:  formatDuration(thisWeekDuration),
+			PreviousTime: formatDuration(lastWeekDuration),
+		}
+	}
+
+	// Main query
+	mainQuery := fmt.Sprintf(`
+WITH this_week AS (
+    SELECT task_id, SUM(duration) AS total_duration, string_agg(DISTINCT description, '; ' ORDER BY description) AS descriptions
+    FROM time_entries
+    WHERE date::date >= date_trunc('week', CURRENT_DATE)::date
+      AND date::date < date_trunc('week', CURRENT_DATE)::date + INTERVAL '7 days'
+      AND description IS NOT NULL 
+      AND description != '' %s
+    GROUP BY task_id
+),
+last_week AS (
+    SELECT task_id, SUM(duration) AS total_duration
+    FROM time_entries
+    WHERE date::date >= date_trunc('week', CURRENT_DATE - INTERVAL '7 days')::date
+      AND date::date < date_trunc('week', CURRENT_DATE)::date %s
+    GROUP BY task_id
+),
+days_worked AS (
+    SELECT task_id, COUNT(DISTINCT date::date) AS days_worked
+    FROM time_entries
+    WHERE date::date >= date_trunc('week', CURRENT_DATE)::date
+      AND date::date < date_trunc('week', CURRENT_DATE)::date + INTERVAL '7 days' %s
+    GROUP BY task_id
+)
+SELECT 
+    COALESCE(tw.task_id, lw.task_id) AS task_id,
+    t.parent_id,
+    t.name,
+    COALESCE(tw.total_duration, 0) AS this_week_duration, 
+    COALESCE(lw.total_duration, 0) AS last_week_duration,
+    COALESCE(dw.days_worked, 0) AS days_worked,
+    COALESCE(tw.descriptions, '') AS descriptions
+FROM this_week tw
+FULL OUTER JOIN last_week lw ON tw.task_id = lw.task_id
+LEFT JOIN days_worked dw ON COALESCE(tw.task_id, lw.task_id) = dw.task_id
+LEFT JOIN tasks t ON COALESCE(tw.task_id, lw.task_id) = t.task_id
+WHERE (COALESCE(tw.total_duration, 0) > 0 OR COALESCE(lw.total_duration, 0) > 0)
+  AND t.task_id IS NOT NULL
+ORDER BY COALESCE(tw.total_duration, 0) DESC;`, whereClause, whereClause, whereClause)
+
+	rows, err := db.Query(mainQuery, append(append(args, args...), args...)...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query weekly task time entries: %w", err)
+	}
+	defer rows.Close()
+
+	var taskInfos []TaskUpdateInfo
+	for rows.Next() {
+		var taskID, parentID, thisWeekDuration, lastWeekDuration, daysWorked int
+		var name, descriptions string
+		err := rows.Scan(&taskID, &parentID, &name, &thisWeekDuration, &lastWeekDuration, &daysWorked, &descriptions)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan weekly task time entry row: %w", err)
+		}
+
+		comments := []string{}
+		if descriptions != "" {
+			comments = strings.Split(descriptions, "; ")
+		}
+
+		userBreakdown := userBreakdowns[taskID]
+		if userBreakdown == nil {
+			userBreakdown = make(map[int]UserTimeContribution)
+		}
+
+		taskInfo := TaskUpdateInfo{
+			TaskID:         taskID,
+			ParentID:       parentID,
+			Name:           name,
+			CurrentPeriod:  "This Week",
+			CurrentTime:    formatDuration(thisWeekDuration),
+			PreviousPeriod: "Last Week",
+			PreviousTime:   formatDuration(lastWeekDuration),
+			DaysWorked:     daysWorked,
+			Comments:       comments,
+			UserBreakdown:  userBreakdown,
+		}
+
+		taskInfos = append(taskInfos, taskInfo)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating rows: %w", err)
+	}
+
+	logger.Debugf("Found %d weekly task updates with project filtering", len(taskInfos))
+	return taskInfos, nil
+}
+
+// GetMonthlyTaskTimeEntriesWithProject retrieves monthly time entry information for tasks with optional project filtering
+func GetMonthlyTaskTimeEntriesWithProject(db *sql.DB, projectTaskID *int) ([]TaskUpdateInfo, error) {
+	logger := GetGlobalLogger()
+	logger.Debug("Querying database for monthly task time entries with project filtering")
+
+	var projectTaskIDs []int
+	if projectTaskID != nil {
+		var err error
+		projectTaskIDs, err = GetProjectTaskIDs(db, *projectTaskID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get project task IDs: %w", err)
+		}
+		if len(projectTaskIDs) == 0 {
+			return []TaskUpdateInfo{}, nil
+		}
+	}
+
+	var whereClause string
+	var args []interface{}
+	argIndex := 1
+
+	if len(projectTaskIDs) > 0 {
+		placeholders := make([]string, len(projectTaskIDs))
+		for i, taskID := range projectTaskIDs {
+			placeholders[i] = fmt.Sprintf("$%d", argIndex)
+			args = append(args, taskID)
+			argIndex++
+		}
+		whereClause = fmt.Sprintf("AND task_id IN (%s)", strings.Join(placeholders, ","))
+	}
+
+	// User breakdown query
+	userBreakdownQuery := fmt.Sprintf(`
+WITH this_month AS (
+    SELECT task_id, user_id, SUM(duration) AS total_duration
+    FROM time_entries
+    WHERE date::date >= date_trunc('month', CURRENT_DATE)::date
+      AND date::date < date_trunc('month', CURRENT_DATE)::date + INTERVAL '1 month' %s
+    GROUP BY task_id, user_id
+),
+last_month AS (
+    SELECT task_id, user_id, SUM(duration) AS total_duration
+    FROM time_entries
+    WHERE date::date >= date_trunc('month', CURRENT_DATE - INTERVAL '1 month')::date
+      AND date::date < date_trunc('month', CURRENT_DATE)::date %s
+    GROUP BY task_id, user_id
+)
+SELECT 
+    COALESCE(tm.task_id, lm.task_id) AS task_id,
+    COALESCE(tm.user_id, lm.user_id) AS user_id,
+    COALESCE(tm.total_duration, 0) AS this_month_duration, 
+    COALESCE(lm.total_duration, 0) AS last_month_duration
+FROM this_month tm
+FULL OUTER JOIN last_month lm ON tm.task_id = lm.task_id AND tm.user_id = lm.user_id
+WHERE COALESCE(tm.total_duration, 0) > 0 OR COALESCE(lm.total_duration, 0) > 0;`, whereClause, whereClause)
+
+	userRows, err := db.Query(userBreakdownQuery, append(args, args...)...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query user breakdown: %w", err)
+	}
+	defer userRows.Close()
+
+	userBreakdowns := make(map[int]map[int]UserTimeContribution)
+	for userRows.Next() {
+		var taskID, userID, thisMonthDuration, lastMonthDuration int
+		err := userRows.Scan(&taskID, &userID, &thisMonthDuration, &lastMonthDuration)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan user breakdown row: %w", err)
+		}
+
+		if _, exists := userBreakdowns[taskID]; !exists {
+			userBreakdowns[taskID] = make(map[int]UserTimeContribution)
+		}
+
+		userBreakdowns[taskID][userID] = UserTimeContribution{
+			UserID:       userID,
+			CurrentTime:  formatDuration(thisMonthDuration),
+			PreviousTime: formatDuration(lastMonthDuration),
+		}
+	}
+
+	// Main query
+	mainQuery := fmt.Sprintf(`
+WITH this_month AS (
+    SELECT task_id, SUM(duration) AS total_duration, string_agg(DISTINCT description, '; ' ORDER BY description) AS descriptions
+    FROM time_entries
+    WHERE date::date >= date_trunc('month', CURRENT_DATE)::date
+      AND date::date < date_trunc('month', CURRENT_DATE)::date + INTERVAL '1 month'
+      AND description IS NOT NULL 
+      AND description != '' %s
+    GROUP BY task_id
+),
+last_month AS (
+    SELECT task_id, SUM(duration) AS total_duration
+    FROM time_entries
+    WHERE date::date >= date_trunc('month', CURRENT_DATE - INTERVAL '1 month')::date
+      AND date::date < date_trunc('month', CURRENT_DATE)::date %s
+    GROUP BY task_id
+),
+days_worked AS (
+    SELECT task_id, COUNT(DISTINCT date::date) AS days_worked
+    FROM time_entries
+    WHERE date::date >= date_trunc('month', CURRENT_DATE)::date
+      AND date::date < date_trunc('month', CURRENT_DATE)::date + INTERVAL '1 month' %s
+    GROUP BY task_id
+)
+SELECT 
+    COALESCE(tm.task_id, lm.task_id) AS task_id,
+    t.parent_id,
+    t.name,
+    COALESCE(tm.total_duration, 0) AS this_month_duration, 
+    COALESCE(lm.total_duration, 0) AS last_month_duration,
+    COALESCE(dw.days_worked, 0) AS days_worked,
+    COALESCE(tm.descriptions, '') AS descriptions
+FROM this_month tm
+FULL OUTER JOIN last_month lm ON tm.task_id = lm.task_id
+LEFT JOIN days_worked dw ON COALESCE(tm.task_id, lm.task_id) = dw.task_id
+LEFT JOIN tasks t ON COALESCE(tm.task_id, lm.task_id) = t.task_id
+WHERE (COALESCE(tm.total_duration, 0) > 0 OR COALESCE(lm.total_duration, 0) > 0)
+  AND t.task_id IS NOT NULL
+ORDER BY COALESCE(tm.total_duration, 0) DESC;`, whereClause, whereClause, whereClause)
+
+	rows, err := db.Query(mainQuery, append(append(args, args...), args...)...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query monthly task time entries: %w", err)
+	}
+	defer rows.Close()
+
+	var taskInfos []TaskUpdateInfo
+	for rows.Next() {
+		var taskID, parentID, thisMonthDuration, lastMonthDuration, daysWorked int
+		var name, descriptions string
+		err := rows.Scan(&taskID, &parentID, &name, &thisMonthDuration, &lastMonthDuration, &daysWorked, &descriptions)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan monthly task time entry row: %w", err)
+		}
+
+		comments := []string{}
+		if descriptions != "" {
+			comments = strings.Split(descriptions, "; ")
+		}
+
+		userBreakdown := userBreakdowns[taskID]
+		if userBreakdown == nil {
+			userBreakdown = make(map[int]UserTimeContribution)
+		}
+
+		taskInfo := TaskUpdateInfo{
+			TaskID:         taskID,
+			ParentID:       parentID,
+			Name:           name,
+			CurrentPeriod:  "This Month",
+			CurrentTime:    formatDuration(thisMonthDuration),
+			PreviousPeriod: "Last Month",
+			PreviousTime:   formatDuration(lastMonthDuration),
+			DaysWorked:     daysWorked,
+			Comments:       comments,
+			UserBreakdown:  userBreakdown,
+		}
+
+		taskInfos = append(taskInfos, taskInfo)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating rows: %w", err)
+	}
+
+	logger.Debugf("Found %d monthly task updates with project filtering", len(taskInfos))
+	return taskInfos, nil
+}
