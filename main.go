@@ -127,6 +127,20 @@ func handleCliCommands(args []string, logger *Logger) {
 			}
 			logger.Info("Full synchronization completed successfully")
 		}
+	case "full-sync-tasks-only":
+		logger.Info("Running full tasks synchronization only")
+		if err := SyncTasksToDatabaseFull(); err != nil {
+			logger.Errorf("Full tasks sync failed: %v", err)
+			os.Exit(1)
+		}
+		logger.Info("Full tasks synchronization completed successfully")
+	case "full-sync-entries-only":
+		logger.Info("Running full time entries synchronization only")
+		if err := FullSyncTimeEntriesToDatabase(); err != nil {
+			logger.Errorf("Full time entries sync failed: %v", err)
+			os.Exit(1)
+		}
+		logger.Info("Full time entries synchronization completed successfully")
 	case "threshold-check":
 		logger.Info("Running threshold monitoring check")
 		if err := RunThresholdMonitoring(); err != nil {
@@ -328,6 +342,8 @@ func showHelp() {
 	fmt.Println("  sync-time-entries        - Sync recent time entries (last day)")
 	fmt.Println("  sync-tasks               - Full sync of all tasks (manual operation)")
 	fmt.Println("  full-sync                - Full sync of all tasks and time entries")
+	fmt.Println("  full-sync-tasks-only     - Full sync of tasks only")
+	fmt.Println("  full-sync-entries-only   - Full sync of time entries only")
 	fmt.Println("  threshold-check          - Manual threshold monitoring check")
 	fmt.Println("  process-orphaned         - Process orphaned time entries")
 	fmt.Println("  cleanup-orphaned <days>   - Clean up orphaned time entries older than specified days")
