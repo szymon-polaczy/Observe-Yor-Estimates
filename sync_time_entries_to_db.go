@@ -1269,33 +1269,31 @@ func GetTaskTimeEntriesWithProject(db *sql.DB, projectTaskID *int) ([]TaskUpdate
 		}
 	}
 
-	// Build the WHERE clause for project filtering
-	var whereClause string
+	// Build project filtering clause and args - apply only at the end
+	var projectFilterClause string
 	var args []interface{}
-	argIndex := 1
-
+	
 	if len(projectTaskIDs) > 0 {
 		placeholders := make([]string, len(projectTaskIDs))
 		for i, taskID := range projectTaskIDs {
-			placeholders[i] = fmt.Sprintf("$%d", argIndex)
+			placeholders[i] = fmt.Sprintf("$%d", i+1)
 			args = append(args, taskID)
-			argIndex++
 		}
-		whereClause = fmt.Sprintf("AND task_id IN (%s)", strings.Join(placeholders, ","))
+		projectFilterClause = fmt.Sprintf("AND COALESCE(y.task_id, db.task_id) IN (%s)", strings.Join(placeholders, ","))
 	}
 
-	// User breakdown query with project filtering
+	// User breakdown query - no duplication, filter at the end
 	userBreakdownQuery := fmt.Sprintf(`
 WITH yesterday AS (
     SELECT task_id, user_id, SUM(duration) AS total_duration
     FROM time_entries
-    WHERE date::date = CURRENT_DATE - INTERVAL '1 day' %s
+    WHERE date::date = CURRENT_DATE - INTERVAL '1 day'
     GROUP BY task_id, user_id
 ),
 day_before AS (
     SELECT task_id, user_id, SUM(duration) AS total_duration
     FROM time_entries
-    WHERE date::date = CURRENT_DATE - INTERVAL '2 days' %s
+    WHERE date::date = CURRENT_DATE - INTERVAL '2 days'
     GROUP BY task_id, user_id
 )
 SELECT 
@@ -1305,9 +1303,9 @@ SELECT
     COALESCE(db.total_duration, 0) AS day_before_duration
 FROM yesterday y
 FULL OUTER JOIN day_before db ON y.task_id = db.task_id AND y.user_id = db.user_id
-WHERE COALESCE(y.total_duration, 0) > 0 OR COALESCE(db.total_duration, 0) > 0;`, whereClause, whereClause)
+WHERE (COALESCE(y.total_duration, 0) > 0 OR COALESCE(db.total_duration, 0) > 0) %s;`, projectFilterClause)
 
-	userRows, err := db.Query(userBreakdownQuery, append(args, args...)...)
+	userRows, err := db.Query(userBreakdownQuery, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query user breakdown: %w", err)
 	}
@@ -1333,27 +1331,27 @@ WHERE COALESCE(y.total_duration, 0) > 0 OR COALESCE(db.total_duration, 0) > 0;`,
 		}
 	}
 
-	// Main query with project filtering
+	// Main query - apply project filtering only once at the end
 	mainQuery := fmt.Sprintf(`
 WITH yesterday AS (
     SELECT task_id, SUM(duration) AS total_duration, string_agg(DISTINCT description, '; ' ORDER BY description) AS descriptions
     FROM time_entries
     WHERE date::date = CURRENT_DATE - INTERVAL '1 day' 
       AND description IS NOT NULL 
-      AND description != '' %s
+      AND description != ''
     GROUP BY task_id
 ),
 day_before AS (
     SELECT task_id, SUM(duration) AS total_duration
     FROM time_entries
-    WHERE date::date = CURRENT_DATE - INTERVAL '2 days' %s
+    WHERE date::date = CURRENT_DATE - INTERVAL '2 days'
     GROUP BY task_id
 ),
 days_worked AS (
     SELECT task_id, COUNT(DISTINCT date::date) AS days_worked
     FROM time_entries
     WHERE date::date >= CURRENT_DATE - INTERVAL '7 days' 
-      AND date::date <= CURRENT_DATE - INTERVAL '1 day' %s
+      AND date::date <= CURRENT_DATE - INTERVAL '1 day'
     GROUP BY task_id
 )
 SELECT 
@@ -1369,10 +1367,10 @@ FULL OUTER JOIN day_before db ON y.task_id = db.task_id
 LEFT JOIN days_worked dw ON COALESCE(y.task_id, db.task_id) = dw.task_id
 LEFT JOIN tasks t ON COALESCE(y.task_id, db.task_id) = t.task_id
 WHERE (COALESCE(y.total_duration, 0) > 0 OR COALESCE(db.total_duration, 0) > 0)
-  AND t.task_id IS NOT NULL
-ORDER BY COALESCE(y.total_duration, 0) DESC;`, whereClause, whereClause, whereClause)
+  AND t.task_id IS NOT NULL %s
+ORDER BY COALESCE(y.total_duration, 0) DESC;`, projectFilterClause)
 
-	rows, err := db.Query(mainQuery, append(append(args, args...), args...)...)
+	rows, err := db.Query(mainQuery, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query daily task time entries: %w", err)
 	}
@@ -1439,34 +1437,33 @@ func GetWeeklyTaskTimeEntriesWithProject(db *sql.DB, projectTaskID *int) ([]Task
 		}
 	}
 
-	var whereClause string
+	// Build project filtering clause and args - apply only at the end
+	var projectFilterClause string
 	var args []interface{}
-	argIndex := 1
-
+	
 	if len(projectTaskIDs) > 0 {
 		placeholders := make([]string, len(projectTaskIDs))
 		for i, taskID := range projectTaskIDs {
-			placeholders[i] = fmt.Sprintf("$%d", argIndex)
+			placeholders[i] = fmt.Sprintf("$%d", i+1)
 			args = append(args, taskID)
-			argIndex++
 		}
-		whereClause = fmt.Sprintf("AND task_id IN (%s)", strings.Join(placeholders, ","))
+		projectFilterClause = fmt.Sprintf("AND COALESCE(tw.task_id, lw.task_id) IN (%s)", strings.Join(placeholders, ","))
 	}
 
-	// User breakdown query
+	// User breakdown query - no duplication, filter at the end
 	userBreakdownQuery := fmt.Sprintf(`
 WITH this_week AS (
     SELECT task_id, user_id, SUM(duration) AS total_duration
     FROM time_entries
     WHERE date::date >= date_trunc('week', CURRENT_DATE)::date
-      AND date::date < date_trunc('week', CURRENT_DATE)::date + INTERVAL '7 days' %s
+      AND date::date < date_trunc('week', CURRENT_DATE)::date + INTERVAL '7 days'
     GROUP BY task_id, user_id
 ),
 last_week AS (
     SELECT task_id, user_id, SUM(duration) AS total_duration
     FROM time_entries
     WHERE date::date >= date_trunc('week', CURRENT_DATE - INTERVAL '7 days')::date
-      AND date::date < date_trunc('week', CURRENT_DATE)::date %s
+      AND date::date < date_trunc('week', CURRENT_DATE)::date
     GROUP BY task_id, user_id
 )
 SELECT 
@@ -1476,9 +1473,9 @@ SELECT
     COALESCE(lw.total_duration, 0) AS last_week_duration
 FROM this_week tw
 FULL OUTER JOIN last_week lw ON tw.task_id = lw.task_id AND tw.user_id = lw.user_id
-WHERE COALESCE(tw.total_duration, 0) > 0 OR COALESCE(lw.total_duration, 0) > 0;`, whereClause, whereClause)
+WHERE (COALESCE(tw.total_duration, 0) > 0 OR COALESCE(lw.total_duration, 0) > 0) %s;`, projectFilterClause)
 
-	userRows, err := db.Query(userBreakdownQuery, append(args, args...)...)
+	userRows, err := db.Query(userBreakdownQuery, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query user breakdown: %w", err)
 	}
@@ -1503,7 +1500,7 @@ WHERE COALESCE(tw.total_duration, 0) > 0 OR COALESCE(lw.total_duration, 0) > 0;`
 		}
 	}
 
-	// Main query
+	// Main query - apply project filtering only once at the end
 	mainQuery := fmt.Sprintf(`
 WITH this_week AS (
     SELECT task_id, SUM(duration) AS total_duration, string_agg(DISTINCT description, '; ' ORDER BY description) AS descriptions
@@ -1511,21 +1508,21 @@ WITH this_week AS (
     WHERE date::date >= date_trunc('week', CURRENT_DATE)::date
       AND date::date < date_trunc('week', CURRENT_DATE)::date + INTERVAL '7 days'
       AND description IS NOT NULL 
-      AND description != '' %s
+      AND description != ''
     GROUP BY task_id
 ),
 last_week AS (
     SELECT task_id, SUM(duration) AS total_duration
     FROM time_entries
     WHERE date::date >= date_trunc('week', CURRENT_DATE - INTERVAL '7 days')::date
-      AND date::date < date_trunc('week', CURRENT_DATE)::date %s
+      AND date::date < date_trunc('week', CURRENT_DATE)::date
     GROUP BY task_id
 ),
 days_worked AS (
     SELECT task_id, COUNT(DISTINCT date::date) AS days_worked
     FROM time_entries
     WHERE date::date >= date_trunc('week', CURRENT_DATE)::date
-      AND date::date < date_trunc('week', CURRENT_DATE)::date + INTERVAL '7 days' %s
+      AND date::date < date_trunc('week', CURRENT_DATE)::date + INTERVAL '7 days'
     GROUP BY task_id
 )
 SELECT 
@@ -1541,10 +1538,10 @@ FULL OUTER JOIN last_week lw ON tw.task_id = lw.task_id
 LEFT JOIN days_worked dw ON COALESCE(tw.task_id, lw.task_id) = dw.task_id
 LEFT JOIN tasks t ON COALESCE(tw.task_id, lw.task_id) = t.task_id
 WHERE (COALESCE(tw.total_duration, 0) > 0 OR COALESCE(lw.total_duration, 0) > 0)
-  AND t.task_id IS NOT NULL
-ORDER BY COALESCE(tw.total_duration, 0) DESC;`, whereClause, whereClause, whereClause)
+  AND t.task_id IS NOT NULL %s
+ORDER BY COALESCE(tw.total_duration, 0) DESC;`, projectFilterClause)
 
-	rows, err := db.Query(mainQuery, append(append(args, args...), args...)...)
+	rows, err := db.Query(mainQuery, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query weekly task time entries: %w", err)
 	}
@@ -1610,34 +1607,33 @@ func GetMonthlyTaskTimeEntriesWithProject(db *sql.DB, projectTaskID *int) ([]Tas
 		}
 	}
 
-	var whereClause string
+	// Build project filtering clause and args - apply only at the end
+	var projectFilterClause string
 	var args []interface{}
-	argIndex := 1
-
+	
 	if len(projectTaskIDs) > 0 {
 		placeholders := make([]string, len(projectTaskIDs))
 		for i, taskID := range projectTaskIDs {
-			placeholders[i] = fmt.Sprintf("$%d", argIndex)
+			placeholders[i] = fmt.Sprintf("$%d", i+1)
 			args = append(args, taskID)
-			argIndex++
 		}
-		whereClause = fmt.Sprintf("AND task_id IN (%s)", strings.Join(placeholders, ","))
+		projectFilterClause = fmt.Sprintf("AND COALESCE(tm.task_id, lm.task_id) IN (%s)", strings.Join(placeholders, ","))
 	}
 
-	// User breakdown query
+	// User breakdown query - no duplication, filter at the end
 	userBreakdownQuery := fmt.Sprintf(`
 WITH this_month AS (
     SELECT task_id, user_id, SUM(duration) AS total_duration
     FROM time_entries
     WHERE date::date >= date_trunc('month', CURRENT_DATE)::date
-      AND date::date < date_trunc('month', CURRENT_DATE)::date + INTERVAL '1 month' %s
+      AND date::date < date_trunc('month', CURRENT_DATE)::date + INTERVAL '1 month'
     GROUP BY task_id, user_id
 ),
 last_month AS (
     SELECT task_id, user_id, SUM(duration) AS total_duration
     FROM time_entries
     WHERE date::date >= date_trunc('month', CURRENT_DATE - INTERVAL '1 month')::date
-      AND date::date < date_trunc('month', CURRENT_DATE)::date %s
+      AND date::date < date_trunc('month', CURRENT_DATE)::date
     GROUP BY task_id, user_id
 )
 SELECT 
@@ -1647,9 +1643,9 @@ SELECT
     COALESCE(lm.total_duration, 0) AS last_month_duration
 FROM this_month tm
 FULL OUTER JOIN last_month lm ON tm.task_id = lm.task_id AND tm.user_id = lm.user_id
-WHERE COALESCE(tm.total_duration, 0) > 0 OR COALESCE(lm.total_duration, 0) > 0;`, whereClause, whereClause)
+WHERE (COALESCE(tm.total_duration, 0) > 0 OR COALESCE(lm.total_duration, 0) > 0) %s;`, projectFilterClause)
 
-	userRows, err := db.Query(userBreakdownQuery, append(args, args...)...)
+	userRows, err := db.Query(userBreakdownQuery, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query user breakdown: %w", err)
 	}
@@ -1674,7 +1670,7 @@ WHERE COALESCE(tm.total_duration, 0) > 0 OR COALESCE(lm.total_duration, 0) > 0;`
 		}
 	}
 
-	// Main query
+	// Main query - apply project filtering only once at the end
 	mainQuery := fmt.Sprintf(`
 WITH this_month AS (
     SELECT task_id, SUM(duration) AS total_duration, string_agg(DISTINCT description, '; ' ORDER BY description) AS descriptions
@@ -1682,21 +1678,21 @@ WITH this_month AS (
     WHERE date::date >= date_trunc('month', CURRENT_DATE)::date
       AND date::date < date_trunc('month', CURRENT_DATE)::date + INTERVAL '1 month'
       AND description IS NOT NULL 
-      AND description != '' %s
+      AND description != ''
     GROUP BY task_id
 ),
 last_month AS (
     SELECT task_id, SUM(duration) AS total_duration
     FROM time_entries
     WHERE date::date >= date_trunc('month', CURRENT_DATE - INTERVAL '1 month')::date
-      AND date::date < date_trunc('month', CURRENT_DATE)::date %s
+      AND date::date < date_trunc('month', CURRENT_DATE)::date
     GROUP BY task_id
 ),
 days_worked AS (
     SELECT task_id, COUNT(DISTINCT date::date) AS days_worked
     FROM time_entries
     WHERE date::date >= date_trunc('month', CURRENT_DATE)::date
-      AND date::date < date_trunc('month', CURRENT_DATE)::date + INTERVAL '1 month' %s
+      AND date::date < date_trunc('month', CURRENT_DATE)::date + INTERVAL '1 month'
     GROUP BY task_id
 )
 SELECT 
@@ -1712,10 +1708,10 @@ FULL OUTER JOIN last_month lm ON tm.task_id = lm.task_id
 LEFT JOIN days_worked dw ON COALESCE(tm.task_id, lm.task_id) = dw.task_id
 LEFT JOIN tasks t ON COALESCE(tm.task_id, lm.task_id) = t.task_id
 WHERE (COALESCE(tm.total_duration, 0) > 0 OR COALESCE(lm.total_duration, 0) > 0)
-  AND t.task_id IS NOT NULL
-ORDER BY COALESCE(tm.total_duration, 0) DESC;`, whereClause, whereClause, whereClause)
+  AND t.task_id IS NOT NULL %s
+ORDER BY COALESCE(tm.total_duration, 0) DESC;`, projectFilterClause)
 
-	rows, err := db.Query(mainQuery, append(append(args, args...), args...)...)
+	rows, err := db.Query(mainQuery, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query monthly task time entries: %w", err)
 	}
