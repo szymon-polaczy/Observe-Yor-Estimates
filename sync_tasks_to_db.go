@@ -262,7 +262,7 @@ func getTimecampTasks() ([]JsonTask, error) {
 	// Add parameters to optimize API response size and include archived tasks
 	q := request.URL.Query()
 	q.Add("minimal", "1")
-	q.Add("archived", "1") // Include archived tasks in the sync
+	q.Add("exclude_archived", "1") // Include archived tasks in the sync
 	request.URL.RawQuery = q.Encode()
 
 	request.Header.Add("Authorization", authBearer)
