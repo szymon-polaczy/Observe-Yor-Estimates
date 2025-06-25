@@ -1047,6 +1047,11 @@ func formatProjectMessageWithComments(project string, tasks []TaskUpdateInfo, pe
 
 // GetTasksOverThreshold returns tasks that are over a specific percentage of their estimation
 func GetTasksOverThreshold(db *sql.DB, threshold float64, period string) ([]TaskUpdateInfo, error) {
+	return GetTasksOverThresholdWithProject(db, threshold, period, nil)
+}
+
+// GetTasksOverThresholdWithProject returns tasks that are over a specific percentage of their estimation, optionally filtered by project
+func GetTasksOverThresholdWithProject(db *sql.DB, threshold float64, period string, projectTaskID *int) ([]TaskUpdateInfo, error) {
 	logger := GetGlobalLogger()
 
 	var fromDate, toDate string
@@ -1066,8 +1071,29 @@ func GetTasksOverThreshold(db *sql.DB, threshold float64, period string) ([]Task
 		toDate = time.Now().Format("2006-01-02")
 	}
 
+	// Build project filtering parameters
+	var projectFilterClause string
+	var userQueryArgs []interface{}
+	var mainQueryArgs []interface{}
+	
+	userQueryArgs = append(userQueryArgs, fromDate, toDate)
+	mainQueryArgs = append(mainQueryArgs, fromDate, toDate)
+	
+	if projectTaskID != nil {
+		projectTaskIDs, err := GetProjectTaskIDs(db, *projectTaskID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get project task IDs: %w", err)
+		}
+		if len(projectTaskIDs) == 0 {
+			return []TaskUpdateInfo{}, nil
+		}
+		projectFilterClause = " AND t.task_id = ANY($3)"
+		userQueryArgs = append(userQueryArgs, pq.Array(projectTaskIDs))
+		mainQueryArgs = append(mainQueryArgs, pq.Array(projectTaskIDs))
+	}
+
 	// First get user breakdown data for all tasks with estimations
-	userBreakdownQuery := `
+	userBreakdownQuery := fmt.Sprintf(`
 		SELECT 
 			t.task_id,
 			te.user_id,
@@ -1075,12 +1101,12 @@ func GetTasksOverThreshold(db *sql.DB, threshold float64, period string) ([]Task
 			COALESCE(SUM(CASE WHEN te.date < $1 THEN te.duration ELSE 0 END), 0) as previous_duration
 		FROM tasks t
 		INNER JOIN time_entries te ON t.task_id = te.task_id
-		WHERE t.name ~ '\[([0-9]+(?:[.,][0-9]+)?h?[-+][0-9]+(?:[.,][0-9]+)?h?|[0-9]+(?:[.,][0-9]+)?h?)\]'  -- Only tasks with estimation patterns
+		WHERE t.name ~ '\[([0-9]+(?:[.,][0-9]+)?h?[-+][0-9]+(?:[.,][0-9]+)?h?|[0-9]+(?:[.,][0-9]+)?h?)\]'%s  -- Only tasks with estimation patterns
 		GROUP BY t.task_id, te.user_id
 		HAVING COALESCE(SUM(te.duration), 0) > 0  -- Only users with time logged
-	`
+	`, projectFilterClause)
 
-	userRows, err := db.Query(userBreakdownQuery, fromDate, toDate)
+	userRows, err := db.Query(userBreakdownQuery, userQueryArgs...)
 	if err != nil {
 		logger.Warnf("Failed to query user breakdown for threshold tasks: %v", err)
 	}
@@ -1110,7 +1136,7 @@ func GetTasksOverThreshold(db *sql.DB, threshold float64, period string) ([]Task
 	}
 
 	// Main query - get all tasks with estimations and let Go handle the threshold logic
-	query := `
+	query := fmt.Sprintf(`
 		SELECT 
 			t.task_id,
 			t.parent_id,
@@ -1119,13 +1145,13 @@ func GetTasksOverThreshold(db *sql.DB, threshold float64, period string) ([]Task
 			COALESCE(SUM(CASE WHEN te.date < $1 THEN te.duration ELSE 0 END), 0) as previous_duration
 		FROM tasks t
 		LEFT JOIN time_entries te ON t.task_id = te.task_id
-		WHERE t.name ~ '\[([0-9]+(?:[.,][0-9]+)?h?[-+][0-9]+(?:[.,][0-9]+)?h?|[0-9]+(?:[.,][0-9]+)?h?)\]'  -- Only tasks with estimation patterns
+		WHERE t.name ~ '\[([0-9]+(?:[.,][0-9]+)?h?[-+][0-9]+(?:[.,][0-9]+)?h?|[0-9]+(?:[.,][0-9]+)?h?)\]'%s  -- Only tasks with estimation patterns
 		GROUP BY t.task_id, t.parent_id, t.name
 		HAVING COALESCE(SUM(te.duration), 0) > 0  -- Only tasks with time logged
 		ORDER BY t.task_id
-	`
+	`, projectFilterClause)
 
-	rows, err := db.Query(query, fromDate, toDate)
+	rows, err := db.Query(query, mainQueryArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("could not query tasks over threshold: %w", err)
 	}

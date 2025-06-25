@@ -272,6 +272,7 @@ func (sr *SmartRouter) HandleThresholdRequest(req *SlackCommandRequest) error {
 		ChannelID:   req.ChannelID,
 		UserID:      req.UserID,
 		CommandType: req.Command,
+		ProjectName: req.ProjectName, // Add project context
 	}
 
 	sr.logger.Infof("Processing threshold request from user %s: %s", req.UserName, req.Text)
@@ -283,8 +284,14 @@ func (sr *SmartRouter) HandleThresholdRequest(req *SlackCommandRequest) error {
 	}
 
 	// Send initial progress message
-	progressResp, err := sr.slackClient.SendProgressMessage(ctx,
-		fmt.Sprintf("🔍 Searching for tasks over %.0f%% threshold for %s period...", threshold, period))
+	var progressMsg string
+	if req.ProjectName != "" && req.ProjectName != "all" {
+		progressMsg = fmt.Sprintf("🔍 Searching for %s project tasks over %.0f%% threshold for %s period...", req.ProjectName, threshold, period)
+	} else {
+		progressMsg = fmt.Sprintf("🔍 Searching for tasks over %.0f%% threshold for %s period...", threshold, period)
+	}
+	
+	progressResp, err := sr.slackClient.SendProgressMessage(ctx, progressMsg)
 	if err != nil {
 		return sr.slackClient.SendErrorResponse(ctx, "Failed to start threshold check")
 	}
@@ -304,7 +311,11 @@ func (sr *SmartRouter) HandleThresholdRequest(req *SlackCommandRequest) error {
 
 func (sr *SmartRouter) processThresholdWithProgress(ctx *ConversationContext, threshold float64, period string) {
 	// Show progress updates
-	sr.slackClient.UpdateProgress(ctx, "📊 Querying database for tasks with estimations...")
+	if ctx.ProjectName != "" && ctx.ProjectName != "all" {
+		sr.slackClient.UpdateProgress(ctx, fmt.Sprintf("📊 Querying database for project '%s' tasks with estimations...", ctx.ProjectName))
+	} else {
+		sr.slackClient.UpdateProgress(ctx, "📊 Querying database for tasks with estimations...")
+	}
 	time.Sleep(500 * time.Millisecond)
 
 	// Get database connection
@@ -314,11 +325,48 @@ func (sr *SmartRouter) processThresholdWithProgress(ctx *ConversationContext, th
 		return
 	}
 
-	sr.slackClient.UpdateProgress(ctx, fmt.Sprintf("📈 Analyzing tasks over %.0f%% threshold...", threshold))
-	time.Sleep(1 * time.Second)
-
-	// Get tasks over threshold
-	taskInfos, err := GetTasksOverThreshold(db, threshold, period)
+	var taskInfos []TaskUpdateInfo
+	
+	if ctx.ProjectName != "" && ctx.ProjectName != "all" {
+		// Project-specific threshold query
+		sr.slackClient.UpdateProgress(ctx, fmt.Sprintf("🔍 Finding project '%s'...", ctx.ProjectName))
+		time.Sleep(500 * time.Millisecond)
+		
+		// Find the project
+		projects, err := FindProjectsByName(db, ctx.ProjectName)
+		if err != nil {
+			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to find project: %v", err))
+			return
+		}
+		
+		if len(projects) == 0 {
+			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Project '%s' not found. Use `/oye help` to see available commands.", ctx.ProjectName))
+			return
+		}
+		
+		if len(projects) > 1 {
+			var projectNames []string
+			for _, proj := range projects {
+				projectNames = append(projectNames, proj.Name)
+			}
+			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Multiple projects found for '%s': %s. Please be more specific.", ctx.ProjectName, strings.Join(projectNames, ", ")))
+			return
+		}
+		
+		project := projects[0]
+		sr.slackClient.UpdateProgress(ctx, fmt.Sprintf("📈 Analyzing %s project tasks over %.0f%% threshold...", project.Name, threshold))
+		time.Sleep(1 * time.Second)
+		
+		// Get project-specific tasks over threshold
+		taskInfos, err = GetTasksOverThresholdWithProject(db, threshold, period, &project.TimeCampTaskID)
+	} else {
+		// All projects threshold query
+		sr.slackClient.UpdateProgress(ctx, fmt.Sprintf("📈 Analyzing tasks over %.0f%% threshold...", threshold))
+		time.Sleep(1 * time.Second)
+		
+		// Get all tasks over threshold
+		taskInfos, err = GetTasksOverThreshold(db, threshold, period)
+	}
 	if err != nil {
 		errorMessage := fmt.Sprintf("Failed to get tasks over threshold: ```%v```", err)
 		sr.slackClient.SendErrorResponse(ctx, errorMessage)
