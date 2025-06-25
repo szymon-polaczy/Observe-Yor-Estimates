@@ -770,24 +770,17 @@ func (s *SlackAPIClient) SendThresholdResults(ctx *ConversationContext, taskInfo
 	// Send one message per project
 	for i, project := range projectNames {
 		tasks := projectGroups[project]
-		projectMessage := s.formatThresholdProjectMessage(project, tasks, threshold, period, i+1, len(projectNames))
-
-		projectPayload := map[string]interface{}{
-			"channel": ctx.ChannelID,
-			"text":    projectMessage.Text,
-			"blocks":  projectMessage.Blocks,
+		
+		// Use the intelligent splitting logic that respects both block and character limits
+		headerBlocks := 3 // spacing, section, divider (splitTasksByBlockLimit accounts for footer internally)
+		taskChunks := splitTasksByBlockLimit(tasks, headerBlocks)
+		
+		// Send each chunk
+		for chunkIndex, taskChunk := range taskChunks {
+			numChunks := len(taskChunks)
+			projectMessage := s.formatThresholdProjectMessage(project, taskChunk, threshold, period, i+1, len(projectNames), chunkIndex+1, numChunks)
+			s.sendChunkedMessage(ctx, projectMessage)
 		}
-
-		if ctx.ThreadTS != "" {
-			projectPayload["thread_ts"] = ctx.ThreadTS
-		}
-
-		if err := s.sendSlackAPIRequest("chat.postMessage", projectPayload); err != nil {
-			s.logger.Errorf("Failed to send threshold project message for %s: %v", project, err)
-		}
-
-		// Add delay between project messages for better visual separation
-		time.Sleep(500 * time.Millisecond)
 	}
 
 	return nil
@@ -922,7 +915,7 @@ func (s *SlackAPIClient) formatThresholdHeaderMessage(threshold float64, period 
 }
 
 // formatThresholdProjectMessage creates a message for a single project in threshold reports
-func (s *SlackAPIClient) formatThresholdProjectMessage(project string, tasks []TaskUpdateInfo, threshold float64, period string, projectNum, totalProjects int) SlackMessage {
+func (s *SlackAPIClient) formatThresholdProjectMessage(project string, tasks []TaskUpdateInfo, threshold float64, period string, projectNum, totalProjects, partNum, totalParts int) SlackMessage {
 	var emoji string
 	switch {
 	case threshold >= 100:
@@ -945,6 +938,9 @@ func (s *SlackAPIClient) formatThresholdProjectMessage(project string, tasks []T
 	}
 
 	headerText := fmt.Sprintf("%s %s (%d/%d)", emoji, projectTitle, projectNum, totalProjects)
+	if totalParts > 1 {
+		headerText = fmt.Sprintf("%s - Part %d of %d", headerText, partNum, totalParts)
+	}
 
 	var messageText strings.Builder
 	messageText.WriteString(fmt.Sprintf("*%s*\n", headerText))
