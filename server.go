@@ -168,26 +168,32 @@ func handleUnifiedOYECommand(w http.ResponseWriter, r *http.Request) {
 
 func sendUnifiedHelp(w http.ResponseWriter, req *SlackCommandRequest) {
 	helpText := "*🎯 OYE (Observe-Yor-Estimates) Commands*\n\n" +
-		"*Quick Updates:*\n" +
-		"• `/oye` or `/oye daily` - Daily task update\n" +
-		"• `/oye weekly` - Weekly task summary\n" +
-		"• `/oye monthly` - Monthly task report\n\n" +
+		"*Time Frame Options:*\n" +
+		"• `/oye` or `/oye daily` - Yesterday's tasks (default)\n" +
+		"• `/oye today` - Today's tasks\n" +
+		"• `/oye yesterday` - Yesterday's tasks\n" +
+		"• `/oye weekly` or `/oye last week` - Last week's tasks\n" +
+		"• `/oye this week` - Current week's tasks\n" +
+		"• `/oye monthly` or `/oye last month` - Last month's tasks\n" +
+		"• `/oye this month` - Current month's tasks\n" +
+		"• `/oye last 7 days` - Custom range (1-60 days)\n\n" +
 		"*Project Filtering:*\n" +
 		"• `/oye \"project name\" daily` - Daily update for specific project\n" +
-		"• `/oye marketing weekly` - Weekly update for project (fuzzy match)\n" +
-		"• `/oye all monthly` - Monthly update for all projects\n" +
-		"• `/oye \"3dconnexion\" over 90 monthly` - Project-specific thresholds\n\n" +
+		"• `/oye marketing last week` - Weekly update for project (fuzzy match)\n" +
+		"• `/oye all this month` - Monthly update for all projects\n" +
+		"• `/oye \"3dconnexion\" over 90 last 30 days` - Project-specific thresholds\n\n" +
 		"*Threshold Monitoring:*\n" +
-		"• `/oye over 50 daily` - Tasks over 50% of estimation (daily)\n" +
-		"• `/oye over 80 weekly` - Tasks over 80% of estimation (weekly)\n" +
-		"• `/oye over 100 monthly` - Tasks over budget (monthly)\n\n" +
+		"• `/oye over 50 today` - Tasks over 50% of estimation\n" +
+		"• `/oye over 80 this week` - Tasks over 80% of estimation\n" +
+		"• `/oye over 100 last month` - Tasks over budget\n\n" +
 		"*Data Management:*\n" +
 		"• `/oye sync` - Full data synchronization\n\n" +
 		"*Tips:*\n" +
 		"• Updates are private by default (only you see them)\n" +
 		"• Use \"public\" in any command to share with channel\n" +
-		"• Quote project names with spaces: `/oye \"My Project\" daily`\n" +
+		"• Quote project names with spaces: `/oye \"My Project\" today`\n" +
 		"• Project names support fuzzy matching\n" +
+		"• Custom ranges: `/oye last 14 days` (1-60 days supported)\n" +
 		"• The system automatically monitors for threshold crossings"
 
 	response := SlackCommandResponse{
