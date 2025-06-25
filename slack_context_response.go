@@ -242,7 +242,9 @@ func (s *SlackAPIClient) sendProjectSplitMessages(ctx *ConversationContext, proj
 	// Send one message per project
 	for i, project := range projectNames {
 		tasks := projectGroups[project]
-		const maxTasksPerMessage = 47 // Slack limit is 50 blocks, leave a small buffer
+		// Use the constant from slack_updates_utils.go and account for header/footer blocks
+		headerFooterBlocks := 5 // 3 header blocks + 2 spacing blocks  
+		maxTasksPerMessage := MaxBlocksPerMessage - headerFooterBlocks
 
 		if len(tasks) > maxTasksPerMessage {
 			// Split this project into multiple messages (chunks)
@@ -270,6 +272,33 @@ func (s *SlackAPIClient) sendProjectSplitMessages(ctx *ConversationContext, proj
 
 // sendChunkedMessage is a helper to send project messages and handle errors
 func (s *SlackAPIClient) sendChunkedMessage(ctx *ConversationContext, message SlackMessage) {
+	// Validate message before sending
+	validation := validateSlackMessage(message)
+	if !validation.IsValid {
+		s.logger.Errorf("Message chunk validation failed: %s", validation.ErrorMessage)
+		
+		// Try to fix the message if possible
+		if validation.ExceedsChars {
+			truncatedText := message.Text
+			if len(truncatedText) > MaxSlackMessageChars-100 {
+				truncatedText = truncatedText[:MaxSlackMessageChars-100] + "...\n\n(Message truncated due to size limit)"
+			}
+			message.Text = truncatedText
+		}
+		
+		if validation.ExceedsBlocks {
+			// Truncate blocks as last resort
+			if len(message.Blocks) > MaxSlackBlocks {
+				message.Blocks = message.Blocks[:MaxSlackBlocks-1]
+				// Add a truncation notice
+				message.Blocks = append(message.Blocks, Block{
+					Type: "section",
+					Text: &Text{Type: "mrkdwn", Text: "_... (Some content truncated due to message size limits)_"},
+				})
+			}
+		}
+	}
+
 	payload := map[string]interface{}{
 		"channel": ctx.ChannelID,
 		"text":    message.Text,
@@ -597,11 +626,28 @@ func (s *SlackAPIClient) sendSlackAPIRequestWithResponse(endpoint string, payloa
 		return nil, fmt.Errorf("slack bot token not configured")
 	}
 
+	// Validate payload if it contains blocks
+	if blocks, hasBlocks := payload["blocks"]; hasBlocks {
+		if blocksArray, ok := blocks.([]Block); ok {
+			blockCount := len(blocksArray)
+			if blockCount > MaxSlackBlocks {
+				s.logger.Errorf("Payload exceeds block limit: %d > %d", blockCount, MaxSlackBlocks)
+				return nil, fmt.Errorf("payload exceeds block limit: %d > %d", blockCount, MaxSlackBlocks)
+			}
+		}
+	}
+
 	url := fmt.Sprintf("https://slack.com/api/%s", endpoint)
 
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling payload: %w", err)
+	}
+
+	// Check character limit of the JSON payload
+	if len(jsonData) > MaxSlackMessageChars {
+		s.logger.Errorf("Payload exceeds character limit: %d > %d", len(jsonData), MaxSlackMessageChars)
+		return nil, fmt.Errorf("payload exceeds character limit: %d > %d", len(jsonData), MaxSlackMessageChars)
 	}
 
 	// Log the JSON payload for debugging (first 500 chars to avoid spam)

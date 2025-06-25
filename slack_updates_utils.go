@@ -92,6 +92,136 @@ type ThresholdAlert struct {
 	JustCrossed      bool // true if this threshold was just crossed
 }
 
+// Constants for Slack API limits
+const (
+	MaxSlackBlocks = 50
+	MaxSlackMessageChars = 3000
+	MaxBlocksPerMessage = 47 // Leave buffer for header/footer blocks
+	MaxMessageCharsWithBuffer = 2900 // Leave buffer for safety margin
+)
+
+// MessageValidationResult holds validation results
+type MessageValidationResult struct {
+	IsValid         bool
+	BlockCount      int
+	CharacterCount  int
+	ExceedsBlocks   bool
+	ExceedsChars    bool
+	ErrorMessage    string
+}
+
+// validateSlackMessage checks if a message meets Slack API limits
+func validateSlackMessage(message SlackMessage) MessageValidationResult {
+	blockCount := len(message.Blocks)
+	
+	// Calculate total character count of the entire message payload
+	// This is what Slack actually limits
+	messageJson, err := json.Marshal(message)
+	var charCount int
+	if err != nil {
+		// Fallback: estimate character count
+		charCount = len(message.Text)
+		if blockCount > 0 {
+			blockJson, err := json.Marshal(message.Blocks)
+			if err == nil {
+				charCount += len(string(blockJson))
+			}
+		}
+	} else {
+		charCount = len(string(messageJson))
+	}
+	
+	exceedsBlocks := blockCount > MaxSlackBlocks
+	exceedsChars := charCount > MaxSlackMessageChars
+	isValid := !exceedsBlocks && !exceedsChars
+	
+	var errorMsg string
+	if exceedsBlocks && exceedsChars {
+		errorMsg = fmt.Sprintf("Message exceeds both block limit (%d > %d) and character limit (%d > %d)", 
+			blockCount, MaxSlackBlocks, charCount, MaxSlackMessageChars)
+	} else if exceedsBlocks {
+		errorMsg = fmt.Sprintf("Message exceeds block limit (%d > %d)", blockCount, MaxSlackBlocks)
+	} else if exceedsChars {
+		errorMsg = fmt.Sprintf("Message exceeds character limit (%d > %d)", charCount, MaxSlackMessageChars)
+	}
+	
+	return MessageValidationResult{
+		IsValid:         isValid,
+		BlockCount:      blockCount,
+		CharacterCount:  charCount,
+		ExceedsBlocks:   exceedsBlocks,
+		ExceedsChars:    exceedsChars,
+		ErrorMessage:    errorMsg,
+	}
+}
+
+// countBlocksInTasks estimates how many blocks will be needed for a list of tasks
+func countBlocksInTasks(tasks []TaskUpdateInfo) int {
+	// Each task typically creates 1 block, but may create more if it has many comments
+	blockCount := 0
+	for _, task := range tasks {
+		blockCount++ // Base task block
+		
+		// Additional blocks for comments if they're very long
+		task.Comments = removeEmptyComments(task.Comments)
+		if len(task.Comments) > 10 {
+			// Estimate additional blocks for comment overflow
+			blockCount += (len(task.Comments) - 10) / 15 // Rough estimate
+		}
+	}
+	return blockCount
+}
+
+// splitTasksByBlockLimit splits tasks into chunks that respect both block and character limits
+func splitTasksByBlockLimit(tasks []TaskUpdateInfo, headerBlocks int) [][]TaskUpdateInfo {
+	var chunks [][]TaskUpdateInfo
+	var currentChunk []TaskUpdateInfo
+	currentBlockCount := headerBlocks // Start with header blocks
+	
+	for _, task := range tasks {
+		taskBlocks := 1 // Base assumption: 1 block per task
+		
+		// Check if adding this task would exceed the block limit
+		if currentBlockCount + taskBlocks + 1 > MaxBlocksPerMessage { // +1 for footer
+			// Start a new chunk
+			if len(currentChunk) > 0 {
+				chunks = append(chunks, currentChunk)
+				currentChunk = []TaskUpdateInfo{}
+				currentBlockCount = headerBlocks
+			}
+		}
+		
+		// Add the task to current chunk
+		newChunk := append(currentChunk, task)
+		
+		// Create a test message to check character limits
+		testMessage := formatProjectMessage("Test", newChunk, "test")
+		validation := validateSlackMessage(testMessage)
+		
+		// If adding this task would exceed character limits (with buffer), start a new chunk
+		if validation.CharacterCount > MaxMessageCharsWithBuffer && len(currentChunk) > 0 {
+			chunks = append(chunks, currentChunk)
+			currentChunk = []TaskUpdateInfo{task}
+			currentBlockCount = headerBlocks + taskBlocks
+		} else {
+			currentChunk = newChunk
+			currentBlockCount += taskBlocks
+		}
+	}
+	
+	// Add the last chunk if it has tasks
+	if len(currentChunk) > 0 {
+		chunks = append(chunks, currentChunk)
+	}
+	
+	// If no chunks were created (empty task list), return empty slice
+	if len(chunks) == 0 {
+		chunks = append(chunks, []TaskUpdateInfo{})
+	}
+	
+	return chunks
+}
+
 func SendSlackUpdate(period string, responseURL string, asJSON bool) {
 	logger := GetGlobalLogger()
 	logger.Infof("Starting %s Slack update", period)
@@ -288,7 +418,8 @@ func formatProjectMessage(project string, tasks []TaskUpdateInfo, period string)
 	var messageText strings.Builder
 	messageText.WriteString(fmt.Sprintf("*%s* - %s\n\n", title, date))
 
-	blocks := []Block{
+	// Header blocks (4 blocks total)
+	headerBlocks := []Block{
 		// Add spacing at the top for better separation between projects
 		{
 			Type: "section",
@@ -307,10 +438,24 @@ func formatProjectMessage(project string, tasks []TaskUpdateInfo, period string)
 		{Type: "divider"},
 	}
 
+	// Check if we need to split tasks due to block limits
+	headerBlockCount := len(headerBlocks)
+	footerBlockCount := 1 // One spacing block at the bottom
+	maxTasksForMessage := MaxBlocksPerMessage - headerBlockCount - footerBlockCount
+	
+	blocks := make([]Block, 0, MaxBlocksPerMessage)
+	blocks = append(blocks, headerBlocks...)
+
+	// Only add tasks that fit within the block limit
+	taskCount := 0
 	for _, task := range tasks {
+		if taskCount >= maxTasksForMessage {
+			break // Stop adding tasks to avoid exceeding block limit
+		}
 		taskBlock := formatSingleTaskBlock(task)
 		blocks = append(blocks, taskBlock)
 		appendTaskTextMessage(&messageText, task)
+		taskCount++
 	}
 
 	// Add spacing at the bottom for better separation between projects
@@ -319,10 +464,28 @@ func formatProjectMessage(project string, tasks []TaskUpdateInfo, period string)
 		Text: &Text{Type: "mrkdwn", Text: " "},
 	})
 
-	return SlackMessage{
+	message := SlackMessage{
 		Text:   messageText.String(),
 		Blocks: blocks,
 	}
+
+	// Validate the message
+	validation := validateSlackMessage(message)
+	if !validation.IsValid {
+		logger := GetGlobalLogger()
+		logger.Warnf("Message validation failed: %s", validation.ErrorMessage)
+		
+		// If still too large, truncate text and try again
+		if validation.ExceedsChars {
+			truncatedText := message.Text
+			if len(truncatedText) > MaxSlackMessageChars-100 {
+				truncatedText = truncatedText[:MaxSlackMessageChars-100] + "...\n\n(Message truncated due to size limit)"
+			}
+			message.Text = truncatedText
+		}
+	}
+
+	return message
 }
 
 // formatSingleTaskBlock formats a single task into one comprehensive markdown block
@@ -611,6 +774,14 @@ func sendNoChangesNotification(period, responseURL string, asJSON bool) error {
 // sendSlackMessage sends a message to Slack using the webhook
 func sendSlackMessage(message SlackMessage) error {
 	logger := GetGlobalLogger()
+	
+	// Validate message before sending
+	validation := validateSlackMessage(message)
+	if !validation.IsValid {
+		logger.Errorf("Message validation failed before sending: %s", validation.ErrorMessage)
+		return fmt.Errorf("message validation failed: %s", validation.ErrorMessage)
+	}
+	
 	webhookURL := os.Getenv("SLACK_WEBHOOK_URL")
 	if webhookURL == "" {
 		return fmt.Errorf("SLACK_WEBHOOK_URL environment variable not set")
@@ -1009,12 +1180,58 @@ func getAllTasks(db *sql.DB) (map[int]Task, error) {
 // formatProjectMessageWithComments creates multiple messages if needed to display all comments
 func formatProjectMessageWithComments(project string, tasks []TaskUpdateInfo, period string) []SlackMessage {
 	var messages []SlackMessage
+	
+	// Split tasks into chunks that respect block limits
+	headerBlockCount := 4 // spacing, header, context, divider
+	footerBlockCount := 1 // spacing
+	taskChunks := splitTasksByBlockLimit(tasks, headerBlockCount + footerBlockCount)
+	
+	// Create messages for each chunk
+	for i, taskChunk := range taskChunks {
+		var chunkMessage SlackMessage
+		
+		if len(taskChunks) == 1 {
+			// Single message - use the original format
+			chunkMessage = formatProjectMessage(project, taskChunk, period)
+		} else {
+			// Multiple messages - add part indicator
+			chunkMessage = formatProjectMessageChunk(project, taskChunk, period, i+1, len(taskChunks))
+		}
+		
+		// Validate the message before adding
+		validation := validateSlackMessage(chunkMessage)
+		if !validation.IsValid {
+			logger := GetGlobalLogger()
+			logger.Warnf("Message chunk validation failed: %s", validation.ErrorMessage)
+			
+			// If still too large, try to truncate text
+			if validation.ExceedsChars {
+				truncatedText := chunkMessage.Text
+				if len(truncatedText) > MaxSlackMessageChars-100 {
+					truncatedText = truncatedText[:MaxSlackMessageChars-100] + "...\n\n(Message truncated due to size limit)"
+				}
+				chunkMessage.Text = truncatedText
+			}
+			
+			// If still too many blocks, we need to split further (shouldn't happen with our logic, but safety check)
+			if validation.ExceedsBlocks {
+				logger.Errorf("Message still exceeds block limit after splitting: %d blocks", validation.BlockCount)
+				// Truncate blocks as last resort
+				if len(chunkMessage.Blocks) > MaxSlackBlocks {
+					chunkMessage.Blocks = chunkMessage.Blocks[:MaxSlackBlocks-1]
+					// Add a truncation notice
+					chunkMessage.Blocks = append(chunkMessage.Blocks, Block{
+						Type: "section",
+						Text: &Text{Type: "mrkdwn", Text: "_... (Some tasks truncated due to message size limits)_"},
+					})
+				}
+			}
+		}
+		
+		messages = append(messages, chunkMessage)
+	}
 
-	// Create the main message
-	mainMessage := formatProjectMessage(project, tasks, period)
-	messages = append(messages, mainMessage)
-
-	// Check if any tasks have comments that were truncated and need additional messages
+	// Handle overflow comments if needed (legacy support, but now less likely to be needed)
 	var additionalBlocks []Block
 	var hasAdditionalComments bool
 
@@ -1061,11 +1278,8 @@ func formatProjectMessageWithComments(project string, tasks []TaskUpdateInfo, pe
 
 	// Create additional messages for overflow comments
 	if hasAdditionalComments {
-		// Split additional blocks into separate messages to respect the 50-block limit
-		const maxBlocksPerMessage = 47 // Leave buffer for header blocks
-
-		for i := 0; i < len(additionalBlocks); i += maxBlocksPerMessage {
-			end := i + maxBlocksPerMessage
+		for i := 0; i < len(additionalBlocks); i += MaxBlocksPerMessage {
+			end := i + MaxBlocksPerMessage
 			if end > len(additionalBlocks) {
 				end = len(additionalBlocks)
 			}
@@ -1076,7 +1290,7 @@ func formatProjectMessageWithComments(project string, tasks []TaskUpdateInfo, pe
 			messageBlocks := []Block{
 				{
 					Type: "section",
-					Text: &Text{Type: "mrkdwn", Text: fmt.Sprintf("📝 *Additional Comments for %s* (Part %d)", project, (i/maxBlocksPerMessage)+1)},
+					Text: &Text{Type: "mrkdwn", Text: fmt.Sprintf("📝 *Additional Comments for %s* (Part %d)", project, (i/MaxBlocksPerMessage)+1)},
 				},
 				{Type: "divider"},
 			}
@@ -1087,12 +1301,85 @@ func formatProjectMessageWithComments(project string, tasks []TaskUpdateInfo, pe
 				Text:   fmt.Sprintf("Additional Comments for %s", project),
 				Blocks: messageBlocks,
 			}
+			
+			// Validate additional message
+			validation := validateSlackMessage(additionalMessage)
+			if !validation.IsValid {
+				logger := GetGlobalLogger()
+				logger.Warnf("Additional comments message validation failed: %s", validation.ErrorMessage)
+			}
 
 			messages = append(messages, additionalMessage)
 		}
 	}
 
 	return messages
+}
+
+// formatProjectMessageChunk creates a message for a chunk of tasks with part indicator
+func formatProjectMessageChunk(project string, tasks []TaskUpdateInfo, period string, partNum, totalParts int) SlackMessage {
+	var title string
+	var date string
+	switch period {
+	case "daily":
+		title = fmt.Sprintf("📊 Daily Task Update for %s", project)
+		date = time.Now().Format("January 2, 2006")
+	case "weekly":
+		title = fmt.Sprintf("📈 Weekly Task Summary for %s", project)
+		date = time.Now().Format("January 2, 2006")
+	case "monthly":
+		title = fmt.Sprintf("📅 Monthly Task Summary for %s", project)
+		date = time.Now().Format("January 2006")
+	}
+
+	if project == "Other" {
+		title = "📋 Other Tasks Update"
+	} else if project != "" {
+		title = fmt.Sprintf("📁 %s Project Update", project)
+	}
+
+	// Add part indicator if multiple parts
+	if totalParts > 1 {
+		title = fmt.Sprintf("%s (Part %d of %d)", title, partNum, totalParts)
+	}
+
+	var messageText strings.Builder
+	messageText.WriteString(fmt.Sprintf("*%s* - %s\n\n", title, date))
+
+	blocks := []Block{
+		{
+			Type: "section",
+			Text: &Text{Type: "mrkdwn", Text: " "},
+		},
+		{
+			Type: "header",
+			Text: &Text{Type: "plain_text", Text: title},
+		},
+		{
+			Type: "context",
+			Elements: []Element{
+				{Type: "mrkdwn", Text: date},
+			},
+		},
+		{Type: "divider"},
+	}
+
+	for _, task := range tasks {
+		taskBlock := formatSingleTaskBlock(task)
+		blocks = append(blocks, taskBlock)
+		appendTaskTextMessage(&messageText, task)
+	}
+
+	// Add spacing at the bottom
+	blocks = append(blocks, Block{
+		Type: "section",
+		Text: &Text{Type: "mrkdwn", Text: " "},
+	})
+
+	return SlackMessage{
+		Text:   messageText.String(),
+		Blocks: blocks,
+	}
 }
 
 // GetTasksOverThreshold returns tasks that are over a specific percentage of their estimation
