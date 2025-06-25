@@ -221,10 +221,15 @@ func migrateTasksTable(db *sql.DB) error {
 		return createTasksTable(db)
 	}
 
-	logger.Debug("Tasks table already exists, checking for archived column")
+	logger.Debug("Tasks table already exists, checking for columns")
 
 	// Check if archived column exists and add it if missing
-	return ensureArchivedColumn(db)
+	if err := ensureArchivedColumn(db); err != nil {
+		return err
+	}
+
+	// Check if project_id column exists and add it if missing
+	return ensureProjectIdColumn(db)
 }
 
 func createTasksTable(db *sql.DB) error {
@@ -276,6 +281,38 @@ func ensureArchivedColumn(db *sql.DB) error {
 		return fmt.Errorf("error checking for archived column: %w", err)
 	} else {
 		logger.Debug("Archived column already exists in tasks table")
+	}
+
+	return nil
+}
+
+// ensureProjectIdColumn checks if the project_id column exists in the tasks table and adds it if missing
+func ensureProjectIdColumn(db *sql.DB) error {
+	logger := GetGlobalLogger()
+
+	// Check if project_id column exists
+	checkColumnSQL := `SELECT column_name 
+		FROM information_schema.columns 
+		WHERE table_schema = 'public' 
+		AND table_name = 'tasks' 
+		AND column_name = 'project_id';`
+
+	var columnName string
+	err := db.QueryRow(checkColumnSQL).Scan(&columnName)
+
+	if err == sql.ErrNoRows {
+		// Column doesn't exist, add it
+		logger.Info("Adding project_id column to tasks table")
+		alterTableSQL := `ALTER TABLE tasks ADD COLUMN project_id INTEGER REFERENCES projects(id);`
+		_, err := db.Exec(alterTableSQL)
+		if err != nil {
+			return fmt.Errorf("failed to add project_id column to tasks table: %w", err)
+		}
+		logger.Info("Project_id column added successfully to tasks table")
+	} else if err != nil {
+		return fmt.Errorf("error checking for project_id column: %w", err)
+	} else {
+		logger.Debug("Project_id column already exists in tasks table")
 	}
 
 	return nil
@@ -595,13 +632,13 @@ FOREIGN KEY (timecamp_task_id) REFERENCES tasks(task_id)
 func populateProjectsFromTasks(db *sql.DB) error {
 	logger := GetGlobalLogger()
 
-	// Find all project-level tasks (tasks whose parent_id points to a root task)
+	// Find all project-level tasks (level 2 in TimeCamp hierarchy)
+	// Level 1 = Basecamp3 (root), Level 2 = Projects, Level 3+ = Sub-tasks
 	query := `
-		SELECT DISTINCT p.task_id, p.name
-		FROM tasks p
-		JOIN tasks root ON p.parent_id = root.task_id
-		WHERE root.parent_id = 0  -- root tasks have parent_id = 0
-		ORDER BY p.name
+		SELECT DISTINCT task_id, name
+		FROM tasks
+		WHERE level = 2  -- Projects are level 2 tasks
+		ORDER BY name
 	`
 
 	rows, err := db.Query(query)

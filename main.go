@@ -252,6 +252,34 @@ func handleCliCommands(args []string, logger *Logger) {
 			os.Exit(1)
 		}
 		logger.Info("User added successfully")
+	case "sync-projects":
+		logger.Info("Syncing projects table from task hierarchy")
+		db, err := GetDB()
+		if err != nil {
+			logger.Errorf("Failed to get database connection: %v", err)
+			os.Exit(1)
+		}
+		if err := SyncProjectsFromTasks(db); err != nil {
+			logger.Errorf("Error syncing projects: %v", err)
+			os.Exit(1)
+		}
+		logger.Info("Projects synced successfully")
+	case "list-projects":
+		logger.Info("Listing all projects from database")
+		db, err := GetDB()
+		if err != nil {
+			logger.Errorf("Failed to get database connection: %v", err)
+			os.Exit(1)
+		}
+		projects, err := GetAllProjects(db)
+		if err != nil {
+			logger.Errorf("Error listing projects: %v", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Found %d projects:\n", len(projects))
+		for _, project := range projects {
+			fmt.Printf("- %s (TimeCamp Task ID: %d)\n", project.Name, project.TimeCampTaskID)
+		}
 	default:
 		logger.Warnf("Unknown command line argument: %s", command)
 		showHelp()
@@ -353,6 +381,10 @@ func showHelp() {
 	fmt.Println("  list-users               - Show all users in the database")
 	fmt.Println("  active-users             - Show user IDs that have time entries")
 	fmt.Println("  add-user <id> <user> <name> - Add a specific user to the database")
+	fmt.Println("")
+	fmt.Println("Project management commands:")
+	fmt.Println("  sync-projects            - Sync projects table from task hierarchy")
+	fmt.Println("  list-projects            - Show all projects in the database")
 	fmt.Println("")
 	fmt.Println("  --version, version         - Show application version")
 	fmt.Println("  --help, -h, help         - Show help message")

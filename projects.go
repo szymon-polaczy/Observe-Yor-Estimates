@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 // Project represents a project in the database
@@ -193,13 +195,13 @@ func SyncProjectsFromTasks(db *sql.DB) error {
 	logger := GetGlobalLogger()
 	logger.Info("Syncing projects table from current task hierarchy")
 	
-	// Get all project-level tasks (including archived ones with recent activity)
+	// Get all project-level tasks (level 2 in TimeCamp hierarchy)
+	// Level 1 = Basecamp3 (root), Level 2 = Projects, Level 3+ = Sub-tasks
 	query := `
-		SELECT DISTINCT p.task_id, p.name
-		FROM tasks p
-		JOIN tasks root ON p.parent_id = root.task_id
-		WHERE root.parent_id = 0  -- root tasks have parent_id = 0
-		ORDER BY p.name
+		SELECT DISTINCT task_id, name
+		FROM tasks
+		WHERE level = 2  -- Projects are level 2 tasks
+		ORDER BY name
 	`
 	
 	rows, err := db.Query(query)
@@ -233,6 +235,10 @@ func SyncProjectsFromTasks(db *sql.DB) error {
 	insertCount := 0
 	
 	for _, pt := range currentProjects {
+		// Handle potential duplicate names by making the name unique with task_id suffix if needed
+		finalName := pt.Name
+		
+		// First try with original name
 		upsertQuery := `
 			INSERT INTO projects (name, timecamp_task_id, updated_at) 
 			VALUES ($1, $2, CURRENT_TIMESTAMP)
@@ -244,20 +250,38 @@ func SyncProjectsFromTasks(db *sql.DB) error {
 		`
 		
 		var inserted bool
-		err := db.QueryRow(upsertQuery, pt.Name, pt.TaskID).Scan(&inserted)
+		err := db.QueryRow(upsertQuery, finalName, pt.TaskID).Scan(&inserted)
+		
+		// If we get a name conflict, try with a unique suffix
+		if err != nil && strings.Contains(err.Error(), "duplicate key value violates unique constraint \"projects_name_key\"") {
+			finalName = fmt.Sprintf("%s (Task ID: %d)", pt.Name, pt.TaskID)
+			err = db.QueryRow(upsertQuery, finalName, pt.TaskID).Scan(&inserted)
+		}
+		
 		if err != nil {
-			logger.Warnf("Failed to upsert project %s (task_id: %d): %v", pt.Name, pt.TaskID, err)
+			logger.Errorf("Failed to upsert project %s (task_id: %d): %v", pt.Name, pt.TaskID, err)
 			continue
 		}
 		
 		if inserted {
 			insertCount++
+			if finalName != pt.Name {
+				logger.Infof("Created project with unique name: %s", finalName)
+			}
 		} else {
 			updateCount++
 		}
 	}
 	
 	logger.Infof("Project sync completed: %d inserted, %d updated", insertCount, updateCount)
+	
+	// Now update project_id in tasks table for efficient lookups
+	logger.Info("Updating project_id mapping in tasks table")
+	if err := updateTaskProjectMapping(db); err != nil {
+		logger.Warnf("Failed to update task project mapping: %v", err)
+		// Don't fail the whole sync for this
+	}
+	
 	return nil
 }
 
@@ -326,4 +350,47 @@ func ParseProjectFromCommand(commandText string) (projectName string, remainingT
 	}
 	
 	return projectName, remainingText
+}
+
+// updateTaskProjectMapping updates the project_id column in tasks table for efficient project filtering
+func updateTaskProjectMapping(db *sql.DB) error {
+	logger := GetGlobalLogger()
+	
+	// First, clear all existing project_id mappings
+	_, err := db.Exec("UPDATE tasks SET project_id = NULL")
+	if err != nil {
+		return fmt.Errorf("failed to clear existing project mappings: %w", err)
+	}
+	
+	// For each project, find all its descendant tasks and update their project_id
+	projects, err := GetAllProjects(db)
+	if err != nil {
+		return fmt.Errorf("failed to get projects: %w", err)
+	}
+	
+	for _, project := range projects {
+		// Get all task IDs that belong to this project (including the project task itself and all descendants)
+		taskIDs, err := GetProjectTaskIDs(db, project.TimeCampTaskID)
+		if err != nil {
+			logger.Warnf("Failed to get task IDs for project %s: %v", project.Name, err)
+			continue
+		}
+		
+		if len(taskIDs) == 0 {
+			continue
+		}
+		
+		// Update all these tasks to have this project_id
+		updateQuery := `UPDATE tasks SET project_id = $1 WHERE task_id = ANY($2)`
+		_, err = db.Exec(updateQuery, project.ID, pq.Array(taskIDs))
+		if err != nil {
+			logger.Warnf("Failed to update project mapping for %s: %v", project.Name, err)
+			continue
+		}
+		
+		logger.Debugf("Updated %d tasks with project_id %d for project %s", len(taskIDs), project.ID, project.Name)
+	}
+	
+	logger.Info("Task project mapping updated successfully")
+	return nil
 }
