@@ -494,429 +494,17 @@ func checkMissingTasksAndSuggestRemediation(db *sql.DB, missingTaskCount int, lo
 
 // GetTaskTimeEntries retrieves time entry information for tasks, aggregated by date
 func GetTaskTimeEntries(db *sql.DB) ([]TaskUpdateInfo, error) {
-	logger := GetGlobalLogger()
-	logger.Debug("Querying database for daily task time entries")
-
-	// First get user breakdown data
-	userBreakdownQuery := `
-WITH yesterday AS (
-    SELECT task_id, user_id, SUM(duration) AS total_duration
-    FROM time_entries
-    WHERE date::date = CURRENT_DATE - INTERVAL '1 day'
-    GROUP BY task_id, user_id
-),
-day_before AS (
-    SELECT task_id, user_id, SUM(duration) AS total_duration
-    FROM time_entries
-    WHERE date::date = CURRENT_DATE - INTERVAL '2 days'
-    GROUP BY task_id, user_id
-)
-SELECT 
-    COALESCE(y.task_id, db.task_id) AS task_id,
-    COALESCE(y.user_id, db.user_id) AS user_id,
-    COALESCE(y.total_duration, 0) AS yesterday_duration, 
-    COALESCE(db.total_duration, 0) AS day_before_duration
-FROM yesterday y
-FULL OUTER JOIN day_before db ON y.task_id = db.task_id AND y.user_id = db.user_id
-WHERE COALESCE(y.total_duration, 0) > 0;
-`
-
-	userRows, err := db.Query(userBreakdownQuery)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query user breakdown: %w", err)
-	}
-	defer userRows.Close()
-
-	// Build user breakdown map: taskID -> userID -> contribution
-	userBreakdowns := make(map[int]map[int]UserTimeContribution)
-	for userRows.Next() {
-		var taskID, userID, yesterdayDuration, dayBeforeDuration int
-		err := userRows.Scan(&taskID, &userID, &yesterdayDuration, &dayBeforeDuration)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan user breakdown row: %w", err)
-		}
-
-		if _, exists := userBreakdowns[taskID]; !exists {
-			userBreakdowns[taskID] = make(map[int]UserTimeContribution)
-		}
-
-		userBreakdowns[taskID][userID] = UserTimeContribution{
-			UserID:       userID,
-			CurrentTime:  formatDuration(yesterdayDuration),
-			PreviousTime: formatDuration(dayBeforeDuration),
-		}
-	}
-
-	// Now get aggregated task data
-	query := `
-WITH yesterday AS (
-    SELECT task_id, SUM(duration) AS total_duration
-    FROM time_entries
-    WHERE date::date = CURRENT_DATE - INTERVAL '1 day'
-    GROUP BY task_id
-),
-day_before AS (
-    SELECT task_id, SUM(duration) AS total_duration
-    FROM time_entries
-    WHERE date::date = CURRENT_DATE - INTERVAL '2 days'
-    GROUP BY task_id
-)
-SELECT 
-    t.name, 
-    COALESCE(y.total_duration, 0) AS yesterday_duration, 
-    COALESCE(db.total_duration, 0) AS day_before_duration,
-    (SELECT string_agg(description, ' | ') FROM time_entries te WHERE te.task_id = t.task_id AND te.date::date = CURRENT_DATE - INTERVAL '1 day'),
-    t.task_id,
-    t.parent_id
-FROM tasks t
-LEFT JOIN yesterday y ON t.task_id = y.task_id
-LEFT JOIN day_before db ON t.task_id = db.task_id
-WHERE COALESCE(y.total_duration, 0) > 0;
-`
-	rows, err := db.Query(query)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query daily task time entries: %w", err)
-	}
-	defer rows.Close()
-
-	var taskInfos []TaskUpdateInfo
-	for rows.Next() {
-		var info TaskUpdateInfo
-		var yesterdayDuration, dayBeforeDuration int
-		var comments sql.NullString
-		err := rows.Scan(&info.Name, &yesterdayDuration, &dayBeforeDuration, &comments, &info.TaskID, &info.ParentID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan task time entry row: %w", err)
-		}
-		info.CurrentPeriod = "Yesterday"
-		info.CurrentTime = formatDuration(yesterdayDuration)
-		info.PreviousPeriod = "Day Before"
-		info.PreviousTime = formatDuration(dayBeforeDuration)
-		info.EstimationInfo, info.EstimationStatus = parseEstimationWithUsage(info.Name, info.CurrentTime, info.PreviousTime)
-		if comments.Valid {
-			info.Comments = strings.Split(comments.String, " | ")
-		}
-		
-		// Add user breakdown
-		if breakdown, exists := userBreakdowns[info.TaskID]; exists {
-			info.UserBreakdown = breakdown
-		}
-		
-		taskInfos = append(taskInfos, info)
-	}
-
-	// Extract task IDs for bulk comment fetching
-	var taskIDs []int
-	for _, info := range taskInfos {
-		taskIDs = append(taskIDs, info.TaskID)
-	}
-
-	// Bulk fetch comments for all tasks found
-	today := time.Now().Format("2006-01-02")
-	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
-	commentsMap, err := getTaskCommentsBulk(db, taskIDs, yesterday, today)
-	if err != nil {
-		logger.Warnf("failed to bulk fetch comments: %v", err)
-	}
-
-	// Attach comments
-	for i, info := range taskInfos {
-		if comments, ok := commentsMap[info.TaskID]; ok {
-			taskInfos[i].Comments = comments
-		}
-	}
-
-	return taskInfos, nil
+	return GetTaskTimeEntriesWithProject(db, nil)
 }
 
 // GetWeeklyTaskTimeEntries retrieves weekly time entry information for tasks
 func GetWeeklyTaskTimeEntries(db *sql.DB) ([]TaskUpdateInfo, error) {
-	logger := GetGlobalLogger()
-	logger.Debug("Querying database for weekly task time entries")
-
-	// First get user breakdown data
-	userBreakdownQuery := `
-WITH current_week AS (
-    SELECT task_id, user_id, SUM(duration) AS total_duration
-    FROM time_entries
-    WHERE date::date >= CURRENT_DATE - INTERVAL '7 days' AND date::date < CURRENT_DATE
-    GROUP BY task_id, user_id
-),
-previous_week AS (
-    SELECT task_id, user_id, SUM(duration) AS total_duration
-    FROM time_entries
-    WHERE date::date >= CURRENT_DATE - INTERVAL '14 days' AND date::date < CURRENT_DATE - INTERVAL '7 days'
-    GROUP BY task_id, user_id
-)
-SELECT 
-    COALESCE(cw.task_id, pw.task_id) AS task_id,
-    COALESCE(cw.user_id, pw.user_id) AS user_id,
-    COALESCE(cw.total_duration, 0) AS current_week_duration, 
-    COALESCE(pw.total_duration, 0) AS previous_week_duration
-FROM current_week cw
-FULL OUTER JOIN previous_week pw ON cw.task_id = pw.task_id AND cw.user_id = pw.user_id
-WHERE COALESCE(cw.total_duration, 0) > 0;
-`
-
-	userRows, err := db.Query(userBreakdownQuery)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query weekly user breakdown: %w", err)
-	}
-	defer userRows.Close()
-
-	// Build user breakdown map: taskID -> userID -> contribution
-	userBreakdowns := make(map[int]map[int]UserTimeContribution)
-	for userRows.Next() {
-		var taskID, userID, currentWeekDuration, previousWeekDuration int
-		err := userRows.Scan(&taskID, &userID, &currentWeekDuration, &previousWeekDuration)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan weekly user breakdown row: %w", err)
-		}
-
-		if _, exists := userBreakdowns[taskID]; !exists {
-			userBreakdowns[taskID] = make(map[int]UserTimeContribution)
-		}
-
-		userBreakdowns[taskID][userID] = UserTimeContribution{
-			UserID:       userID,
-			CurrentTime:  formatDuration(currentWeekDuration),
-			PreviousTime: formatDuration(previousWeekDuration),
-		}
-	}
-
-	// Weekly changes: compare last 7 days with the 7 days before that
-	query := `
-WITH current_week AS (
-    SELECT task_id, SUM(duration) AS total_duration, COUNT(DISTINCT date) as days_worked
-    FROM time_entries
-    WHERE date::date >= CURRENT_DATE - INTERVAL '7 days' AND date::date < CURRENT_DATE
-    GROUP BY task_id
-),
-previous_week AS (
-    SELECT task_id, SUM(duration) AS total_duration
-    FROM time_entries
-    WHERE date::date >= CURRENT_DATE - INTERVAL '14 days' AND date::date < CURRENT_DATE - INTERVAL '7 days'
-    GROUP BY task_id
-)
-SELECT 
-    t.name, 
-    COALESCE(cw.total_duration, 0) AS current_week_duration, 
-    COALESCE(pw.total_duration, 0) AS previous_week_duration,
-    COALESCE(cw.days_worked, 0) as days_worked,
-    (SELECT string_agg(description, ' | ') FROM time_entries te WHERE te.task_id = t.task_id AND te.date::date >= CURRENT_DATE - INTERVAL '7 days' AND te.date::date < CURRENT_DATE),
-    t.task_id,
-    t.parent_id
-FROM tasks t
-LEFT JOIN current_week cw ON t.task_id = cw.task_id
-LEFT JOIN previous_week pw ON t.task_id = pw.task_id
-WHERE COALESCE(cw.total_duration, 0) > 0;
-`
-	rows, err := db.Query(query)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query weekly task time entries: %w", err)
-	}
-	defer rows.Close()
-
-	var taskInfos []TaskUpdateInfo
-	for rows.Next() {
-		var info TaskUpdateInfo
-		var currentWeekDuration, previousWeekDuration int
-		var comments sql.NullString
-		err := rows.Scan(
-			&info.Name,
-			&currentWeekDuration,
-			&previousWeekDuration,
-			&info.DaysWorked,
-			&comments,
-			&info.TaskID,
-			&info.ParentID,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan weekly task time entry row: %w", err)
-		}
-		info.CurrentPeriod = "This Week"
-		info.CurrentTime = formatDuration(currentWeekDuration)
-		info.PreviousPeriod = "Last Week"
-		info.PreviousTime = formatDuration(previousWeekDuration)
-		info.EstimationInfo, info.EstimationStatus = parseEstimationWithUsage(info.Name, info.CurrentTime, info.PreviousTime)
-		if comments.Valid {
-			info.Comments = strings.Split(comments.String, " | ")
-		}
-		
-		// Add user breakdown
-		if breakdown, exists := userBreakdowns[info.TaskID]; exists {
-			info.UserBreakdown = breakdown
-		}
-		
-		taskInfos = append(taskInfos, info)
-	}
-
-	// Extract task IDs for bulk comment fetching
-	var taskIDs []int
-	for _, info := range taskInfos {
-		taskIDs = append(taskIDs, info.TaskID)
-	}
-
-	// Bulk fetch comments
-	lastWeekStart := time.Now().AddDate(0, 0, -14)
-	commentsMap, err := getTaskCommentsBulk(db, taskIDs, lastWeekStart.Format("2006-01-02"), time.Now().Format("2006-01-02"))
-	if err != nil {
-		logger.Warnf("failed to bulk fetch comments: %v", err)
-	}
-
-	// Attach comments
-	for i, info := range taskInfos {
-		if comments, ok := commentsMap[info.TaskID]; ok {
-			taskInfos[i].Comments = comments
-		}
-	}
-
-	return taskInfos, nil
+	return GetWeeklyTaskTimeEntriesWithProject(db, nil)
 }
 
 // GetMonthlyTaskTimeEntries retrieves monthly time entry information for tasks
 func GetMonthlyTaskTimeEntries(db *sql.DB) ([]TaskUpdateInfo, error) {
-	logger := GetGlobalLogger()
-	logger.Debug("Querying database for monthly task time entries")
-
-	// First get user breakdown data
-	userBreakdownQuery := `
-WITH current_month AS (
-    SELECT task_id, user_id, SUM(duration) AS total_duration
-    FROM time_entries
-    WHERE date::date >= CURRENT_DATE - INTERVAL '30 days' AND date::date < CURRENT_DATE
-    GROUP BY task_id, user_id
-),
-previous_month AS (
-    SELECT task_id, user_id, SUM(duration) AS total_duration
-    FROM time_entries
-    WHERE date::date >= CURRENT_DATE - INTERVAL '60 days' AND date::date < CURRENT_DATE - INTERVAL '30 days'
-    GROUP BY task_id, user_id
-)
-SELECT 
-    COALESCE(cm.task_id, pm.task_id) AS task_id,
-    COALESCE(cm.user_id, pm.user_id) AS user_id,
-    COALESCE(cm.total_duration, 0) AS current_month_duration, 
-    COALESCE(pm.total_duration, 0) AS previous_month_duration
-FROM current_month cm
-FULL OUTER JOIN previous_month pm ON cm.task_id = pm.task_id AND cm.user_id = pm.user_id
-WHERE COALESCE(cm.total_duration, 0) > 0;
-`
-
-	userRows, err := db.Query(userBreakdownQuery)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query monthly user breakdown: %w", err)
-	}
-	defer userRows.Close()
-
-	// Build user breakdown map: taskID -> userID -> contribution
-	userBreakdowns := make(map[int]map[int]UserTimeContribution)
-	for userRows.Next() {
-		var taskID, userID, currentMonthDuration, previousMonthDuration int
-		err := userRows.Scan(&taskID, &userID, &currentMonthDuration, &previousMonthDuration)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan monthly user breakdown row: %w", err)
-		}
-
-		if _, exists := userBreakdowns[taskID]; !exists {
-			userBreakdowns[taskID] = make(map[int]UserTimeContribution)
-		}
-
-		userBreakdowns[taskID][userID] = UserTimeContribution{
-			UserID:       userID,
-			CurrentTime:  formatDuration(currentMonthDuration),
-			PreviousTime: formatDuration(previousMonthDuration),
-		}
-	}
-
-	// Monthly changes: compare last 30 days with the 30 days before that
-	query := `
-WITH current_month AS (
-    SELECT task_id, SUM(duration) AS total_duration, COUNT(DISTINCT date) as days_worked
-    FROM time_entries
-    WHERE date::date >= CURRENT_DATE - INTERVAL '30 days' AND date::date < CURRENT_DATE
-    GROUP BY task_id
-),
-previous_month AS (
-    SELECT task_id, SUM(duration) AS total_duration
-    FROM time_entries
-    WHERE date::date >= CURRENT_DATE - INTERVAL '60 days' AND date::date < CURRENT_DATE - INTERVAL '30 days'
-    GROUP BY task_id
-)
-SELECT 
-    t.name, 
-    COALESCE(cm.total_duration, 0) AS current_month_duration, 
-    COALESCE(pm.total_duration, 0) AS previous_month_duration,
-    COALESCE(cm.days_worked, 0) as days_worked,
-    (SELECT string_agg(description, ' | ') FROM time_entries te WHERE te.task_id = t.task_id AND te.date::date >= CURRENT_DATE - INTERVAL '30 days' AND te.date::date < CURRENT_DATE),
-    t.task_id,
-    t.parent_id
-FROM tasks t
-LEFT JOIN current_month cm ON t.task_id = cm.task_id
-LEFT JOIN previous_month pm ON t.task_id = pm.task_id
-WHERE COALESCE(cm.total_duration, 0) > 0;
-`
-	rows, err := db.Query(query)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query monthly task time entries: %w", err)
-	}
-	defer rows.Close()
-
-	var taskInfos []TaskUpdateInfo
-	for rows.Next() {
-		var info TaskUpdateInfo
-		var currentMonthDuration, previousMonthDuration int
-		var comments sql.NullString
-		err := rows.Scan(
-			&info.Name,
-			&currentMonthDuration,
-			&previousMonthDuration,
-			&info.DaysWorked,
-			&comments,
-			&info.TaskID,
-			&info.ParentID,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan monthly task time entry row: %w", err)
-		}
-		info.CurrentPeriod = "This Month"
-		info.CurrentTime = formatDuration(currentMonthDuration)
-		info.PreviousPeriod = "Last Month"
-		info.PreviousTime = formatDuration(previousMonthDuration)
-		info.EstimationInfo, info.EstimationStatus = parseEstimationWithUsage(info.Name, info.CurrentTime, info.PreviousTime)
-		if comments.Valid {
-			info.Comments = strings.Split(comments.String, " | ")
-		}
-		
-		// Add user breakdown
-		if breakdown, exists := userBreakdowns[info.TaskID]; exists {
-			info.UserBreakdown = breakdown
-		}
-		
-		taskInfos = append(taskInfos, info)
-	}
-
-	// Extract task IDs for bulk comment fetching
-	var taskIDs []int
-	for _, info := range taskInfos {
-		taskIDs = append(taskIDs, info.TaskID)
-	}
-
-	// Bulk fetch comments
-	lastMonthStart := time.Now().AddDate(0, -1, 0)
-	commentsMap, err := getTaskCommentsBulk(db, taskIDs, lastMonthStart.Format("2006-01-02"), time.Now().Format("2006-01-02"))
-	if err != nil {
-		logger.Warnf("failed to bulk fetch comments: %v", err)
-	}
-
-	// Attach comments
-	for i, info := range taskInfos {
-		if comments, ok := commentsMap[info.TaskID]; ok {
-			taskInfos[i].Comments = comments
-		}
-	}
-
-	return taskInfos, nil
+	return GetMonthlyTaskTimeEntriesWithProject(db, nil)
 }
 
 // formatDuration formats seconds into a human-readable string like "1h 30m"
@@ -1303,7 +891,7 @@ SELECT
     COALESCE(db.total_duration, 0) AS day_before_duration
 FROM yesterday y
 FULL OUTER JOIN day_before db ON y.task_id = db.task_id AND y.user_id = db.user_id
-WHERE (COALESCE(y.total_duration, 0) > 0 OR COALESCE(db.total_duration, 0) > 0) %s;`, projectFilterClause)
+WHERE COALESCE(y.total_duration, 0) > 0 %s;`, projectFilterClause)
 
 	userRows, err := db.Query(userBreakdownQuery, args...)
 	if err != nil {
@@ -1366,7 +954,7 @@ FROM yesterday y
 FULL OUTER JOIN day_before db ON y.task_id = db.task_id
 LEFT JOIN days_worked dw ON COALESCE(y.task_id, db.task_id) = dw.task_id
 LEFT JOIN tasks t ON COALESCE(y.task_id, db.task_id) = t.task_id
-WHERE (COALESCE(y.total_duration, 0) > 0 OR COALESCE(db.total_duration, 0) > 0)
+WHERE COALESCE(y.total_duration, 0) > 0
   AND t.task_id IS NOT NULL %s
 ORDER BY COALESCE(y.total_duration, 0) DESC;`, projectFilterClause)
 
@@ -1473,7 +1061,7 @@ SELECT
     COALESCE(lw.total_duration, 0) AS last_week_duration
 FROM this_week tw
 FULL OUTER JOIN last_week lw ON tw.task_id = lw.task_id AND tw.user_id = lw.user_id
-WHERE (COALESCE(tw.total_duration, 0) > 0 OR COALESCE(lw.total_duration, 0) > 0) %s;`, projectFilterClause)
+WHERE COALESCE(tw.total_duration, 0) > 0 %s;`, projectFilterClause)
 
 	userRows, err := db.Query(userBreakdownQuery, args...)
 	if err != nil {
@@ -1537,7 +1125,7 @@ FROM this_week tw
 FULL OUTER JOIN last_week lw ON tw.task_id = lw.task_id
 LEFT JOIN days_worked dw ON COALESCE(tw.task_id, lw.task_id) = dw.task_id
 LEFT JOIN tasks t ON COALESCE(tw.task_id, lw.task_id) = t.task_id
-WHERE (COALESCE(tw.total_duration, 0) > 0 OR COALESCE(lw.total_duration, 0) > 0)
+WHERE COALESCE(tw.total_duration, 0) > 0
   AND t.task_id IS NOT NULL %s
 ORDER BY COALESCE(tw.total_duration, 0) DESC;`, projectFilterClause)
 
@@ -1643,7 +1231,7 @@ SELECT
     COALESCE(lm.total_duration, 0) AS last_month_duration
 FROM this_month tm
 FULL OUTER JOIN last_month lm ON tm.task_id = lm.task_id AND tm.user_id = lm.user_id
-WHERE (COALESCE(tm.total_duration, 0) > 0 OR COALESCE(lm.total_duration, 0) > 0) %s;`, projectFilterClause)
+WHERE COALESCE(tm.total_duration, 0) > 0 %s;`, projectFilterClause)
 
 	userRows, err := db.Query(userBreakdownQuery, args...)
 	if err != nil {
@@ -1707,7 +1295,7 @@ FROM this_month tm
 FULL OUTER JOIN last_month lm ON tm.task_id = lm.task_id
 LEFT JOIN days_worked dw ON COALESCE(tm.task_id, lm.task_id) = dw.task_id
 LEFT JOIN tasks t ON COALESCE(tm.task_id, lm.task_id) = t.task_id
-WHERE (COALESCE(tm.total_duration, 0) > 0 OR COALESCE(lm.total_duration, 0) > 0)
+WHERE COALESCE(tm.total_duration, 0) > 0
   AND t.task_id IS NOT NULL %s
 ORDER BY COALESCE(tm.total_duration, 0) DESC;`, projectFilterClause)
 
