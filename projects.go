@@ -193,13 +193,12 @@ func SyncProjectsFromTasks(db *sql.DB) error {
 	logger := GetGlobalLogger()
 	logger.Info("Syncing projects table from current task hierarchy")
 	
-	// Get all current project-level tasks
+	// Get all project-level tasks (including archived ones with recent activity)
 	query := `
 		SELECT DISTINCT p.task_id, p.name
 		FROM tasks p
 		JOIN tasks root ON p.parent_id = root.task_id
 		WHERE root.parent_id = 0  -- root tasks have parent_id = 0
-		AND p.archived = 0        -- only active projects
 		ORDER BY p.name
 	`
 	

@@ -507,6 +507,132 @@ func GetMonthlyTaskTimeEntries(db *sql.DB) ([]TaskUpdateInfo, error) {
 	return GetMonthlyTaskTimeEntriesWithProject(db, nil)
 }
 
+// DateRange represents a time period with start and end dates
+type DateRange struct {
+	Start string
+	End   string
+	Label string
+}
+
+// PeriodDateRanges contains current and previous period date ranges
+type PeriodDateRanges struct {
+	Current  DateRange
+	Previous DateRange
+}
+
+// calculateDateRanges calculates date ranges for different period types
+func calculateDateRanges(periodType string, days int) PeriodDateRanges {
+	now := time.Now()
+	
+	switch periodType {
+	case "today":
+		today := now.Format("2006-01-02")
+		yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
+		return PeriodDateRanges{
+			Current:  DateRange{Start: today, End: today, Label: "Today"},
+			Previous: DateRange{Start: yesterday, End: yesterday, Label: "Yesterday"},
+		}
+		
+	case "yesterday":
+		yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
+		dayBefore := now.AddDate(0, 0, -2).Format("2006-01-02")
+		return PeriodDateRanges{
+			Current:  DateRange{Start: yesterday, End: yesterday, Label: "Yesterday"},
+			Previous: DateRange{Start: dayBefore, End: dayBefore, Label: "Day Before"},
+		}
+		
+	case "this_week":
+		// Current week: Monday to today
+		weekStart := now.AddDate(0, 0, -int(now.Weekday()-time.Monday))
+		if now.Weekday() == time.Sunday {
+			weekStart = weekStart.AddDate(0, 0, -6) // Go back to Monday
+		}
+		currentWeekEnd := now.Format("2006-01-02")
+		
+		// Last week: Monday to Sunday of previous week  
+		lastWeekStart := weekStart.AddDate(0, 0, -7).Format("2006-01-02")
+		lastWeekEnd := weekStart.AddDate(0, 0, -1).Format("2006-01-02")
+		
+		return PeriodDateRanges{
+			Current:  DateRange{Start: weekStart.Format("2006-01-02"), End: currentWeekEnd, Label: "This Week"},
+			Previous: DateRange{Start: lastWeekStart, End: lastWeekEnd, Label: "Last Week"},
+		}
+		
+	case "last_week":
+		// Last week: Monday to Sunday of previous week
+		weekStart := now.AddDate(0, 0, -int(now.Weekday()-time.Monday))
+		if now.Weekday() == time.Sunday {
+			weekStart = weekStart.AddDate(0, 0, -6)
+		}
+		lastWeekStart := weekStart.AddDate(0, 0, -7).Format("2006-01-02")
+		lastWeekEnd := weekStart.AddDate(0, 0, -1).Format("2006-01-02")
+		
+		// Previous week: Monday to Sunday before last week
+		prevWeekStart := weekStart.AddDate(0, 0, -14).Format("2006-01-02")
+		prevWeekEnd := weekStart.AddDate(0, 0, -8).Format("2006-01-02")
+		
+		return PeriodDateRanges{
+			Current:  DateRange{Start: lastWeekStart, End: lastWeekEnd, Label: "Last Week"},
+			Previous: DateRange{Start: prevWeekStart, End: prevWeekEnd, Label: "Previous Week"},
+		}
+		
+	case "this_month":
+		// Current month: 1st to today
+		monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+		currentMonthEnd := now.Format("2006-01-02")
+		
+		// Last month: 1st to last day of previous month
+		lastMonthStart := monthStart.AddDate(0, -1, 0).Format("2006-01-02")
+		lastMonthEnd := monthStart.AddDate(0, 0, -1).Format("2006-01-02")
+		
+		return PeriodDateRanges{
+			Current:  DateRange{Start: monthStart.Format("2006-01-02"), End: currentMonthEnd, Label: "This Month"},
+			Previous: DateRange{Start: lastMonthStart, End: lastMonthEnd, Label: "Last Month"},
+		}
+		
+	case "last_month":
+		// Last month: 1st to last day of previous month
+		monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+		lastMonthStart := monthStart.AddDate(0, -1, 0).Format("2006-01-02")
+		lastMonthEnd := monthStart.AddDate(0, 0, -1).Format("2006-01-02")
+		
+		// Previous month: 1st to last day before last month
+		prevMonthStart := monthStart.AddDate(0, -2, 0).Format("2006-01-02")
+		prevMonthEnd := monthStart.AddDate(-1, 0, 0).Format("2006-01-02")
+		
+		return PeriodDateRanges{
+			Current:  DateRange{Start: lastMonthStart, End: lastMonthEnd, Label: "Last Month"},
+			Previous: DateRange{Start: prevMonthStart, End: prevMonthEnd, Label: "Previous Month"},
+		}
+		
+	case "last_x_days":
+		// Last X days: X days ago to today
+		currentStart := now.AddDate(0, 0, -days).Format("2006-01-02")
+		currentEnd := now.Format("2006-01-02")
+		
+		// Previous X days: 2X days ago to X days ago
+		previousStart := now.AddDate(0, 0, -days*2).Format("2006-01-02")
+		previousEnd := now.AddDate(0, 0, -days).Format("2006-01-02")
+		
+		currentLabel := fmt.Sprintf("Last %d Days", days)
+		previousLabel := fmt.Sprintf("Previous %d Days", days)
+		
+		return PeriodDateRanges{
+			Current:  DateRange{Start: currentStart, End: currentEnd, Label: currentLabel},
+			Previous: DateRange{Start: previousStart, End: previousEnd, Label: previousLabel},
+		}
+		
+	default:
+		// Fallback to yesterday
+		yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
+		dayBefore := now.AddDate(0, 0, -2).Format("2006-01-02")
+		return PeriodDateRanges{
+			Current:  DateRange{Start: yesterday, End: yesterday, Label: "Yesterday"},
+			Previous: DateRange{Start: dayBefore, End: dayBefore, Label: "Day Before"},
+		}
+	}
+}
+
 // formatDuration formats seconds into a human-readable string like "1h 30m"
 func formatDuration(seconds int) string {
 	if seconds == 0 {
@@ -1345,5 +1471,180 @@ ORDER BY COALESCE(tm.total_duration, 0) DESC;`, projectFilterClause)
 	}
 
 	logger.Debugf("Found %d monthly task updates with project filtering", len(taskInfos))
+	return taskInfos, nil
+}
+
+// GetDynamicTaskTimeEntriesWithProject fetches task time entries for any dynamic time period
+func GetDynamicTaskTimeEntriesWithProject(db *sql.DB, periodType string, days int, projectTaskID *int) ([]TaskUpdateInfo, error) {
+	logger := GetGlobalLogger()
+	logger.Debugf("Querying database for dynamic task time entries with period: %s, days: %d, project filtering", periodType, days)
+
+	// Calculate date ranges for the period
+	dateRanges := calculateDateRanges(periodType, days)
+
+	var projectTaskIDs []int
+	if projectTaskID != nil {
+		var err error
+		projectTaskIDs, err = GetProjectTaskIDs(db, *projectTaskID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get project task IDs: %w", err)
+		}
+		if len(projectTaskIDs) == 0 {
+			return []TaskUpdateInfo{}, nil
+		}
+	}
+
+	// Build project filtering clause and args
+	var projectFilterClause string
+	var args []interface{}
+	
+	if len(projectTaskIDs) > 0 {
+		placeholders := make([]string, len(projectTaskIDs))
+		for i, taskID := range projectTaskIDs {
+			placeholders[i] = fmt.Sprintf("$%d", i+1)
+			args = append(args, taskID)
+		}
+		projectFilterClause = fmt.Sprintf("AND COALESCE(tc.task_id, tp.task_id) IN (%s)", strings.Join(placeholders, ","))
+	}
+
+	// User breakdown query
+	userBreakdownQuery := fmt.Sprintf(`
+WITH current_period AS (
+    SELECT task_id, user_id, SUM(duration) AS total_duration
+    FROM time_entries
+    WHERE date::date >= '%s'::date AND date::date <= '%s'::date
+    GROUP BY task_id, user_id
+),
+previous_period AS (
+    SELECT task_id, user_id, SUM(duration) AS total_duration
+    FROM time_entries
+    WHERE date::date >= '%s'::date AND date::date <= '%s'::date
+    GROUP BY task_id, user_id
+)
+SELECT 
+    COALESCE(tc.task_id, tp.task_id) AS task_id,
+    COALESCE(tc.user_id, tp.user_id) AS user_id,
+    COALESCE(tc.total_duration, 0) AS current_duration, 
+    COALESCE(tp.total_duration, 0) AS previous_duration
+FROM current_period tc
+FULL OUTER JOIN previous_period tp ON tc.task_id = tp.task_id AND tc.user_id = tp.user_id
+WHERE COALESCE(tc.total_duration, 0) > 0 %s;`, 
+		dateRanges.Current.Start, dateRanges.Current.End,
+		dateRanges.Previous.Start, dateRanges.Previous.End,
+		projectFilterClause)
+
+	userRows, err := db.Query(userBreakdownQuery, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query user breakdown: %w", err)
+	}
+	defer userRows.Close()
+
+	userBreakdowns := make(map[int]map[int]UserTimeContribution)
+	for userRows.Next() {
+		var taskID, userID, currentDuration, previousDuration int
+		err := userRows.Scan(&taskID, &userID, &currentDuration, &previousDuration)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan user breakdown row: %w", err)
+		}
+
+		if _, exists := userBreakdowns[taskID]; !exists {
+			userBreakdowns[taskID] = make(map[int]UserTimeContribution)
+		}
+
+		userBreakdowns[taskID][userID] = UserTimeContribution{
+			UserID:       userID,
+			CurrentTime:  formatDuration(currentDuration),
+			PreviousTime: formatDuration(previousDuration),
+		}
+	}
+
+	// Main query
+	mainQuery := fmt.Sprintf(`
+WITH current_period AS (
+    SELECT task_id, SUM(duration) AS total_duration, string_agg(DISTINCT description, '; ' ORDER BY description) AS descriptions
+    FROM time_entries
+    WHERE date::date >= '%s'::date AND date::date <= '%s'::date
+      AND description IS NOT NULL 
+      AND description != ''
+    GROUP BY task_id
+),
+previous_period AS (
+    SELECT task_id, SUM(duration) AS total_duration
+    FROM time_entries
+    WHERE date::date >= '%s'::date AND date::date <= '%s'::date
+    GROUP BY task_id
+),
+days_worked AS (
+    SELECT task_id, COUNT(DISTINCT date::date) AS days_worked
+    FROM time_entries
+    WHERE date::date >= '%s'::date AND date::date <= '%s'::date
+    GROUP BY task_id
+)
+SELECT 
+    COALESCE(tc.task_id, tp.task_id) AS task_id,
+    t.parent_id,
+    t.name,
+    COALESCE(tc.total_duration, 0) AS current_duration, 
+    COALESCE(tp.total_duration, 0) AS previous_duration,
+    COALESCE(dw.days_worked, 0) AS days_worked,
+    COALESCE(tc.descriptions, '') AS descriptions
+FROM current_period tc
+FULL OUTER JOIN previous_period tp ON tc.task_id = tp.task_id
+LEFT JOIN days_worked dw ON COALESCE(tc.task_id, tp.task_id) = dw.task_id
+LEFT JOIN tasks t ON COALESCE(tc.task_id, tp.task_id) = t.task_id
+WHERE COALESCE(tc.total_duration, 0) > 0
+  AND t.task_id IS NOT NULL %s
+ORDER BY COALESCE(tc.total_duration, 0) DESC;`, 
+		dateRanges.Current.Start, dateRanges.Current.End,
+		dateRanges.Previous.Start, dateRanges.Previous.End,
+		dateRanges.Current.Start, dateRanges.Current.End,
+		projectFilterClause)
+
+	rows, err := db.Query(mainQuery, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query dynamic task time entries: %w", err)
+	}
+	defer rows.Close()
+
+	var taskInfos []TaskUpdateInfo
+	for rows.Next() {
+		var taskID, parentID, currentDuration, previousDuration, daysWorked int
+		var name, descriptions string
+		err := rows.Scan(&taskID, &parentID, &name, &currentDuration, &previousDuration, &daysWorked, &descriptions)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan dynamic task time entry row: %w", err)
+		}
+
+		comments := []string{}
+		if descriptions != "" {
+			comments = strings.Split(descriptions, "; ")
+		}
+
+		userBreakdown := userBreakdowns[taskID]
+		if userBreakdown == nil {
+			userBreakdown = make(map[int]UserTimeContribution)
+		}
+
+		taskInfo := TaskUpdateInfo{
+			TaskID:         taskID,
+			ParentID:       parentID,
+			Name:           name,
+			CurrentPeriod:  dateRanges.Current.Label,
+			CurrentTime:    formatDuration(currentDuration),
+			PreviousPeriod: dateRanges.Previous.Label,
+			PreviousTime:   formatDuration(previousDuration),
+			DaysWorked:     daysWorked,
+			Comments:       comments,
+			UserBreakdown:  userBreakdown,
+		}
+
+		taskInfos = append(taskInfos, taskInfo)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating rows: %w", err)
+	}
+
+	logger.Debugf("Found %d dynamic task updates with project filtering for period: %s", len(taskInfos), dateRanges.Current.Label)
 	return taskInfos, nil
 }

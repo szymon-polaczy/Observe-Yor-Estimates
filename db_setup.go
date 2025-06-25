@@ -601,7 +601,6 @@ func populateProjectsFromTasks(db *sql.DB) error {
 		FROM tasks p
 		JOIN tasks root ON p.parent_id = root.task_id
 		WHERE root.parent_id = 0  -- root tasks have parent_id = 0
-		AND p.archived = 0        -- only active projects
 		ORDER BY p.name
 	`
 

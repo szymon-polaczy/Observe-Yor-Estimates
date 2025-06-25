@@ -189,6 +189,7 @@ func SendSlackUpdate(period string, responseURL string, asJSON bool) {
 }
 
 func getTaskChanges(db *sql.DB, period string) ([]TaskUpdateInfo, error) {
+	// Handle backwards compatibility for old period names and new natural language periods
 	switch period {
 	case "daily":
 		return GetTaskTimeEntries(db)
@@ -196,12 +197,37 @@ func getTaskChanges(db *sql.DB, period string) ([]TaskUpdateInfo, error) {
 		return GetWeeklyTaskTimeEntries(db)
 	case "monthly":
 		return GetMonthlyTaskTimeEntries(db)
+	case "yesterday":
+		return GetDynamicTaskTimeEntriesWithProject(db, "yesterday", 1, nil)
+	case "today":
+		return GetDynamicTaskTimeEntriesWithProject(db, "today", 0, nil)
+	case "last_week":
+		return GetDynamicTaskTimeEntriesWithProject(db, "last_week", 7, nil)
+	case "this_week":
+		return GetDynamicTaskTimeEntriesWithProject(db, "this_week", 0, nil)
+	case "last_month":
+		return GetDynamicTaskTimeEntriesWithProject(db, "last_month", 30, nil)
+	case "this_month":
+		return GetDynamicTaskTimeEntriesWithProject(db, "this_month", 0, nil)
+	case "last_x_days":
+		// This shouldn't happen as last_x_days should be handled with specific days
+		return GetDynamicTaskTimeEntriesWithProject(db, "last_x_days", 7, nil)
 	default:
+		// Check if it's a last_x_days pattern with specific days
+		if strings.HasPrefix(period, "last_") && strings.HasSuffix(period, "_days") {
+			// Extract days from pattern like "last_7_days"
+			daysPart := strings.TrimPrefix(period, "last_")
+			daysPart = strings.TrimSuffix(daysPart, "_days")
+			if days, err := strconv.Atoi(daysPart); err == nil && days >= 1 && days <= 60 {
+				return GetDynamicTaskTimeEntriesWithProject(db, "last_x_days", days, nil)
+			}
+		}
 		return nil, fmt.Errorf("invalid period: %s", period)
 	}
 }
 
 func getTaskChangesWithProject(db *sql.DB, period string, projectTaskID *int) ([]TaskUpdateInfo, error) {
+	// Handle backwards compatibility for old period names
 	switch period {
 	case "daily":
 		return GetTaskTimeEntriesWithProject(db, projectTaskID)
@@ -209,7 +235,31 @@ func getTaskChangesWithProject(db *sql.DB, period string, projectTaskID *int) ([
 		return GetWeeklyTaskTimeEntriesWithProject(db, projectTaskID)
 	case "monthly":
 		return GetMonthlyTaskTimeEntriesWithProject(db, projectTaskID)
+	case "yesterday":
+		return GetDynamicTaskTimeEntriesWithProject(db, "yesterday", 1, projectTaskID)
+	case "today":
+		return GetDynamicTaskTimeEntriesWithProject(db, "today", 0, projectTaskID)
+	case "last_week":
+		return GetDynamicTaskTimeEntriesWithProject(db, "last_week", 7, projectTaskID)
+	case "this_week":
+		return GetDynamicTaskTimeEntriesWithProject(db, "this_week", 0, projectTaskID)
+	case "last_month":
+		return GetDynamicTaskTimeEntriesWithProject(db, "last_month", 30, projectTaskID)
+	case "this_month":
+		return GetDynamicTaskTimeEntriesWithProject(db, "this_month", 0, projectTaskID)
+	case "last_x_days":
+		// This shouldn't happen as last_x_days should be handled with specific days
+		return GetDynamicTaskTimeEntriesWithProject(db, "last_x_days", 7, projectTaskID)
 	default:
+		// Check if it's a last_x_days pattern with specific days
+		if strings.HasPrefix(period, "last_") && strings.HasSuffix(period, "_days") {
+			// Extract days from pattern like "last_7_days"
+			daysPart := strings.TrimPrefix(period, "last_")
+			daysPart = strings.TrimSuffix(daysPart, "_days")
+			if days, err := strconv.Atoi(daysPart); err == nil && days >= 1 && days <= 60 {
+				return GetDynamicTaskTimeEntriesWithProject(db, "last_x_days", days, projectTaskID)
+			}
+		}
 		return nil, fmt.Errorf("invalid period: %s", period)
 	}
 }

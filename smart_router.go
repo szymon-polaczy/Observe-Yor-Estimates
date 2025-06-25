@@ -28,25 +28,25 @@ func (sr *SmartRouter) HandleUpdateRequest(req *SlackCommandRequest) error {
 		ProjectName: req.ProjectName, // Add project context
 	}
 
-	// Determine period from command
-	period := sr.determinePeriod(req.Text, req.Command)
+	// Parse period from command
+	periodInfo := sr.parsePeriodFromText(req.Text, req.Command)
 
 	if req.ProjectName != "" {
 		sr.logger.Infof("Processing %s update request for project '%s' from user %s in channel %s", 
-			period, req.ProjectName, req.UserName, req.ChannelName)
+			periodInfo.DisplayName, req.ProjectName, req.UserName, req.ChannelName)
 	} else {
-		sr.logger.Infof("Processing %s update request from user %s in channel %s", period, req.UserName, req.ChannelName)
+		sr.logger.Infof("Processing %s update request from user %s in channel %s", periodInfo.DisplayName, req.UserName, req.ChannelName)
 	}
 
 	// Handle long-running updates with progress tracking
-	return sr.HandleLongRunningUpdate(ctx, period)
+	return sr.HandleLongRunningUpdate(ctx, periodInfo)
 }
 
 // HandleLongRunningUpdate shows progress and delivers final result
-func (sr *SmartRouter) HandleLongRunningUpdate(ctx *ConversationContext, period string) error {
+func (sr *SmartRouter) HandleLongRunningUpdate(ctx *ConversationContext, periodInfo PeriodInfo) error {
 	// Send initial progress message
 	progressResp, err := sr.slackClient.SendProgressMessage(ctx,
-		fmt.Sprintf("🔄 Generating your %s update...", period))
+		fmt.Sprintf("🔄 Generating your %s update...", periodInfo.DisplayName))
 	if err != nil {
 		return sr.slackClient.SendErrorResponse(ctx, "Failed to start update process")
 	}
@@ -58,13 +58,13 @@ func (sr *SmartRouter) HandleLongRunningUpdate(ctx *ConversationContext, period 
 
 	// Process in background
 	go func() {
-		sr.processUpdateWithProgress(ctx, period)
+		sr.processUpdateWithProgress(ctx, periodInfo)
 	}()
 
 	return nil
 }
 
-func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, period string) {
+func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, periodInfo PeriodInfo) {
 	// Show progress updates
 	if ctx.ProjectName != "" {
 		sr.slackClient.UpdateProgress(ctx, fmt.Sprintf("📊 Querying database for project '%s'...", ctx.ProjectName))
@@ -114,9 +114,9 @@ func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, perio
 		time.Sleep(1 * time.Second)
 		
 		// Get project-specific task data
-		taskInfos, err = getTaskChangesWithProject(db, period, &project.TimeCampTaskID)
+		taskInfos, err = getTaskChangesWithProject(db, periodInfo.Type, &project.TimeCampTaskID)
 		if err != nil {
-			errorMessage := fmt.Sprintf("Failed to get %s changes for project '%s': ```%v```", period, project.Name, err)
+			errorMessage := fmt.Sprintf("Failed to get %s changes for project '%s': ```%v```", periodInfo.DisplayName, project.Name, err)
 			sr.slackClient.SendErrorResponse(ctx, errorMessage)
 			return
 		}
@@ -126,9 +126,9 @@ func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, perio
 		time.Sleep(1 * time.Second)
 		
 		// Get task data for all projects
-		taskInfos, err = getTaskChanges(db, period)
+		taskInfos, err = getTaskChanges(db, periodInfo.Type)
 		if err != nil {
-			errorMessage := fmt.Sprintf("Failed to get %s changes: ```%v```", period, err)
+			errorMessage := fmt.Sprintf("Failed to get %s changes: ```%v```", periodInfo.DisplayName, err)
 			sr.slackClient.SendErrorResponse(ctx, errorMessage)
 			return
 		}
@@ -139,31 +139,31 @@ func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, perio
 
 	// Handle the case where there are no tasks
 	if len(taskInfos) == 0 {
-		err = sr.slackClient.SendNoChangesMessage(ctx, period)
+		err = sr.slackClient.SendNoChangesMessage(ctx, periodInfo.DisplayName)
 		if err != nil {
 			sr.logger.Errorf("Failed to send 'no changes' message: %v", err)
-			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send %s report", period))
+			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send %s report", periodInfo.DisplayName))
 		}
 		return
 	}
 
 	// Send final result as public message in thread
-	err = sr.slackClient.SendFinalUpdate(ctx, taskInfos, period)
+	err = sr.slackClient.SendFinalUpdate(ctx, taskInfos, periodInfo.DisplayName)
 
 	if err != nil {
-		sr.logger.Errorf("Failed to send final %s report via Slack API: %v", period, err)
+		sr.logger.Errorf("Failed to send final %s report via Slack API: %v", periodInfo.DisplayName, err)
 
 		// Try webhook fallback
-		message := sr.slackClient.formatContextualMessage(taskInfos, period, ctx.UserID)
+		message := sr.slackClient.formatContextualMessage(taskInfos, periodInfo.DisplayName, ctx.UserID)
 		if webhookErr := sendSlackMessage(message); webhookErr != nil {
 			sr.logger.Errorf("Webhook fallback also failed: %v", webhookErr)
-			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send %s report", period))
+			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send %s report", periodInfo.DisplayName))
 			return
 		}
 		sr.logger.Info("Successfully sent report via webhook fallback")
 	}
 
-	sr.logger.Infof("Completed %s update for user %s", period, ctx.UserID)
+	sr.logger.Infof("Completed %s update for user %s", periodInfo.DisplayName, ctx.UserID)
 }
 
 // HandleFullSyncRequest processes full sync requests
@@ -243,27 +243,98 @@ func (sr *SmartRouter) processFullSyncWithProgress(ctx *ConversationContext) {
 	sr.logger.Infof("Completed full sync for user %s in %v", ctx.UserID, duration)
 }
 
-func (sr *SmartRouter) determinePeriod(text, command string) string {
-	// Check explicit text
+// PeriodInfo contains parsed period information
+type PeriodInfo struct {
+	Type        string // "last_x_days", "today", "yesterday", "this_week", "last_week", "this_month", "last_month"
+	Days        int    // Number of days for "last_x_days" type
+	DisplayName string // Human-readable name for display
+}
+
+
+// parsePeriodFromText parses natural language time periods
+func (sr *SmartRouter) parsePeriodFromText(text, command string) PeriodInfo {
 	text = strings.ToLower(strings.TrimSpace(text))
-	for _, period := range []string{"daily", "weekly", "monthly"} {
-		if strings.Contains(text, period) {
-			return period
+	
+	// Remove project names from text for period parsing
+	// This handles cases like "filestage last 7 days"
+	words := strings.Fields(text)
+	var periodWords []string
+	
+	// Look for period-related keywords and numbers
+	for i, word := range words {
+		// Check for "last X days" pattern
+		if word == "last" && i+2 < len(words) && words[i+2] == "days" {
+			if days, err := strconv.Atoi(words[i+1]); err == nil && days >= 1 && days <= 60 {
+				return PeriodInfo{
+					Type:        "last_x_days",
+					Days:        days,
+					DisplayName: fmt.Sprintf("Last %d Days", days),
+				}
+			}
+		}
+		
+		// Check for "last X day" (singular)
+		if word == "last" && i+2 < len(words) && words[i+2] == "day" {
+			if days, err := strconv.Atoi(words[i+1]); err == nil && days == 1 {
+				return PeriodInfo{
+					Type:        "yesterday",
+					Days:        1,
+					DisplayName: "Yesterday",
+				}
+			}
+		}
+		
+		// Collect words that might be period-related
+		if word == "today" || word == "yesterday" || word == "this" || word == "last" || 
+		   word == "week" || word == "month" || word == "daily" || word == "weekly" || word == "monthly" ||
+		   word == "days" || word == "day" {
+			periodWords = append(periodWords, word)
 		}
 	}
-
-	// Check command name
+	
+	// Join period words to check for multi-word patterns
+	periodText := strings.Join(periodWords, " ")
+	
+	// Check for specific patterns
+	switch {
+	case strings.Contains(periodText, "today"):
+		return PeriodInfo{Type: "today", Days: 0, DisplayName: "Today"}
+	case strings.Contains(periodText, "yesterday"):
+		return PeriodInfo{Type: "yesterday", Days: 1, DisplayName: "Yesterday"}
+	case strings.Contains(periodText, "this week"):
+		return PeriodInfo{Type: "this_week", Days: 0, DisplayName: "This Week"}
+	case strings.Contains(periodText, "last week"):
+		return PeriodInfo{Type: "last_week", Days: 7, DisplayName: "Last Week"}
+	case strings.Contains(periodText, "this month"):
+		return PeriodInfo{Type: "this_month", Days: 0, DisplayName: "This Month"}
+	case strings.Contains(periodText, "last month"):
+		return PeriodInfo{Type: "last_month", Days: 30, DisplayName: "Last Month"}
+	}
+	
+	// Check for backwards compatibility with old period names
+	if strings.Contains(periodText, "weekly") || strings.Contains(periodText, "week") {
+		return PeriodInfo{Type: "last_week", Days: 7, DisplayName: "Last Week"}
+	}
+	if strings.Contains(periodText, "monthly") || strings.Contains(periodText, "month") {
+		return PeriodInfo{Type: "last_month", Days: 30, DisplayName: "Last Month"}
+	}
+	if strings.Contains(periodText, "daily") || strings.Contains(periodText, "day") {
+		return PeriodInfo{Type: "yesterday", Days: 1, DisplayName: "Yesterday"}
+	}
+	
+	// Check command name for backwards compatibility
 	if strings.Contains(command, "daily") {
-		return "daily"
+		return PeriodInfo{Type: "yesterday", Days: 1, DisplayName: "Yesterday"}
 	}
 	if strings.Contains(command, "weekly") {
-		return "weekly"
+		return PeriodInfo{Type: "last_week", Days: 7, DisplayName: "Last Week"}
 	}
 	if strings.Contains(command, "monthly") {
-		return "monthly"
+		return PeriodInfo{Type: "last_month", Days: 30, DisplayName: "Last Month"}
 	}
-
-	return "daily" // default fallback
+	
+	// Default fallback
+	return PeriodInfo{Type: "yesterday", Days: 1, DisplayName: "Yesterday"}
 }
 
 // HandleThresholdRequest processes threshold percentage requests like "over 50 daily"
@@ -278,17 +349,17 @@ func (sr *SmartRouter) HandleThresholdRequest(req *SlackCommandRequest) error {
 	sr.logger.Infof("Processing threshold request from user %s: %s", req.UserName, req.Text)
 
 	// Parse the threshold and period from the text
-	threshold, period, err := sr.parseThresholdCommand(req.Text)
+	threshold, periodInfo, err := sr.parseThresholdCommand(req.Text)
 	if err != nil {
-		return sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("❌ Invalid command format. Use: `/oye over <percentage> <period>`\nExample: `/oye over 50 daily`\nError: %v", err))
+		return sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("❌ Invalid command format. Use: `/oye over <percentage> <period>`\nExample: `/oye over 50 daily` or `/oye over 50 last 7 days`\nError: %v", err))
 	}
 
 	// Send initial progress message
 	var progressMsg string
 	if req.ProjectName != "" && req.ProjectName != "all" {
-		progressMsg = fmt.Sprintf("🔍 Searching for %s project tasks over %.0f%% threshold for %s period...", req.ProjectName, threshold, period)
+		progressMsg = fmt.Sprintf("🔍 Searching for %s project tasks over %.0f%% threshold for %s period...", req.ProjectName, threshold, periodInfo.DisplayName)
 	} else {
-		progressMsg = fmt.Sprintf("🔍 Searching for tasks over %.0f%% threshold for %s period...", threshold, period)
+		progressMsg = fmt.Sprintf("🔍 Searching for tasks over %.0f%% threshold for %s period...", threshold, periodInfo.DisplayName)
 	}
 	
 	progressResp, err := sr.slackClient.SendProgressMessage(ctx, progressMsg)
@@ -303,13 +374,13 @@ func (sr *SmartRouter) HandleThresholdRequest(req *SlackCommandRequest) error {
 
 	// Process in background
 	go func() {
-		sr.processThresholdWithProgress(ctx, threshold, period)
+		sr.processThresholdWithProgress(ctx, threshold, periodInfo)
 	}()
 
 	return nil
 }
 
-func (sr *SmartRouter) processThresholdWithProgress(ctx *ConversationContext, threshold float64, period string) {
+func (sr *SmartRouter) processThresholdWithProgress(ctx *ConversationContext, threshold float64, periodInfo PeriodInfo) {
 	// Show progress updates
 	if ctx.ProjectName != "" && ctx.ProjectName != "all" {
 		sr.slackClient.UpdateProgress(ctx, fmt.Sprintf("📊 Querying database for project '%s' tasks with estimations...", ctx.ProjectName))
@@ -358,14 +429,14 @@ func (sr *SmartRouter) processThresholdWithProgress(ctx *ConversationContext, th
 		time.Sleep(1 * time.Second)
 		
 		// Get project-specific tasks over threshold
-		taskInfos, err = GetTasksOverThresholdWithProject(db, threshold, period, &project.TimeCampTaskID)
+		taskInfos, err = GetTasksOverThresholdWithProject(db, threshold, periodInfo.Type, &project.TimeCampTaskID)
 	} else {
 		// All projects threshold query
 		sr.slackClient.UpdateProgress(ctx, fmt.Sprintf("📈 Analyzing tasks over %.0f%% threshold...", threshold))
 		time.Sleep(1 * time.Second)
 		
 		// Get all tasks over threshold
-		taskInfos, err = GetTasksOverThreshold(db, threshold, period)
+		taskInfos, err = GetTasksOverThreshold(db, threshold, periodInfo.Type)
 	}
 	if err != nil {
 		errorMessage := fmt.Sprintf("Failed to get tasks over threshold: ```%v```", err)
@@ -378,7 +449,7 @@ func (sr *SmartRouter) processThresholdWithProgress(ctx *ConversationContext, th
 
 	// Handle the case where there are no tasks
 	if len(taskInfos) == 0 {
-		err = sr.slackClient.SendThresholdNoResultsMessage(ctx, threshold, period)
+		err = sr.slackClient.SendThresholdNoResultsMessage(ctx, threshold, periodInfo.DisplayName)
 		if err != nil {
 			sr.logger.Errorf("Failed to send 'no results' message: %v", err)
 			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send threshold report"))
@@ -387,12 +458,12 @@ func (sr *SmartRouter) processThresholdWithProgress(ctx *ConversationContext, th
 	}
 
 	// Send final result
-	err = sr.slackClient.SendThresholdResults(ctx, taskInfos, threshold, period)
+	err = sr.slackClient.SendThresholdResults(ctx, taskInfos, threshold, periodInfo.DisplayName)
 	if err != nil {
 		sr.logger.Errorf("Failed to send threshold results via Slack API: %v", err)
 
 		// Try webhook fallback
-		message := sr.slackClient.formatThresholdMessage(taskInfos, threshold, period)
+		message := sr.slackClient.formatThresholdMessage(taskInfos, threshold, periodInfo.DisplayName)
 		if webhookErr := sendSlackMessage(message); webhookErr != nil {
 			sr.logger.Errorf("Webhook fallback also failed: %v", webhookErr)
 			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send threshold report"))
@@ -402,11 +473,11 @@ func (sr *SmartRouter) processThresholdWithProgress(ctx *ConversationContext, th
 	}
 
 	sr.logger.Infof("Completed threshold check for user %s: %.0f%% threshold, %s period, %d tasks found",
-		ctx.UserID, threshold, period, len(taskInfos))
+		ctx.UserID, threshold, periodInfo.DisplayName, len(taskInfos))
 }
 
-// parseThresholdCommand parses commands like "over 50 daily" to extract threshold and period
-func (sr *SmartRouter) parseThresholdCommand(text string) (float64, string, error) {
+// parseThresholdCommand parses commands like "over 50 daily" or "over 50 last 7 days" to extract threshold and period
+func (sr *SmartRouter) parseThresholdCommand(text string) (float64, PeriodInfo, error) {
 	text = strings.ToLower(strings.TrimSpace(text))
 
 	// Remove "over" from the beginning if present
@@ -416,7 +487,7 @@ func (sr *SmartRouter) parseThresholdCommand(text string) (float64, string, erro
 	// Split into parts
 	parts := strings.Fields(text)
 	if len(parts) < 1 {
-		return 0, "", fmt.Errorf("missing threshold percentage")
+		return 0, PeriodInfo{}, fmt.Errorf("missing threshold percentage")
 	}
 
 	// Parse threshold percentage
@@ -426,27 +497,20 @@ func (sr *SmartRouter) parseThresholdCommand(text string) (float64, string, erro
 
 	threshold, err := strconv.ParseFloat(thresholdStr, 64)
 	if err != nil {
-		return 0, "", fmt.Errorf("invalid threshold percentage '%s'", parts[0])
+		return 0, PeriodInfo{}, fmt.Errorf("invalid threshold percentage '%s'", parts[0])
 	}
 
 	if threshold < 0 || threshold > 1000 {
-		return 0, "", fmt.Errorf("threshold percentage must be between 0 and 1000")
+		return 0, PeriodInfo{}, fmt.Errorf("threshold percentage must be between 0 and 1000")
 	}
 
-	// Determine period
-	period := "daily" // default
+	// Parse period from remaining text
 	if len(parts) >= 2 {
-		switch parts[1] {
-		case "daily", "day":
-			period = "daily"
-		case "weekly", "week":
-			period = "weekly"
-		case "monthly", "month":
-			period = "monthly"
-		default:
-			return 0, "", fmt.Errorf("invalid period '%s'. Use: daily, weekly, or monthly", parts[1])
-		}
+		periodText := strings.Join(parts[1:], " ")
+		periodInfo := sr.parsePeriodFromText(periodText, "")
+		return threshold, periodInfo, nil
 	}
 
-	return threshold, period, nil
+	// Default period
+	return threshold, PeriodInfo{Type: "yesterday", Days: 1, DisplayName: "Yesterday"}, nil
 }
