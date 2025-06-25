@@ -1096,30 +1096,18 @@ func formatProjectMessageWithComments(project string, tasks []TaskUpdateInfo, pe
 }
 
 // GetTasksOverThreshold returns tasks that are over a specific percentage of their estimation
-func GetTasksOverThreshold(db *sql.DB, threshold float64, period string) ([]TaskUpdateInfo, error) {
-	return GetTasksOverThresholdWithProject(db, threshold, period, nil)
+func GetTasksOverThreshold(db *sql.DB, threshold float64, period string, days int) ([]TaskUpdateInfo, error) {
+	return GetTasksOverThresholdWithProject(db, threshold, period, days, nil)
 }
 
 // GetTasksOverThresholdWithProject returns tasks that are over a specific percentage of their estimation, optionally filtered by project
-func GetTasksOverThresholdWithProject(db *sql.DB, threshold float64, period string, projectTaskID *int) ([]TaskUpdateInfo, error) {
+func GetTasksOverThresholdWithProject(db *sql.DB, threshold float64, period string, days int, projectTaskID *int) ([]TaskUpdateInfo, error) {
 	logger := GetGlobalLogger()
 
-	var fromDate, toDate string
-	switch period {
-	case "daily":
-		fromDate = time.Now().AddDate(0, 0, -1).Format("2006-01-02")
-		toDate = time.Now().Format("2006-01-02")
-	case "weekly":
-		fromDate = time.Now().AddDate(0, 0, -7).Format("2006-01-02")
-		toDate = time.Now().Format("2006-01-02")
-	case "monthly":
-		fromDate = time.Now().AddDate(0, -1, 0).Format("2006-01-02")
-		toDate = time.Now().Format("2006-01-02")
-	default:
-		// Default to daily
-		fromDate = time.Now().AddDate(0, 0, -1).Format("2006-01-02")
-		toDate = time.Now().Format("2006-01-02")
-	}
+	// Use the same date calculation logic as other functions
+	dateRanges := calculateDateRanges(period, days)
+	fromDate := dateRanges.Current.Start
+	toDate := dateRanges.Current.End
 
 	// Build project filtering parameters
 	var projectFilterClause string

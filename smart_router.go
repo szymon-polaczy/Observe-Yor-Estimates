@@ -429,14 +429,14 @@ func (sr *SmartRouter) processThresholdWithProgress(ctx *ConversationContext, th
 		time.Sleep(1 * time.Second)
 		
 		// Get project-specific tasks over threshold
-		taskInfos, err = GetTasksOverThresholdWithProject(db, threshold, periodInfo.Type, &project.TimeCampTaskID)
+		taskInfos, err = GetTasksOverThresholdWithProject(db, threshold, periodInfo.Type, periodInfo.Days, &project.TimeCampTaskID)
 	} else {
 		// All projects threshold query
 		sr.slackClient.UpdateProgress(ctx, fmt.Sprintf("📈 Analyzing tasks over %.0f%% threshold...", threshold))
 		time.Sleep(1 * time.Second)
 		
 		// Get all tasks over threshold
-		taskInfos, err = GetTasksOverThreshold(db, threshold, periodInfo.Type)
+		taskInfos, err = GetTasksOverThreshold(db, threshold, periodInfo.Type, periodInfo.Days)
 	}
 	if err != nil {
 		errorMessage := fmt.Sprintf("Failed to get tasks over threshold: ```%v```", err)
