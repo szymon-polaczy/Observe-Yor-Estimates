@@ -1,8 +1,10 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/joho/godotenv"
 	"github.com/robfig/cron/v3"
@@ -280,6 +282,165 @@ func handleCliCommands(args []string, logger *Logger) {
 		for _, project := range projects {
 			fmt.Printf("- %s (TimeCamp Task ID: %d)\n", project.Name, project.TimeCampTaskID)
 		}
+	case "test-command":
+		if len(args) < 2 {
+			logger.Error("Error: test-command requires a command string (e.g., test-command \"/oye all this month\")")
+			return
+		}
+		testCommand := args[1]
+		logger.Infof("Testing local OYE command: %s", testCommand)
+		
+		// Remove "/oye " prefix if present
+		testCommand = strings.TrimPrefix(testCommand, "/oye ")
+		testCommand = strings.TrimSpace(testCommand)
+		
+		// Parse project name from command if present
+		projectName, remainingText := ParseProjectFromCommand(testCommand)
+		
+		fmt.Printf("\n=== OYE Test Command Results ===\n")
+		fmt.Printf("Original command: %s\n", testCommand)
+		if projectName != "" {
+			fmt.Printf("Project filter: %s\n", projectName)
+		}
+		fmt.Printf("Remaining text: %s\n", remainingText)
+		fmt.Printf("=====================================\n\n")
+		
+		// Get database connection
+		db, err := GetDB()
+		if err != nil {
+			logger.Errorf("Failed to get database connection: %v", err)
+			os.Exit(1)
+		}
+		
+		// Parse the time period
+		router := NewSmartRouter()
+		periodInfo := router.parsePeriodFromText(remainingText, "")
+		
+		fmt.Printf("Parsed period: %s (type: %s, days: %d)\n\n", periodInfo.DisplayName, periodInfo.Type, periodInfo.Days)
+		
+		// Handle project-specific query
+		var taskInfos []TaskUpdateInfo
+		if projectName != "" && projectName != "all" {
+			// Find the project
+			projects, err := FindProjectsByName(db, projectName)
+			if err != nil {
+				logger.Errorf("Failed to find project: %v", err)
+				os.Exit(1)
+			}
+			
+			if len(projects) == 0 {
+				fmt.Printf("❌ Project '%s' not found.\n", projectName)
+				fmt.Println("\nAvailable projects:")
+				allProjects, err := GetAllProjects(db)
+				if err == nil {
+					for _, p := range allProjects {
+						fmt.Printf("- %s\n", p.Name)
+					}
+				}
+				return
+			}
+			
+			if len(projects) > 1 {
+				fmt.Printf("⚠️ Multiple projects found for '%s':\n", projectName)
+				for _, p := range projects {
+					fmt.Printf("- %s\n", p.Name)
+				}
+				fmt.Println("\nPlease be more specific.")
+				return
+			}
+			
+			project := projects[0]
+			fmt.Printf("Found project: %s (TimeCamp Task ID: %d)\n", project.Name, project.TimeCampTaskID)
+			
+			// Get project-specific task data
+			taskInfos, err = getTaskChangesWithProject(db, periodInfo.Type, &project.TimeCampTaskID)
+			if err != nil {
+				logger.Errorf("Failed to get %s changes for project '%s': %v", periodInfo.DisplayName, project.Name, err)
+				os.Exit(1)
+			}
+		} else {
+			// Get task data for all projects
+			taskInfos, err = getTaskChanges(db, periodInfo.Type)
+			if err != nil {
+				logger.Errorf("Failed to get %s changes: %v", periodInfo.DisplayName, err)
+				os.Exit(1)
+			}
+		}
+		
+		fmt.Printf("\n📊 Results for %s:\n", periodInfo.DisplayName)
+		fmt.Printf("Found %d tasks with time entries\n\n", len(taskInfos))
+		
+		if len(taskInfos) == 0 {
+			fmt.Println("No tasks found with time entries for the specified period.")
+		} else {
+			for i, task := range taskInfos {
+				fmt.Printf("%d. %s\n", i+1, task.Name)
+				fmt.Printf("   %s: %s | %s: %s\n", task.CurrentPeriod, task.CurrentTime, task.PreviousPeriod, task.PreviousTime)
+				if task.EstimationInfo != "" {
+					fmt.Printf("   %s\n", task.EstimationInfo)
+				}
+				if len(task.Comments) > 0 {
+					fmt.Printf("   Comments: %d\n", len(task.Comments))
+				}
+				fmt.Println()
+			}
+		}
+		
+		fmt.Println("=== Test command completed ===")
+		
+		// Additional debugging: Check project task relationships
+		if projectName != "" && projectName != "all" {
+			fmt.Printf("\n=== Debug: Project Task Relationships ===\n")
+			projects, err := FindProjectsByName(db, projectName)
+			if err == nil && len(projects) > 0 {
+				project := projects[0]
+				fmt.Printf("Project: %s (TimeCamp Task ID: %d)\n", project.Name, project.TimeCampTaskID)
+				
+				// Check how many tasks are linked to this project
+				var taskCount int
+				err = db.QueryRow(`SELECT COUNT(*) FROM tasks WHERE project_id = (
+					SELECT id FROM projects WHERE timecamp_task_id = $1
+				)`, project.TimeCampTaskID).Scan(&taskCount)
+				if err == nil {
+					fmt.Printf("Tasks linked to this project: %d\n", taskCount)
+				}
+				
+				// Show sample tasks linked to this project
+				rows, err := db.Query(`SELECT task_id, name FROM tasks WHERE project_id = (
+					SELECT id FROM projects WHERE timecamp_task_id = $1
+				) LIMIT 10`, project.TimeCampTaskID)
+				if err == nil {
+					defer rows.Close()
+					fmt.Println("Sample tasks linked to this project:")
+					for rows.Next() {
+						var taskID int
+						var taskName string
+						if err := rows.Scan(&taskID, &taskName); err == nil {
+							fmt.Printf("- Task %d: %s\n", taskID, taskName)
+						}
+					}
+				}
+				
+				// Also check if there are tasks with "Filestage" in the name but not linked to the project
+				fmt.Println("\nTasks with 'Filestage' in name (regardless of project):")
+				rows2, err := db.Query(`SELECT task_id, name, project_id FROM tasks WHERE LOWER(name) LIKE LOWER('%filestage%') LIMIT 20`)
+				if err == nil {
+					defer rows2.Close()
+					for rows2.Next() {
+						var taskID int
+						var taskName string
+						var projectID sql.NullInt64
+						if err := rows2.Scan(&taskID, &taskName, &projectID); err == nil {
+							projectStr := "NULL"
+							if projectID.Valid {
+								projectStr = fmt.Sprintf("%d", projectID.Int64)
+							}
+							fmt.Printf("- Task %d: %s (project_id: %s)\n", taskID, taskName, projectStr)
+						}
+					}
+				}
+			}
+		}
 	default:
 		logger.Warnf("Unknown command line argument: %s", command)
 		showHelp()
@@ -385,6 +546,9 @@ func showHelp() {
 	fmt.Println("Project management commands:")
 	fmt.Println("  sync-projects            - Sync projects table from task hierarchy")
 	fmt.Println("  list-projects            - Show all projects in the database")
+	fmt.Println("")
+	fmt.Println("Testing commands:")
+	fmt.Println("  test-command <command>   - Test OYE commands locally (e.g., test-command \"/oye Filestage.io this month\")")
 	fmt.Println("")
 	fmt.Println("  --version, version         - Show application version")
 	fmt.Println("  --help, -h, help         - Show help message")
