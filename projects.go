@@ -388,7 +388,6 @@ func updateTaskProjectMapping(db *sql.DB) error {
 			continue
 		}
 		
-		logger.Debugf("Updated %d tasks with project_id %d for project %s", len(taskIDs), project.ID, project.Name)
 	}
 	
 	logger.Info("Task project mapping updated successfully")

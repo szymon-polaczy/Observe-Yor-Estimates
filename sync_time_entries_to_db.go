@@ -1494,31 +1494,35 @@ func GetDynamicTaskTimeEntriesWithProject(db *sql.DB, periodType string, days in
 		}
 	}
 
-	// Build project filtering clause and args
-	var projectFilterClause string
+	// Build project filtering clause for time_entries using project_id
+	var projectCTE string
+	var timeEntriesFilter string
 	var args []interface{}
 	
-	if len(projectTaskIDs) > 0 {
-		placeholders := make([]string, len(projectTaskIDs))
-		for i, taskID := range projectTaskIDs {
-			placeholders[i] = fmt.Sprintf("$%d", i+1)
-			args = append(args, taskID)
-		}
-		projectFilterClause = fmt.Sprintf("AND COALESCE(tc.task_id, tp.task_id) IN (%s)", strings.Join(placeholders, ","))
+	if projectTaskID != nil {
+		// Create a CTE that gets all task IDs for the project once
+		projectCTE = `
+project_tasks AS (
+    SELECT task_id FROM tasks WHERE project_id = (
+        SELECT id FROM projects WHERE timecamp_task_id = $1
+    )
+),`
+		timeEntriesFilter = `AND task_id IN (SELECT task_id FROM project_tasks)`
+		args = append(args, *projectTaskID)
 	}
 
 	// User breakdown query
 	userBreakdownQuery := fmt.Sprintf(`
-WITH current_period AS (
+WITH %scurrent_period AS (
     SELECT task_id, user_id, SUM(duration) AS total_duration
     FROM time_entries
-    WHERE date::date >= '%s'::date AND date::date <= '%s'::date
+    WHERE date::date >= '%s'::date AND date::date <= '%s'::date %s
     GROUP BY task_id, user_id
 ),
 previous_period AS (
     SELECT task_id, user_id, SUM(duration) AS total_duration
     FROM time_entries
-    WHERE date::date >= '%s'::date AND date::date <= '%s'::date
+    WHERE date::date >= '%s'::date AND date::date <= '%s'::date %s
     GROUP BY task_id, user_id
 )
 SELECT 
@@ -1528,11 +1532,11 @@ SELECT
     COALESCE(tp.total_duration, 0) AS previous_duration
 FROM current_period tc
 FULL OUTER JOIN previous_period tp ON tc.task_id = tp.task_id AND tc.user_id = tp.user_id
-WHERE COALESCE(tc.total_duration, 0) > 0 %s;`, 
-		dateRanges.Current.Start, dateRanges.Current.End,
-		dateRanges.Previous.Start, dateRanges.Previous.End,
-		projectFilterClause)
-
+WHERE COALESCE(tc.total_duration, 0) > 0;`, 
+		projectCTE,
+		dateRanges.Current.Start, dateRanges.Current.End, timeEntriesFilter,
+		dateRanges.Previous.Start, dateRanges.Previous.End, timeEntriesFilter)
+	
 	userRows, err := db.Query(userBreakdownQuery, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query user breakdown: %w", err)
@@ -1560,24 +1564,23 @@ WHERE COALESCE(tc.total_duration, 0) > 0 %s;`,
 
 	// Main query
 	mainQuery := fmt.Sprintf(`
-WITH current_period AS (
-    SELECT task_id, SUM(duration) AS total_duration, string_agg(DISTINCT description, '; ' ORDER BY description) AS descriptions
+WITH %scurrent_period AS (
+    SELECT task_id, SUM(duration) AS total_duration, 
+           string_agg(DISTINCT NULLIF(description, ''), '; ' ORDER BY NULLIF(description, '')) AS descriptions
     FROM time_entries
-    WHERE date::date >= '%s'::date AND date::date <= '%s'::date
-      AND description IS NOT NULL 
-      AND description != ''
+    WHERE date::date >= '%s'::date AND date::date <= '%s'::date %s
     GROUP BY task_id
 ),
 previous_period AS (
     SELECT task_id, SUM(duration) AS total_duration
     FROM time_entries
-    WHERE date::date >= '%s'::date AND date::date <= '%s'::date
+    WHERE date::date >= '%s'::date AND date::date <= '%s'::date %s
     GROUP BY task_id
 ),
 days_worked AS (
     SELECT task_id, COUNT(DISTINCT date::date) AS days_worked
     FROM time_entries
-    WHERE date::date >= '%s'::date AND date::date <= '%s'::date
+    WHERE date::date >= '%s'::date AND date::date <= '%s'::date %s
     GROUP BY task_id
 )
 SELECT 
@@ -1593,13 +1596,14 @@ FULL OUTER JOIN previous_period tp ON tc.task_id = tp.task_id
 LEFT JOIN days_worked dw ON COALESCE(tc.task_id, tp.task_id) = dw.task_id
 LEFT JOIN tasks t ON COALESCE(tc.task_id, tp.task_id) = t.task_id
 WHERE COALESCE(tc.total_duration, 0) > 0
-  AND t.task_id IS NOT NULL %s
+  AND t.task_id IS NOT NULL
 ORDER BY COALESCE(tc.total_duration, 0) DESC;`, 
-		dateRanges.Current.Start, dateRanges.Current.End,
-		dateRanges.Previous.Start, dateRanges.Previous.End,
-		dateRanges.Current.Start, dateRanges.Current.End,
-		projectFilterClause)
+		projectCTE,
+		dateRanges.Current.Start, dateRanges.Current.End, timeEntriesFilter,
+		dateRanges.Previous.Start, dateRanges.Previous.End, timeEntriesFilter,
+		dateRanges.Current.Start, dateRanges.Current.End, timeEntriesFilter)
 
+	
 	rows, err := db.Query(mainQuery, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query dynamic task time entries: %w", err)
