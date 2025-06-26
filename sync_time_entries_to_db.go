@@ -1048,11 +1048,9 @@ WHERE COALESCE(y.total_duration, 0) > 0 %s;`, projectFilterClause)
 	// Main query - apply project filtering only once at the end
 	mainQuery := fmt.Sprintf(`
 WITH yesterday AS (
-    SELECT task_id, SUM(duration) AS total_duration, string_agg(DISTINCT description, '; ' ORDER BY description) AS descriptions
+    SELECT task_id, SUM(duration) AS total_duration, string_agg(DISTINCT NULLIF(description, ''), '; ' ORDER BY NULLIF(description, '')) AS descriptions
     FROM time_entries
-    WHERE date::date = CURRENT_DATE - INTERVAL '1 day' 
-      AND description IS NOT NULL 
-      AND description != ''
+    WHERE date::date = CURRENT_DATE - INTERVAL '1 day'
     GROUP BY task_id
 ),
 day_before AS (

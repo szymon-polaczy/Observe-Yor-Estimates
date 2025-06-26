@@ -399,7 +399,7 @@ func getTaskChanges(db *sql.DB, period string) ([]TaskUpdateInfo, error) {
 	// Handle backwards compatibility for old period names and new natural language periods
 	switch period {
 	case "daily":
-		return GetTaskTimeEntries(db)
+		return GetDynamicTaskTimeEntriesWithProject(db, "yesterday", 1, nil)
 	case "weekly":
 		return GetWeeklyTaskTimeEntries(db)
 	case "monthly":
