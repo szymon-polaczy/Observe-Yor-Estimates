@@ -212,7 +212,7 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 		Type: "section",
 		Text: &Text{
 			Type: "mrkdwn",
-			Text: "*🔧 Quick Project Assignment*\nCheck/uncheck projects to assign yourself:",
+			Text: "*🔧 Project Assignment*\nUse checkboxes to select which projects you want to be assigned to:",
 		},
 	})
 
@@ -239,7 +239,7 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 		Type: "section",
 		Text: &Text{
 			Type: "mrkdwn",
-			Text: fmt.Sprintf("*Projects* (Page %d of %d)\nClick to assign/unassign:", currentPage+1, totalPages),
+			Text: fmt.Sprintf("*Projects* (Page %d of %d)", currentPage+1, totalPages),
 		},
 	})
 
@@ -247,47 +247,49 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 	if startIdx < len(allProjects) {
 		currentPageProjects := allProjects[startIdx:endIdx]
 
-		// Create toggle buttons for current page
-		var elements []Element
+		// Create checkbox options for current page
+		var checkboxOptions []map[string]interface{}
 		for _, project := range currentPageProjects {
-			isAssigned := assignedProjectMap[project.ID]
-			status := "+"
-			style := "primary"
-			if isAssigned {
-				status = "✓"
-				style = "danger"
-			}
-
-			// Keep button text short to save space
-			buttonText := fmt.Sprintf("%s %s", status, project.Name)
-			if len(buttonText) > 50 {
-				buttonText = fmt.Sprintf("%s %s...", status, project.Name[:45])
-			}
-
-			elements = append(elements, Element{
-				Type: "button",
-				Text: map[string]string{
+			option := map[string]interface{}{
+				"text": map[string]string{
 					"type": "plain_text",
-					"text": buttonText,
+					"text": project.Name,
 				},
-				ActionID: fmt.Sprintf("toggle_project_%d", project.ID),
-				Style:    style,
-				Value:    fmt.Sprintf("%d", project.ID),
-			})
-		}
-
-		// Add buttons in rows of 2 (conservative to avoid size issues)
-		for j := 0; j < len(elements); j += 2 {
-			endIdx := j + 2
-			if endIdx > len(elements) {
-				endIdx = len(elements)
+				"value": fmt.Sprintf("%d", project.ID),
 			}
 
-			blocks = append(blocks, Block{
-				Type:     "actions",
-				Elements: elements[j:endIdx],
-			})
+			checkboxOptions = append(checkboxOptions, option)
 		}
+
+		// Create initial options (pre-selected checkboxes for assigned projects)
+		var initialOptions []map[string]interface{}
+		for _, project := range currentPageProjects {
+			if assignedProjectMap[project.ID] {
+				initialOption := map[string]interface{}{
+					"text": map[string]string{
+						"type": "plain_text",
+						"text": project.Name,
+					},
+					"value": fmt.Sprintf("%d", project.ID),
+				}
+				initialOptions = append(initialOptions, initialOption)
+			}
+		}
+
+		// Add checkbox group for project assignments
+		blocks = append(blocks, Block{
+			Type: "section",
+			Text: &Text{
+				Type: "mrkdwn",
+				Text: "Select projects to assign yourself to:",
+			},
+			Accessory: &Accessory{
+				Type:           "checkboxes",
+				ActionID:       "project_assignments",
+				Options:        checkboxOptions,
+				InitialOptions: initialOptions,
+			},
+		})
 
 		// Show pagination info
 		blocks = append(blocks, Block{
@@ -477,21 +479,6 @@ func HandleInteractiveComponents(w http.ResponseWriter, r *http.Request) {
 			} else {
 				logger.Info("App Home view refreshed successfully")
 			}
-		} else if strings.HasPrefix(action.ActionID, "toggle_project_") {
-			logger.Info("Processing project toggle button...")
-			if err := HandleProjectToggle(payload.User.ID, action.ActionID, action.Value); err != nil {
-				logger.Errorf("Failed to handle project toggle: %v", err)
-				http.Error(w, "Failed to process project toggle", http.StatusInternalServerError)
-				return
-			}
-
-			// Refresh the App Home view
-			logger.Info("Refreshing App Home view...")
-			if err := PublishAppHomeView(payload.User.ID); err != nil {
-				logger.Errorf("Failed to refresh app home view: %v", err)
-			} else {
-				logger.Info("App Home view refreshed successfully")
-			}
 		} else if strings.HasPrefix(action.ActionID, "page_") {
 			logger.Info("Processing page navigation...")
 			if err := HandlePageNavigation(payload.User.ID, action.ActionID, action.Value); err != nil {
@@ -627,51 +614,5 @@ func HandlePageNavigation(userID, actionID, value string) error {
 	}
 
 	logger.Infof("Successfully navigated to page %d for user %s", pageNum, userID)
-	return nil
-}
-
-// HandleProjectToggle processes individual project toggle button clicks
-func HandleProjectToggle(userID, actionID, value string) error {
-	logger := GetGlobalLogger()
-
-	projectID, err := strconv.Atoi(value)
-	if err != nil {
-		return fmt.Errorf("invalid project ID: %s", value)
-	}
-
-	db, err := GetDB()
-	if err != nil {
-		return fmt.Errorf("failed to get database connection: %w", err)
-	}
-
-	// Check if user is currently assigned to this project
-	userProjects, err := GetUserProjects(db, userID)
-	if err != nil {
-		return fmt.Errorf("failed to get user projects: %w", err)
-	}
-
-	isCurrentlyAssigned := false
-	for _, project := range userProjects {
-		if project.ID == projectID {
-			isCurrentlyAssigned = true
-			break
-		}
-	}
-
-	// Toggle the assignment
-	if isCurrentlyAssigned {
-		// Remove assignment
-		if err := UnassignUserFromProject(db, userID, projectID); err != nil {
-			return fmt.Errorf("failed to unassign user from project %d: %w", projectID, err)
-		}
-		logger.Infof("Unassigned user %s from project %d via toggle", userID, projectID)
-	} else {
-		// Add assignment
-		if err := AssignUserToProject(db, userID, projectID); err != nil {
-			return fmt.Errorf("failed to assign user to project %d: %w", projectID, err)
-		}
-		logger.Infof("Assigned user %s to project %d via toggle", userID, projectID)
-	}
-
 	return nil
 }
