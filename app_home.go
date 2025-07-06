@@ -223,7 +223,7 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 	}
 
 	// Show projects with pagination to stay within payload limits
-	const projectsPerPage = 7
+	const projectsPerPage = 5
 	currentPage := page // Use provided page parameter
 
 	startIdx := currentPage * projectsPerPage
