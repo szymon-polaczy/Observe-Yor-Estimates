@@ -81,9 +81,9 @@ func setupSlackRoutes() {
 	http.HandleFunc("/slack/oye", handleUnifiedOYECommand)
 	http.HandleFunc("/health", handleHealthCheck)
 
-    // New App Home routes
-    http.HandleFunc("/slack/events", HandleAppHome)
-    http.HandleFunc("/slack/interactive", HandleInteractiveComponents
+	// New App Home routes
+	http.HandleFunc("/slack/events", HandleAppHome)
+	http.HandleFunc("/slack/interactive", HandleInteractiveComponents)
 }
 
 // handleUnifiedOYECommand handles the new unified /oye command
@@ -112,14 +112,26 @@ func handleUnifiedOYECommand(w http.ResponseWriter, r *http.Request) {
 
 	// Parse project name from command if present
 	projectName, remainingText := ParseProjectFromCommand(req.Text)
-	
+
 	// Update the request with parsed project info
 	if projectName != "" && projectName != "all" {
 		req.ProjectName = projectName
-		req.Text = remainingText  // Update text to remaining command after project name
+		req.Text = remainingText // Update text to remaining command after project name
 	}
 
 	text := strings.ToLower(strings.TrimSpace(req.Text))
+
+	// Check for project assignment commands first
+	if strings.HasPrefix(text, "assign ") || strings.HasPrefix(text, "unassign ") ||
+		text == "my-projects" || text == "available-projects" {
+		if err := globalRouter.HandleProjectAssignmentRequest(req); err != nil {
+			logger.Errorf("Failed to handle project assignment request: %v", err)
+			sendImmediateResponse(w, "❌ Failed to process project assignment request", "ephemeral")
+		} else {
+			sendImmediateResponse(w, "✅ Processing your project assignment...", "ephemeral")
+		}
+		return
+	}
 
 	// Route to appropriate handler based on command content
 	if text == "" || text == "help" {
@@ -134,7 +146,7 @@ func handleUnifiedOYECommand(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
-		
+
 		sendUnifiedHelp(w, req)
 		return
 	}
@@ -181,6 +193,11 @@ func sendUnifiedHelp(w http.ResponseWriter, req *SlackCommandRequest) {
 		"• `/oye monthly` or `/oye last month` - Last month's tasks\n" +
 		"• `/oye this month` - Current month's tasks\n" +
 		"• `/oye last 7 days` - Custom range (1-60 days)\n\n" +
+		"*Project Management:*\n" +
+		"• `/oye assign \"Project Name\"` - Assign yourself to a project\n" +
+		"• `/oye unassign \"Project Name\"` - Remove yourself from a project\n" +
+		"• `/oye my-projects` - View your assigned projects\n" +
+		"• `/oye available-projects` - View all available projects\n\n" +
 		"*Project Filtering:*\n" +
 		"• `/oye \"project name\" daily` - Daily update for specific project\n" +
 		"• `/oye marketing last week` - Weekly update for project (fuzzy match)\n" +
@@ -198,7 +215,8 @@ func sendUnifiedHelp(w http.ResponseWriter, req *SlackCommandRequest) {
 		"• Quote project names with spaces: `/oye \"My Project\" today`\n" +
 		"• Project names support fuzzy matching\n" +
 		"• Custom ranges: `/oye last 14 days` (1-60 days supported)\n" +
-		"• The system automatically monitors for threshold crossings"
+		"• When you assign projects, automatic updates show only your projects\n" +
+		"• Click the OYE app in sidebar to see your project settings page"
 
 	response := SlackCommandResponse{
 		ResponseType: "ephemeral",

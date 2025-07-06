@@ -42,6 +42,250 @@ func (sr *SmartRouter) HandleUpdateRequest(req *SlackCommandRequest) error {
 	return sr.HandleLongRunningUpdate(ctx, periodInfo)
 }
 
+// HandleProjectAssignmentRequest processes project assignment commands
+func (sr *SmartRouter) HandleProjectAssignmentRequest(req *SlackCommandRequest) error {
+	ctx := &ConversationContext{
+		ChannelID: req.ChannelID,
+		UserID:    req.UserID,
+	}
+
+	parts := strings.Fields(req.Text)
+	if len(parts) == 0 {
+		return sr.slackClient.SendErrorResponse(ctx, "Please specify a command. Use `/oye help` for available commands.")
+	}
+
+	command := strings.ToLower(parts[0])
+
+	switch command {
+	case "assign":
+		return sr.handleAssignProject(ctx, parts[1:], req.UserID)
+	case "unassign":
+		return sr.handleUnassignProject(ctx, parts[1:], req.UserID)
+	case "my-projects":
+		return sr.handleMyProjects(ctx, req.UserID)
+	case "available-projects":
+		return sr.handleAvailableProjects(ctx)
+	default:
+		return sr.slackClient.SendErrorResponse(ctx, "Unknown command. Use `/oye help` for available commands.")
+	}
+}
+
+func (sr *SmartRouter) handleAssignProject(ctx *ConversationContext, args []string, userID string) error {
+	if len(args) == 0 {
+		return sr.slackClient.SendErrorResponse(ctx, "Please specify a project name. Usage: `/oye assign \"Project Name\"`")
+	}
+
+	projectName := strings.Join(args, " ")
+	projectName = strings.Trim(projectName, "\"'")
+
+	db, err := GetDB()
+	if err != nil {
+		return sr.slackClient.SendErrorResponse(ctx, "Database connection failed")
+	}
+
+	// Find the project
+	projects, err := FindProjectsByName(db, projectName)
+	if err != nil {
+		return sr.slackClient.SendErrorResponse(ctx, "Failed to find project")
+	}
+
+	if len(projects) == 0 {
+		return sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Project '%s' not found", projectName))
+	}
+
+	if len(projects) > 1 {
+		projectNames := make([]string, len(projects))
+		for i, p := range projects {
+			projectNames[i] = p.Name
+		}
+		return sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Multiple projects found: %s. Please be more specific.", strings.Join(projectNames, ", ")))
+	}
+
+	// Convert userID to int
+	userIDInt, err := strconv.Atoi(userID)
+	if err != nil {
+		return sr.slackClient.SendErrorResponse(ctx, "Invalid user ID")
+	}
+
+	project := projects[0]
+	err = AssignUserToProject(db, userIDInt, project.ID)
+	if err != nil {
+		return sr.slackClient.SendErrorResponse(ctx, "Failed to assign project")
+	}
+
+	message := fmt.Sprintf("✅ Successfully assigned you to project: **%s**", project.Name)
+
+	// Refresh App Home view if possible
+	go PublishAppHomeView(userID)
+
+	payload := map[string]interface{}{
+		"channel": ctx.ChannelID,
+		"user":    ctx.UserID,
+		"text":    message,
+		"blocks": []Block{
+			{
+				Type: "section",
+				Text: &Text{Type: "mrkdwn", Text: message},
+			},
+		},
+	}
+
+	return sr.slackClient.sendSlackAPIRequest("chat.postEphemeral", payload)
+}
+
+func (sr *SmartRouter) handleUnassignProject(ctx *ConversationContext, args []string, userID string) error {
+	if len(args) == 0 {
+		return sr.slackClient.SendErrorResponse(ctx, "Please specify a project name. Usage: `/oye unassign \"Project Name\"`")
+	}
+
+	projectName := strings.Join(args, " ")
+	projectName = strings.Trim(projectName, "\"'")
+
+	db, err := GetDB()
+	if err != nil {
+		return sr.slackClient.SendErrorResponse(ctx, "Database connection failed")
+	}
+
+	// Find the project
+	projects, err := FindProjectsByName(db, projectName)
+	if err != nil {
+		return sr.slackClient.SendErrorResponse(ctx, "Failed to find project")
+	}
+
+	if len(projects) == 0 {
+		return sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Project '%s' not found", projectName))
+	}
+
+	if len(projects) > 1 {
+		projectNames := make([]string, len(projects))
+		for i, p := range projects {
+			projectNames[i] = p.Name
+		}
+		return sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Multiple projects found: %s. Please be more specific.", strings.Join(projectNames, ", ")))
+	}
+
+	// Convert userID to int
+	userIDInt, err := strconv.Atoi(userID)
+	if err != nil {
+		return sr.slackClient.SendErrorResponse(ctx, "Invalid user ID")
+	}
+
+	project := projects[0]
+	err = UnassignUserFromProject(db, userIDInt, project.ID)
+	if err != nil {
+		return sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to unassign project: %v", err))
+	}
+
+	message := fmt.Sprintf("✅ Successfully removed you from project: **%s**", project.Name)
+
+	// Refresh App Home view if possible
+	go PublishAppHomeView(userID)
+
+	payload := map[string]interface{}{
+		"channel": ctx.ChannelID,
+		"user":    ctx.UserID,
+		"text":    message,
+		"blocks": []Block{
+			{
+				Type: "section",
+				Text: &Text{Type: "mrkdwn", Text: message},
+			},
+		},
+	}
+
+	return sr.slackClient.sendSlackAPIRequest("chat.postEphemeral", payload)
+}
+
+func (sr *SmartRouter) handleMyProjects(ctx *ConversationContext, userID string) error {
+	db, err := GetDB()
+	if err != nil {
+		return sr.slackClient.SendErrorResponse(ctx, "Database connection failed")
+	}
+
+	userIDInt, err := strconv.Atoi(userID)
+	if err != nil {
+		return sr.slackClient.SendErrorResponse(ctx, "Invalid user ID")
+	}
+
+	projects, err := GetUserProjects(db, userIDInt)
+	if err != nil {
+		return sr.slackClient.SendErrorResponse(ctx, "Failed to retrieve your projects")
+	}
+
+	var message string
+	if len(projects) == 0 {
+		message = "📋 **Your Assigned Projects:**\n\nYou are not assigned to any projects. You will see all projects in automatic updates.\n\nUse `/oye available-projects` to see all projects, then `/oye assign \"Project Name\"` to assign yourself."
+	} else {
+		message = "📋 **Your Assigned Projects:**\n\n"
+		for _, project := range projects {
+			message += fmt.Sprintf("• %s\n", project.Name)
+		}
+		message += "\nUse `/oye unassign \"Project Name\"` to remove assignments."
+	}
+
+	payload := map[string]interface{}{
+		"channel": ctx.ChannelID,
+		"user":    ctx.UserID,
+		"text":    message,
+		"blocks": []Block{
+			{
+				Type: "section",
+				Text: &Text{Type: "mrkdwn", Text: message},
+			},
+		},
+	}
+
+	return sr.slackClient.sendSlackAPIRequest("chat.postEphemeral", payload)
+}
+
+func (sr *SmartRouter) handleAvailableProjects(ctx *ConversationContext) error {
+	db, err := GetDB()
+	if err != nil {
+		return sr.slackClient.SendErrorResponse(ctx, "Database connection failed")
+	}
+
+	projects, err := GetAllProjects(db)
+	if err != nil {
+		return sr.slackClient.SendErrorResponse(ctx, "Failed to retrieve projects")
+	}
+
+	if len(projects) == 0 {
+		message := "📁 **Available Projects:**\n\nNo projects found in the database."
+		payload := map[string]interface{}{
+			"channel": ctx.ChannelID,
+			"user":    ctx.UserID,
+			"text":    message,
+			"blocks": []Block{
+				{
+					Type: "section",
+					Text: &Text{Type: "mrkdwn", Text: message},
+				},
+			},
+		}
+		return sr.slackClient.sendSlackAPIRequest("chat.postEphemeral", payload)
+	}
+
+	message := "📁 **Available Projects:**\n\n"
+	for _, project := range projects {
+		message += fmt.Sprintf("• %s\n", project.Name)
+	}
+	message += "\nUse `/oye assign \"Project Name\"` to assign yourself to a project."
+
+	payload := map[string]interface{}{
+		"channel": ctx.ChannelID,
+		"user":    ctx.UserID,
+		"text":    message,
+		"blocks": []Block{
+			{
+				Type: "section",
+				Text: &Text{Type: "mrkdwn", Text: message},
+			},
+		},
+	}
+
+	return sr.slackClient.sendSlackAPIRequest("chat.postEphemeral", payload)
+}
+
 // HandleLongRunningUpdate shows progress and delivers final result
 func (sr *SmartRouter) HandleLongRunningUpdate(ctx *ConversationContext, periodInfo PeriodInfo) error {
 	// Send initial progress message
@@ -121,16 +365,47 @@ func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, perio
 			return
 		}
 	} else {
-		// All projects query
+		// All projects query - check if user has project assignments
 		sr.slackClient.UpdateProgress(ctx, "📈 Analyzing time entries...")
 		time.Sleep(1 * time.Second)
 
-		// Get task data for all projects
-		taskInfos, err = getTaskChanges(db, periodInfo.Type)
+		// Check if user has specific project assignments
+		userIDInt, err := strconv.Atoi(ctx.UserID)
 		if err != nil {
-			errorMessage := fmt.Sprintf("Failed to get %s changes: ```%v```", periodInfo.DisplayName, err)
-			sr.slackClient.SendErrorResponse(ctx, errorMessage)
+			sr.slackClient.SendErrorResponse(ctx, "Invalid user ID")
 			return
+		}
+
+		userProjects, err := GetUserProjects(db, userIDInt)
+		if err != nil {
+			sr.logger.Errorf("Failed to get user projects: %v", err)
+			// Continue with all projects if we can't get user assignments
+		}
+
+		// If user has specific project assignments, filter to only those projects
+		if len(userProjects) > 0 {
+			sr.slackClient.UpdateProgress(ctx, fmt.Sprintf("📊 Filtering to your %d assigned projects...", len(userProjects)))
+			time.Sleep(500 * time.Millisecond)
+
+			// Get combined task data for all assigned projects
+			var allProjectTasks []TaskUpdateInfo
+			for _, project := range userProjects {
+				projectTasks, err := getTaskChangesWithProject(db, periodInfo.Type, &project.TimeCampTaskID)
+				if err != nil {
+					sr.logger.Errorf("Failed to get tasks for project %s: %v", project.Name, err)
+					continue
+				}
+				allProjectTasks = append(allProjectTasks, projectTasks...)
+			}
+			taskInfos = allProjectTasks
+		} else {
+			// Get task data for all projects (user has no specific assignments)
+			taskInfos, err = getTaskChanges(db, periodInfo.Type)
+			if err != nil {
+				errorMessage := fmt.Sprintf("Failed to get %s changes: ```%v```", periodInfo.DisplayName, err)
+				sr.slackClient.SendErrorResponse(ctx, errorMessage)
+				return
+			}
 		}
 	}
 
@@ -475,12 +750,43 @@ func (sr *SmartRouter) processThresholdWithProgress(ctx *ConversationContext, th
 		// Get project-specific tasks over threshold
 		taskInfos, err = GetTasksOverThresholdWithProject(db, threshold, periodInfo.Type, periodInfo.Days, &project.TimeCampTaskID)
 	} else {
-		// All projects threshold query
+		// All projects threshold query - check if user has project assignments
 		sr.slackClient.UpdateProgress(ctx, fmt.Sprintf("📈 Analyzing tasks over %.0f%% threshold...", threshold))
 		time.Sleep(1 * time.Second)
 
-		// Get all tasks over threshold
-		taskInfos, err = GetTasksOverThreshold(db, threshold, periodInfo.Type, periodInfo.Days)
+		// Check if user has specific project assignments
+		userIDInt, err := strconv.Atoi(ctx.UserID)
+		if err != nil {
+			sr.slackClient.SendErrorResponse(ctx, "Invalid user ID")
+			return
+		}
+
+		userProjects, err := GetUserProjects(db, userIDInt)
+		if err != nil {
+			sr.logger.Errorf("Failed to get user projects: %v", err)
+			// Continue with all projects if we can't get user assignments
+		}
+
+		// If user has specific project assignments, filter to only those projects
+		if len(userProjects) > 0 {
+			sr.slackClient.UpdateProgress(ctx, fmt.Sprintf("🔍 Checking your %d assigned projects for %.0f%% threshold crossings...", len(userProjects), threshold))
+			time.Sleep(500 * time.Millisecond)
+
+			// Get combined threshold data for all assigned projects
+			var allProjectTasks []TaskUpdateInfo
+			for _, project := range userProjects {
+				projectTasks, err := GetTasksOverThresholdWithProject(db, threshold, periodInfo.Type, periodInfo.Days, &project.TimeCampTaskID)
+				if err != nil {
+					sr.logger.Errorf("Failed to get threshold tasks for project %s: %v", project.Name, err)
+					continue
+				}
+				allProjectTasks = append(allProjectTasks, projectTasks...)
+			}
+			taskInfos = allProjectTasks
+		} else {
+			// Get all tasks over threshold (user has no specific assignments)
+			taskInfos, err = GetTasksOverThreshold(db, threshold, periodInfo.Type, periodInfo.Days)
+		}
 	}
 	if err != nil {
 		errorMessage := fmt.Sprintf("Failed to get tasks over threshold: ```%v```", err)

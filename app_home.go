@@ -13,6 +13,28 @@ type AppHomeView struct {
 	Blocks []Block `json:"blocks"`
 }
 
+// Extended structures for App Home (separate from existing simple ones)
+type AppHomeBlock struct {
+	Type      string            `json:"type"`
+	Text      *Text             `json:"text,omitempty"`
+	Elements  []AppHomeElement  `json:"elements,omitempty"`
+	Accessory *AppHomeAccessory `json:"accessory,omitempty"`
+}
+
+type AppHomeElement struct {
+	Type     string            `json:"type"`
+	Text     map[string]string `json:"text,omitempty"`
+	ActionID string            `json:"action_id,omitempty"`
+	Style    string            `json:"style,omitempty"`
+}
+
+type AppHomeAccessory struct {
+	Type          string                   `json:"type"`
+	ActionID      string                   `json:"action_id,omitempty"`
+	Options       []map[string]interface{} `json:"options,omitempty"`
+	InitialOption map[string]interface{}   `json:"initial_option,omitempty"`
+}
+
 // HandleAppHome handles app home opened events
 func HandleAppHome(w http.ResponseWriter, r *http.Request) {
 	logger := GetGlobalLogger()
@@ -66,7 +88,7 @@ func PublishAppHomeView(userID string) error {
 		return fmt.Errorf("failed to get all projects: %w", err)
 	}
 
-	view := BuildAppHomeView(userProjects, allProjects, userIDInt)
+	view := BuildSimpleAppHomeView(userProjects, allProjects, userIDInt)
 
 	payload := map[string]interface{}{
 		"user_id": userID,
@@ -76,14 +98,8 @@ func PublishAppHomeView(userID string) error {
 	return slackClient.sendSlackAPIRequest("views.publish", payload)
 }
 
-// BuildAppHomeView builds the App Home view structure
-func BuildAppHomeView(userProjects []Project, allProjects []Project, userID int) AppHomeView {
-	// Create a map for quick lookup of assigned projects
-	assignedProjects := make(map[int]bool)
-	for _, project := range userProjects {
-		assignedProjects[project.ID] = true
-	}
-
+// BuildSimpleAppHomeView builds a simplified App Home view without complex interactive components
+func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userID int) AppHomeView {
 	var blocks []Block
 
 	// Header
@@ -100,113 +116,92 @@ func BuildAppHomeView(userProjects []Project, allProjects []Project, userID int)
 		Type: "section",
 		Text: &Text{
 			Type: "mrkdwn",
-			Text: "*📋 Your Project Assignments*\nSelect which projects you want to see in automatic updates:",
+			Text: "*📋 Your Current Project Assignments*",
 		},
 	})
 
-	// Project checkboxes
-	var projectOptions []interface{}
-	for _, project := range allProjects {
-		isAssigned := assignedProjects[project.ID]
-
-		option := map[string]interface{}{
-			"text": map[string]string{
-				"type": "mrkdwn",
-				"text": fmt.Sprintf("%s %s",
-					func() string {
-						if isAssigned {
-							return "☑️"
-						} else {
-							return "☐"
-						}
-					}(),
-					project.Name),
+	// Show current assignments
+	if len(userProjects) == 0 {
+		blocks = append(blocks, Block{
+			Type: "section",
+			Text: &Text{
+				Type: "mrkdwn",
+				Text: "• _No projects assigned yet_\n• You will see all projects in automatic updates\n• Use `/oye assign \"Project Name\"` to assign yourself to specific projects",
 			},
-			"value": strconv.Itoa(project.ID),
+		})
+	} else {
+		assignmentText := ""
+		for i, project := range userProjects {
+			if i > 0 {
+				assignmentText += "\n"
+			}
+			assignmentText += fmt.Sprintf("• ☑️ %s", project.Name)
 		}
+		assignmentText += "\n\n_Use `/oye unassign \"Project Name\"` to remove assignments_"
 
-		projectOptions = append(projectOptions, option)
+		blocks = append(blocks, Block{
+			Type: "section",
+			Text: &Text{
+				Type: "mrkdwn",
+				Text: assignmentText,
+			},
+		})
 	}
 
-	// Add project selection as checkboxes
-	blocks = append(blocks, Block{
-		Type: "section",
-		Text: &Text{
-			Type: "mrkdwn",
-			Text: " ",
-		},
-		Accessory: &Accessory{
-			Type:     "checkboxes",
-			ActionID: "project_assignments",
-			Options:  projectOptions,
-			InitialOptions: func() []interface{} {
-				var selected []interface{}
-				for _, project := range userProjects {
-					selected = append(selected, map[string]interface{}{
-						"text": map[string]string{
-							"type": "mrkdwn",
-							"text": fmt.Sprintf("☑️ %s", project.Name),
-						},
-						"value": strconv.Itoa(project.ID),
-					})
-				}
-				return selected
-			}(),
-		},
-	})
-
-	// Update preferences
+	// Available projects section
 	blocks = append(blocks, Block{Type: "divider"})
 	blocks = append(blocks, Block{
 		Type: "section",
 		Text: &Text{
 			Type: "mrkdwn",
-			Text: "*📊 Update Preferences*\nHow should automatic updates work for you?",
+			Text: "*📁 Available Projects*",
 		},
 	})
 
-	// Radio buttons for update preference
+	// Create a map for quick lookup of assigned projects
+	assignedProjects := make(map[int]bool)
+	for _, project := range userProjects {
+		assignedProjects[project.ID] = true
+	}
+
+	// Show available projects
+	projectText := ""
+	for i, project := range allProjects {
+		if i > 0 {
+			projectText += "\n"
+		}
+		if assignedProjects[project.ID] {
+			projectText += fmt.Sprintf("• ☑️ %s _(assigned)_", project.Name)
+		} else {
+			projectText += fmt.Sprintf("• ☐ %s", project.Name)
+		}
+	}
+
 	blocks = append(blocks, Block{
 		Type: "section",
 		Text: &Text{
 			Type: "mrkdwn",
-			Text: "When you receive automatic updates:",
-		},
-		Accessory: &Accessory{
-			Type:     "radio_buttons",
-			ActionID: "update_preference",
-			Options: []interface{}{
-				map[string]interface{}{
-					"text":  map[string]string{"type": "plain_text", "text": "Show all projects"},
-					"value": "all_projects",
-				},
-				map[string]interface{}{
-					"text":  map[string]string{"type": "plain_text", "text": "Show only assigned projects"},
-					"value": "assigned_only",
-				},
-			},
-			InitialOption: map[string]interface{}{
-				"text":  map[string]string{"type": "plain_text", "text": "Show all projects"},
-				"value": "all_projects",
-			},
+			Text: projectText,
 		},
 	})
 
-	// Save button
+	// Instructions section
 	blocks = append(blocks, Block{Type: "divider"})
 	blocks = append(blocks, Block{
-		Type: "actions",
+		Type: "section",
+		Text: &Text{
+			Type: "mrkdwn",
+			Text: "*💡 How to Manage Your Projects*\n\n• **Assign yourself:** `/oye assign \"Project Name\"`\n• **Remove assignment:** `/oye unassign \"Project Name\"`\n• **View your projects:** `/oye my-projects`\n• **View all projects:** `/oye available-projects`\n\n_When you have project assignments, automatic updates will only show your assigned projects. If you have no assignments, you'll see all projects._",
+		},
+	})
+
+	// Footer
+	blocks = append(blocks, Block{
+		Type: "context",
 		Elements: []Element{
 			{
-				Type:     "button",
-				ActionID: "save_settings",
-				Text:     map[string]string{"type": "plain_text", "text": "💾 Save Settings"},
-				Style:    "primary",
-			},
-			{
-				Type:     "button",
-				ActionID: "reset_settings",
-				Text:     map[string]string{"type": "plain_text", "text": "🔄 Reset to Defaults"},
+				Type: "mrkdwn",
+				Text: "🔄 This page updates automatically when you make changes",
 			},
 		},
 	})
@@ -231,76 +226,12 @@ type SlackEvent struct {
 func HandleInteractiveComponents(w http.ResponseWriter, r *http.Request) {
 	logger := GetGlobalLogger()
 
-	var payload SlackInteractivePayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		logger.Errorf("Failed to decode interactive payload: %v", err)
-		http.Error(w, "Bad request", http.StatusBadRequest)
-		return
-	}
-
-	switch payload.Type {
-	case "block_actions":
-		HandleBlockActions(payload)
-	case "view_submission":
-		HandleViewSubmission(payload)
-	}
-
+	// For now, just acknowledge the request since we're using a simplified approach
+	logger.Info("Interactive component request received")
 	w.WriteHeader(http.StatusOK)
 }
 
-func HandleBlockActions(payload SlackInteractivePayload) {
-	for _, action := range payload.Actions {
-		switch action.ActionID {
-		case "project_assignments":
-			HandleProjectAssignmentChange(payload.User.ID, action.SelectedOptions)
-		case "save_settings":
-			HandleSaveSettings(payload.User.ID)
-		case "reset_settings":
-			HandleResetSettings(payload.User.ID)
-		}
-	}
-}
-
-func HandleProjectAssignmentChange(userID string, selectedOptions []SelectedOption) {
-	logger := GetGlobalLogger()
-
-	db, err := GetDB()
-	if err != nil {
-		logger.Errorf("Failed to get database connection: %v", err)
-		return
-	}
-
-	userIDInt, err := strconv.Atoi(userID)
-	if err != nil {
-		logger.Errorf("Invalid user ID: %v", err)
-		return
-	}
-
-	// Clear existing assignments
-	_, err = db.Exec("DELETE FROM user_project_assignments WHERE user_id = $1", userIDInt)
-	if err != nil {
-		logger.Errorf("Failed to clear existing assignments: %v", err)
-		return
-	}
-
-	// Add new assignments
-	for _, option := range selectedOptions {
-		projectID, err := strconv.Atoi(option.Value)
-		if err != nil {
-			logger.Errorf("Invalid project ID: %v", err)
-			continue
-		}
-
-		err = AssignUserToProject(db, userIDInt, projectID)
-		if err != nil {
-			logger.Errorf("Failed to assign project %d to user %d: %v", projectID, userIDInt, err)
-		}
-	}
-
-	// Refresh the App Home view
-	PublishAppHomeView(userID)
-}
-
+// Simple struct for interactive payloads (not used in simplified version)
 type SlackInteractivePayload struct {
 	Type string `json:"type"`
 	User struct {

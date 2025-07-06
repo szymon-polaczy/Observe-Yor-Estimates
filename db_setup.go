@@ -169,6 +169,12 @@ func GetDB() (*sql.DB, error) {
 			return
 		}
 
+		if err := migrateUserProjectAssignmentsTable(db); err != nil {
+			db.Close()
+			initErr = fmt.Errorf("failed to migrate user_project_assignments table: %w", err)
+			return
+		}
+
 		logger.Info("Database connection established and tables migrated successfully")
 
 		dbMutex.Lock()
@@ -457,15 +463,15 @@ updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 // GetUserDisplayName returns the display name for a user ID, falling back to username or user ID
 func GetUserDisplayName(db *sql.DB, userID int) string {
 	var displayName, username sql.NullString
-	
+
 	query := `SELECT username, display_name FROM users WHERE user_id = $1`
 	err := db.QueryRow(query, userID).Scan(&username, &displayName)
-	
+
 	if err != nil {
 		// User not found in database, return user ID format as fallback
 		return fmt.Sprintf("user%d", userID)
 	}
-	
+
 	// Return display_name if available, otherwise username, otherwise user ID
 	if displayName.Valid && displayName.String != "" {
 		return displayName.String
@@ -486,7 +492,7 @@ func UpsertUser(db *sql.DB, userID int, username, displayName string) error {
 			username = EXCLUDED.username,
 			display_name = EXCLUDED.display_name,
 			updated_at = CURRENT_TIMESTAMP`
-	
+
 	_, err := db.Exec(query, userID, username, displayName)
 	return err
 }
@@ -496,15 +502,15 @@ func GetAllUserDisplayNames(db *sql.DB, userIDs []int) map[int]string {
 	if len(userIDs) == 0 {
 		return make(map[int]string)
 	}
-	
+
 	result := make(map[int]string)
-	
+
 	// Convert int slice to interface slice for pq.Array
 	userIDsInterface := make([]interface{}, len(userIDs))
 	for i, id := range userIDs {
 		userIDsInterface[i] = id
 	}
-	
+
 	query := `SELECT user_id, username, display_name FROM users WHERE user_id = ANY($1)`
 	rows, err := db.Query(query, pq.Array(userIDs))
 	if err != nil {
@@ -515,17 +521,17 @@ func GetAllUserDisplayNames(db *sql.DB, userIDs []int) map[int]string {
 		return result
 	}
 	defer rows.Close()
-	
+
 	foundUsers := make(map[int]bool)
 	for rows.Next() {
 		var userID int
 		var username, displayName sql.NullString
-		
+
 		err := rows.Scan(&userID, &username, &displayName)
 		if err != nil {
 			continue
 		}
-		
+
 		// Priority: display_name > username > user ID
 		if displayName.Valid && displayName.String != "" {
 			result[userID] = displayName.String
@@ -536,14 +542,14 @@ func GetAllUserDisplayNames(db *sql.DB, userIDs []int) map[int]string {
 		}
 		foundUsers[userID] = true
 	}
-	
+
 	// Add fallback names for users not found in the database
 	for _, userID := range userIDs {
 		if !foundUsers[userID] {
 			result[userID] = fmt.Sprintf("user%d", userID)
 		}
 	}
-	
+
 	return result
 }
 
@@ -597,7 +603,7 @@ func migrateProjectsTable(db *sql.DB) error {
 		if err := createProjectsTable(db); err != nil {
 			return err
 		}
-		
+
 		// Populate projects from existing task hierarchy
 		logger.Info("Populating projects table from existing task hierarchy")
 		return populateProjectsFromTasks(db)
@@ -651,7 +657,7 @@ func populateProjectsFromTasks(db *sql.DB) error {
 	for rows.Next() {
 		var taskID int
 		var name string
-		
+
 		if err := rows.Scan(&taskID, &name); err != nil {
 			logger.Warnf("Failed to scan project row: %v", err)
 			continue
@@ -663,13 +669,13 @@ func populateProjectsFromTasks(db *sql.DB) error {
 			VALUES ($1, $2) 
 			ON CONFLICT (timecamp_task_id) DO NOTHING
 		`
-		
+
 		_, err := db.Exec(insertQuery, name, taskID)
 		if err != nil {
 			logger.Warnf("Failed to insert project %s (task_id: %d): %v", name, taskID, err)
 			continue
 		}
-		
+
 		projectCount++
 	}
 
@@ -678,5 +684,50 @@ func populateProjectsFromTasks(db *sql.DB) error {
 	}
 
 	logger.Infof("Successfully populated %d projects from task hierarchy", projectCount)
+	return nil
+}
+
+// migrateUserProjectAssignmentsTable ensures the user_project_assignments table exists
+func migrateUserProjectAssignmentsTable(db *sql.DB) error {
+	logger := GetGlobalLogger()
+
+	// Check if table exists (PostgreSQL way)
+	row := db.QueryRow("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'user_project_assignments');")
+	var exists bool
+	err := row.Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("error checking if user_project_assignments table exists: %w", err)
+	}
+
+	if !exists {
+		// Table does not exist, create it
+		logger.Info("User project assignments table does not exist, creating it")
+		return createUserProjectAssignmentsTable(db)
+	}
+
+	logger.Debug("User project assignments table already exists")
+	return nil
+}
+
+func createUserProjectAssignmentsTable(db *sql.DB) error {
+	logger := GetGlobalLogger()
+
+	createTableSQL := `CREATE TABLE user_project_assignments (
+id SERIAL PRIMARY KEY,
+user_id INTEGER NOT NULL,
+project_id INTEGER NOT NULL,
+created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+FOREIGN KEY (user_id) REFERENCES users(user_id),
+FOREIGN KEY (project_id) REFERENCES projects(id),
+UNIQUE(user_id, project_id)
+);`
+
+	_, err := db.Exec(createTableSQL)
+	if err != nil {
+		return fmt.Errorf("failed to create user_project_assignments table: %w", err)
+	}
+
+	logger.Info("User project assignments table created successfully")
 	return nil
 }
