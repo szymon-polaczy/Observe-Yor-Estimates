@@ -32,7 +32,7 @@ func (sr *SmartRouter) HandleUpdateRequest(req *SlackCommandRequest) error {
 	periodInfo := sr.parsePeriodFromText(req.Text, req.Command)
 
 	if req.ProjectName != "" {
-		sr.logger.Infof("Processing %s update request for project '%s' from user %s in channel %s", 
+		sr.logger.Infof("Processing %s update request for project '%s' from user %s in channel %s",
 			periodInfo.DisplayName, req.ProjectName, req.UserName, req.ChannelName)
 	} else {
 		sr.logger.Infof("Processing %s update request from user %s in channel %s", periodInfo.DisplayName, req.UserName, req.ChannelName)
@@ -81,24 +81,24 @@ func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, perio
 	}
 
 	var taskInfos []TaskUpdateInfo
-	
+
 	if ctx.ProjectName != "" && ctx.ProjectName != "all" {
 		// Project-specific query
 		sr.slackClient.UpdateProgress(ctx, fmt.Sprintf("🔍 Finding project '%s'...", ctx.ProjectName))
 		time.Sleep(500 * time.Millisecond)
-		
+
 		// Find the project
 		projects, err := FindProjectsByName(db, ctx.ProjectName)
 		if err != nil {
 			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to find project: %v", err))
 			return
 		}
-		
+
 		if len(projects) == 0 {
 			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Project '%s' not found. Use `/oye help` to see available commands.", ctx.ProjectName))
 			return
 		}
-		
+
 		if len(projects) > 1 {
 			// Multiple matches found, suggest more specific search
 			projectNames := make([]string, len(projects))
@@ -108,11 +108,11 @@ func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, perio
 			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Multiple projects found matching '%s': %s. Please be more specific.", ctx.ProjectName, strings.Join(projectNames, ", ")))
 			return
 		}
-		
+
 		project := projects[0]
 		sr.slackClient.UpdateProgress(ctx, fmt.Sprintf("📈 Analyzing time entries for '%s'...", project.Name))
 		time.Sleep(1 * time.Second)
-		
+
 		// Get project-specific task data
 		taskInfos, err = getTaskChangesWithProject(db, periodInfo.Type, &project.TimeCampTaskID)
 		if err != nil {
@@ -124,7 +124,7 @@ func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, perio
 		// All projects query
 		sr.slackClient.UpdateProgress(ctx, "📈 Analyzing time entries...")
 		time.Sleep(1 * time.Second)
-		
+
 		// Get task data for all projects
 		taskInfos, err = getTaskChanges(db, periodInfo.Type)
 		if err != nil {
@@ -153,13 +153,58 @@ func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, perio
 	if err != nil {
 		sr.logger.Errorf("Failed to send final %s report via Slack API: %v", periodInfo.DisplayName, err)
 
-		// Try webhook fallback
-		message := sr.slackClient.formatContextualMessage(taskInfos, periodInfo.DisplayName, ctx.UserID)
-		if webhookErr := sendSlackMessage(message); webhookErr != nil {
-			sr.logger.Errorf("Webhook fallback also failed: %v", webhookErr)
+		// Try webhook fallback with proper splitting
+		sr.logger.Info("Attempting webhook fallback with message splitting...")
+
+		// Get all tasks for hierarchy mapping (same logic as SendFinalUpdate)
+		db, dbErr := GetDB()
+		if dbErr != nil {
+			sr.logger.Errorf("Webhook fallback failed - database error: %v", dbErr)
 			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send %s report", periodInfo.DisplayName))
 			return
 		}
+
+		allTasks, taskErr := getAllTasks(db)
+		if taskErr != nil {
+			sr.logger.Errorf("Webhook fallback failed - tasks error: %v", taskErr)
+			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send %s report", periodInfo.DisplayName))
+			return
+		}
+
+		// Group tasks by project and send via webhook
+		projectGroups := groupTasksByTopParent(taskInfos, allTasks)
+
+		// Test if single message would work
+		testMessage := sr.slackClient.formatContextualMessage(taskInfos, periodInfo.DisplayName, ctx.UserID)
+		validation := validateSlackMessage(testMessage)
+
+		if validation.IsValid && len(projectGroups) <= 15 && len(taskInfos) <= 25 {
+			// Single message fits, send it
+			if webhookErr := sendSlackMessage(testMessage); webhookErr != nil {
+				sr.logger.Errorf("Webhook fallback failed: %v", webhookErr)
+				sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send %s report", periodInfo.DisplayName))
+				return
+			}
+		} else {
+			// Message too large, split by project
+			sr.logger.Warnf("Webhook fallback: Message too large, splitting by project")
+
+			// Send messages for each project via webhook
+			messages := formatProjectMessageWithComments("", taskInfos, periodInfo.DisplayName)
+
+			for i, message := range messages {
+				if webhookErr := sendSlackMessage(message); webhookErr != nil {
+					sr.logger.Errorf("Webhook fallback failed for message %d: %v", i+1, webhookErr)
+					sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send %s report (partial)", periodInfo.DisplayName))
+					return
+				}
+				// Add delay between messages to prevent rate limiting
+				if i < len(messages)-1 {
+					time.Sleep(500 * time.Millisecond)
+				}
+			}
+		}
+
 		sr.logger.Info("Successfully sent report via webhook fallback")
 	}
 
@@ -250,16 +295,15 @@ type PeriodInfo struct {
 	DisplayName string // Human-readable name for display
 }
 
-
 // parsePeriodFromText parses natural language time periods
 func (sr *SmartRouter) parsePeriodFromText(text, command string) PeriodInfo {
 	text = strings.ToLower(strings.TrimSpace(text))
-	
+
 	// Remove project names from text for period parsing
 	// This handles cases like "filestage last 7 days"
 	words := strings.Fields(text)
 	var periodWords []string
-	
+
 	// Look for period-related keywords and numbers
 	for i, word := range words {
 		// Check for "last X days" pattern
@@ -272,7 +316,7 @@ func (sr *SmartRouter) parsePeriodFromText(text, command string) PeriodInfo {
 				}
 			}
 		}
-		
+
 		// Check for "last X day" (singular)
 		if word == "last" && i+2 < len(words) && words[i+2] == "day" {
 			if days, err := strconv.Atoi(words[i+1]); err == nil && days == 1 {
@@ -283,18 +327,18 @@ func (sr *SmartRouter) parsePeriodFromText(text, command string) PeriodInfo {
 				}
 			}
 		}
-		
+
 		// Collect words that might be period-related
-		if word == "today" || word == "yesterday" || word == "this" || word == "last" || 
-		   word == "week" || word == "month" || word == "daily" || word == "weekly" || word == "monthly" ||
-		   word == "days" || word == "day" {
+		if word == "today" || word == "yesterday" || word == "this" || word == "last" ||
+			word == "week" || word == "month" || word == "daily" || word == "weekly" || word == "monthly" ||
+			word == "days" || word == "day" {
 			periodWords = append(periodWords, word)
 		}
 	}
-	
+
 	// Join period words to check for multi-word patterns
 	periodText := strings.Join(periodWords, " ")
-	
+
 	// Check for specific patterns
 	switch {
 	case strings.Contains(periodText, "today"):
@@ -310,7 +354,7 @@ func (sr *SmartRouter) parsePeriodFromText(text, command string) PeriodInfo {
 	case strings.Contains(periodText, "last month"):
 		return PeriodInfo{Type: "last_month", Days: 30, DisplayName: "Last Month"}
 	}
-	
+
 	// Check for backwards compatibility with old period names
 	if strings.Contains(periodText, "weekly") || strings.Contains(periodText, "week") {
 		return PeriodInfo{Type: "last_week", Days: 7, DisplayName: "Last Week"}
@@ -321,7 +365,7 @@ func (sr *SmartRouter) parsePeriodFromText(text, command string) PeriodInfo {
 	if strings.Contains(periodText, "daily") || strings.Contains(periodText, "day") {
 		return PeriodInfo{Type: "yesterday", Days: 1, DisplayName: "Yesterday"}
 	}
-	
+
 	// Check command name for backwards compatibility
 	if strings.Contains(command, "daily") {
 		return PeriodInfo{Type: "yesterday", Days: 1, DisplayName: "Yesterday"}
@@ -332,7 +376,7 @@ func (sr *SmartRouter) parsePeriodFromText(text, command string) PeriodInfo {
 	if strings.Contains(command, "monthly") {
 		return PeriodInfo{Type: "last_month", Days: 30, DisplayName: "Last Month"}
 	}
-	
+
 	// Default fallback
 	return PeriodInfo{Type: "yesterday", Days: 1, DisplayName: "Yesterday"}
 }
@@ -361,7 +405,7 @@ func (sr *SmartRouter) HandleThresholdRequest(req *SlackCommandRequest) error {
 	} else {
 		progressMsg = fmt.Sprintf("🔍 Searching for tasks over %.0f%% threshold for %s period...", threshold, periodInfo.DisplayName)
 	}
-	
+
 	progressResp, err := sr.slackClient.SendProgressMessage(ctx, progressMsg)
 	if err != nil {
 		return sr.slackClient.SendErrorResponse(ctx, "Failed to start threshold check")
@@ -397,24 +441,24 @@ func (sr *SmartRouter) processThresholdWithProgress(ctx *ConversationContext, th
 	}
 
 	var taskInfos []TaskUpdateInfo
-	
+
 	if ctx.ProjectName != "" && ctx.ProjectName != "all" {
 		// Project-specific threshold query
 		sr.slackClient.UpdateProgress(ctx, fmt.Sprintf("🔍 Finding project '%s'...", ctx.ProjectName))
 		time.Sleep(500 * time.Millisecond)
-		
+
 		// Find the project
 		projects, err := FindProjectsByName(db, ctx.ProjectName)
 		if err != nil {
 			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to find project: %v", err))
 			return
 		}
-		
+
 		if len(projects) == 0 {
 			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Project '%s' not found. Use `/oye help` to see available commands.", ctx.ProjectName))
 			return
 		}
-		
+
 		if len(projects) > 1 {
 			var projectNames []string
 			for _, proj := range projects {
@@ -423,18 +467,18 @@ func (sr *SmartRouter) processThresholdWithProgress(ctx *ConversationContext, th
 			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Multiple projects found for '%s': %s. Please be more specific.", ctx.ProjectName, strings.Join(projectNames, ", ")))
 			return
 		}
-		
+
 		project := projects[0]
 		sr.slackClient.UpdateProgress(ctx, fmt.Sprintf("📈 Analyzing %s project tasks over %.0f%% threshold...", project.Name, threshold))
 		time.Sleep(1 * time.Second)
-		
+
 		// Get project-specific tasks over threshold
 		taskInfos, err = GetTasksOverThresholdWithProject(db, threshold, periodInfo.Type, periodInfo.Days, &project.TimeCampTaskID)
 	} else {
 		// All projects threshold query
 		sr.slackClient.UpdateProgress(ctx, fmt.Sprintf("📈 Analyzing tasks over %.0f%% threshold...", threshold))
 		time.Sleep(1 * time.Second)
-		
+
 		// Get all tasks over threshold
 		taskInfos, err = GetTasksOverThreshold(db, threshold, periodInfo.Type, periodInfo.Days)
 	}
@@ -462,13 +506,58 @@ func (sr *SmartRouter) processThresholdWithProgress(ctx *ConversationContext, th
 	if err != nil {
 		sr.logger.Errorf("Failed to send threshold results via Slack API: %v", err)
 
-		// Try webhook fallback
-		message := sr.slackClient.formatThresholdMessage(taskInfos, threshold, periodInfo.DisplayName)
-		if webhookErr := sendSlackMessage(message); webhookErr != nil {
-			sr.logger.Errorf("Webhook fallback also failed: %v", webhookErr)
+		// Try webhook fallback with proper splitting
+		sr.logger.Info("Attempting webhook fallback with message splitting...")
+
+		// Get all tasks for hierarchy mapping (same logic as SendThresholdResults)
+		db, dbErr := GetDB()
+		if dbErr != nil {
+			sr.logger.Errorf("Webhook fallback failed - database error: %v", dbErr)
 			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send threshold report"))
 			return
 		}
+
+		allTasks, taskErr := getAllTasks(db)
+		if taskErr != nil {
+			sr.logger.Errorf("Webhook fallback failed - tasks error: %v", taskErr)
+			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send threshold report"))
+			return
+		}
+
+		// Group tasks by project and send via webhook
+		projectGroups := groupTasksByTopParent(taskInfos, allTasks)
+
+		// Test if single message would work
+		testMessage := sr.slackClient.formatThresholdMessage(taskInfos, threshold, periodInfo.DisplayName)
+		validation := validateSlackMessage(testMessage)
+
+		if validation.IsValid && len(projectGroups) <= 15 && len(taskInfos) <= 25 {
+			// Single message fits, send it
+			if webhookErr := sendSlackMessage(testMessage); webhookErr != nil {
+				sr.logger.Errorf("Webhook fallback failed: %v", webhookErr)
+				sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send threshold report"))
+				return
+			}
+		} else {
+			// Message too large, split by project
+			sr.logger.Warnf("Webhook fallback: Message too large, splitting by project")
+
+			// Send messages for each project via webhook
+			messages := formatProjectMessageWithComments("", taskInfos, periodInfo.DisplayName)
+
+			for i, message := range messages {
+				if webhookErr := sendSlackMessage(message); webhookErr != nil {
+					sr.logger.Errorf("Webhook fallback failed for message %d: %v", i+1, webhookErr)
+					sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send threshold report (partial)"))
+					return
+				}
+				// Add delay between messages to prevent rate limiting
+				if i < len(messages)-1 {
+					time.Sleep(500 * time.Millisecond)
+				}
+			}
+		}
+
 		sr.logger.Info("Successfully sent threshold report via webhook fallback")
 	}
 
