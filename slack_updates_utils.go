@@ -78,8 +78,11 @@ type Element struct {
 
 // Accessory represents an accessory in Slack blocks
 type Accessory struct {
-	Type string `json:"type"`
-	Text *Text  `json:"text,omitempty"`
+	Type           string                   `json:"type"`
+	Text           *Text                    `json:"text,omitempty"`
+	ActionID       string                   `json:"action_id,omitempty"`
+	Options        []map[string]interface{} `json:"options,omitempty"`
+	InitialOptions []map[string]interface{} `json:"initial_options,omitempty"`
 }
 
 // ThresholdAlert represents a task that has crossed a usage threshold

@@ -202,20 +202,19 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 		}
 	}
 
-	// Add the checkboxes as an input block
+	// Add the checkboxes as a section block instead of input block
 	if len(checkboxOptions) > 0 {
 		blocks = append(blocks, Block{
-			Type:    "input",
-			BlockID: "project_checkboxes",
-			Label: &Text{
-				Type: "plain_text",
-				Text: "Select your projects:",
+			Type: "section",
+			Text: &Text{
+				Type: "mrkdwn",
+				Text: "*Select your projects:*",
 			},
-			Element: map[string]interface{}{
-				"type":            "checkboxes",
-				"action_id":       "project_assignments",
-				"options":         checkboxOptions,
-				"initial_options": initialOptions,
+			Accessory: &Accessory{
+				Type:           "checkboxes",
+				ActionID:       "project_assignments",
+				Options:        checkboxOptions,
+				InitialOptions: initialOptions,
 			},
 		})
 	}
@@ -320,6 +319,7 @@ type SlackEvent struct {
 // HandleInteractiveComponents handles button clicks and form interactions
 func HandleInteractiveComponents(w http.ResponseWriter, r *http.Request) {
 	logger := GetGlobalLogger()
+	logger.Info("=== Interactive component request received ===")
 
 	// Parse the interactive payload
 	if err := r.ParseForm(); err != nil {
@@ -335,6 +335,22 @@ func HandleInteractiveComponents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	logger.Infof("Raw payload: %s", payloadStr)
+
+	// Try to unmarshal as a generic map first to see the structure
+	var genericPayload map[string]interface{}
+	if err := json.Unmarshal([]byte(payloadStr), &genericPayload); err != nil {
+		logger.Errorf("Failed to unmarshal generic payload: %v", err)
+	} else {
+		logger.Infof("Payload type: %v", genericPayload["type"])
+		if actions, ok := genericPayload["actions"].([]interface{}); ok && len(actions) > 0 {
+			if action, ok := actions[0].(map[string]interface{}); ok {
+				logger.Infof("Action ID: %v", action["action_id"])
+				logger.Infof("Action type: %v", action["type"])
+			}
+		}
+	}
+
 	var payload SlackInteractivePayload
 	if err := json.Unmarshal([]byte(payloadStr), &payload); err != nil {
 		logger.Errorf("Failed to unmarshal interactive payload: %v", err)
@@ -342,35 +358,55 @@ func HandleInteractiveComponents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logger.Infof("Interactive component request from user %s", payload.User.ID)
+	logger.Infof("Interactive component request from user %s, payload type: %s", payload.User.ID, payload.Type)
+	logger.Infof("Number of actions: %d", len(payload.Actions))
 
 	// Handle checkbox actions
-	if len(payload.Actions) > 0 && payload.Actions[0].ActionID == "project_assignments" {
-		if err := HandleProjectAssignmentCheckboxes(payload.User.ID, payload.Actions[0].SelectedOptions); err != nil {
-			logger.Errorf("Failed to handle project assignment checkboxes: %v", err)
-			http.Error(w, "Failed to process assignments", http.StatusInternalServerError)
-			return
-		}
+	if len(payload.Actions) > 0 {
+		action := payload.Actions[0]
+		logger.Infof("Action ID: %s, Selected options: %d", action.ActionID, len(action.SelectedOptions))
 
-		// Refresh the App Home view
-		if err := PublishAppHomeView(payload.User.ID); err != nil {
-			logger.Errorf("Failed to refresh app home view: %v", err)
+		if action.ActionID == "project_assignments" {
+			logger.Info("Processing project assignment checkboxes...")
+			if err := HandleProjectAssignmentCheckboxes(payload.User.ID, action.SelectedOptions); err != nil {
+				logger.Errorf("Failed to handle project assignment checkboxes: %v", err)
+				http.Error(w, "Failed to process assignments", http.StatusInternalServerError)
+				return
+			}
+
+			// Refresh the App Home view
+			logger.Info("Refreshing App Home view...")
+			if err := PublishAppHomeView(payload.User.ID); err != nil {
+				logger.Errorf("Failed to refresh app home view: %v", err)
+			} else {
+				logger.Info("App Home view refreshed successfully")
+			}
+		} else {
+			logger.Warnf("Unknown action ID: %s", action.ActionID)
 		}
+	} else {
+		logger.Warn("No actions in payload")
 	}
 
 	w.WriteHeader(http.StatusOK)
 }
 
-// Simple struct for interactive payloads (not used in simplified version)
+// SlackInteractivePayload represents interactive component payloads
 type SlackInteractivePayload struct {
 	Type string `json:"type"`
 	User struct {
-		ID string `json:"id"`
+		ID   string `json:"id"`
+		Name string `json:"name,omitempty"`
 	} `json:"user"`
 	Actions []struct {
 		ActionID        string           `json:"action_id"`
-		SelectedOptions []SelectedOption `json:"selected_options"`
+		Type            string           `json:"type,omitempty"`
+		SelectedOptions []SelectedOption `json:"selected_options,omitempty"`
+		Value           string           `json:"value,omitempty"`
 	} `json:"actions"`
+	View struct {
+		Type string `json:"type,omitempty"`
+	} `json:"view,omitempty"`
 }
 
 type SelectedOption struct {
