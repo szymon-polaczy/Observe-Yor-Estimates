@@ -223,7 +223,7 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 	}
 
 	// Show projects with pagination to stay within payload limits
-	const projectsPerPage = 20
+	const projectsPerPage = 10
 	currentPage := page // Use provided page parameter
 
 	startIdx := currentPage * projectsPerPage
@@ -239,7 +239,7 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 		Type: "section",
 		Text: &Text{
 			Type: "mrkdwn",
-			Text: fmt.Sprintf("*🔧 Toggle Project Assignments* (Page %d of %d)\nClick any project to assign/unassign yourself:", currentPage+1, totalPages),
+			Text: fmt.Sprintf("*🔧 Projects* (Page %d of %d)\nClick to assign/unassign:", currentPage+1, totalPages),
 		},
 	})
 
@@ -251,16 +251,17 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 		var elements []Element
 		for _, project := range currentPageProjects {
 			isAssigned := assignedProjectMap[project.ID]
-			status := "➕"
+			status := "+"
 			style := "primary"
 			if isAssigned {
-				status = "✅"
+				status = "✓"
 				style = "danger"
 			}
 
+			// Keep button text short to save space
 			buttonText := fmt.Sprintf("%s %s", status, project.Name)
-			if len(buttonText) > 75 {
-				buttonText = fmt.Sprintf("%s %s...", status, project.Name[:70])
+			if len(buttonText) > 50 {
+				buttonText = fmt.Sprintf("%s %s...", status, project.Name[:45])
 			}
 
 			elements = append(elements, Element{
@@ -272,9 +273,9 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 			})
 		}
 
-		// Add buttons in rows of 3 (conservative to avoid size issues)
-		for j := 0; j < len(elements); j += 3 {
-			endIdx := j + 3
+		// Add buttons in rows of 2 (conservative to avoid size issues)
+		for j := 0; j < len(elements); j += 2 {
+			endIdx := j + 2
 			if endIdx > len(elements) {
 				endIdx = len(elements)
 			}
