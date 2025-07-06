@@ -28,10 +28,10 @@ type AppHomeElement struct {
 }
 
 type AppHomeAccessory struct {
-	Type          string                   `json:"type"`
-	ActionID      string                   `json:"action_id,omitempty"`
-	Options       []map[string]interface{} `json:"options,omitempty"`
-	InitialOption map[string]interface{}   `json:"initial_option,omitempty"`
+	Type           string                   `json:"type"`
+	ActionID       string                   `json:"action_id,omitempty"`
+	Options        []map[string]interface{} `json:"options,omitempty"`
+	InitialOptions []map[string]interface{} `json:"initial_options,omitempty"`
 }
 
 // HandleAppHome handles app home opened events
@@ -129,43 +129,88 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 		},
 	})
 
-	// Show current assignments (limited to prevent overflow)
+	// Show current assignments
 	if len(userProjects) == 0 {
 		blocks = append(blocks, Block{
 			Type: "section",
 			Text: &Text{
 				Type: "mrkdwn",
-				Text: "• _No projects assigned yet_\n• You will see all projects in automatic updates\n• Use `/oye assign \"Project Name\"` to assign yourself to specific projects",
+				Text: "• _No projects assigned yet_\n• Select projects below to assign yourself",
 			},
 		})
 	} else {
-		const maxProjectsToShow = 10
-		assignmentText := ""
-		projectsToShow := userProjects
-
-		if len(userProjects) > maxProjectsToShow {
-			projectsToShow = userProjects[:maxProjectsToShow]
-		}
-
-		for i, project := range projectsToShow {
-			if i > 0 {
-				assignmentText += "\n"
+		assignmentText := fmt.Sprintf("*%d projects assigned:*\n", len(userProjects))
+		const maxToShow = 8
+		for i, project := range userProjects {
+			if i >= maxToShow {
+				remaining := len(userProjects) - maxToShow
+				assignmentText += fmt.Sprintf("• _...and %d more_", remaining)
+				break
 			}
-			assignmentText += fmt.Sprintf("• ☑️ %s", project.Name)
+			assignmentText += fmt.Sprintf("• %s\n", project.Name)
 		}
-
-		if len(userProjects) > maxProjectsToShow {
-			remaining := len(userProjects) - maxProjectsToShow
-			assignmentText += fmt.Sprintf("\n• _...and %d more projects_", remaining)
-		}
-
-		assignmentText += "\n\n_Use `/oye my-projects` to see all assignments or `/oye unassign \"Project Name\"` to remove assignments_"
 
 		blocks = append(blocks, Block{
 			Type: "section",
 			Text: &Text{
 				Type: "mrkdwn",
 				Text: assignmentText,
+			},
+		})
+	}
+
+	// Interactive project assignment section
+	blocks = append(blocks, Block{Type: "divider"})
+	blocks = append(blocks, Block{
+		Type: "section",
+		Text: &Text{
+			Type: "mrkdwn",
+			Text: "*🔧 Quick Project Assignment*\nClick to assign/unassign yourself to projects:",
+		},
+	})
+
+	// Create a map of assigned projects for quick lookup
+	assignedProjectMap := make(map[int]bool)
+	for _, up := range userProjects {
+		assignedProjectMap[up.ID] = true
+	}
+
+	// Show a limited number of projects with toggle buttons
+	const maxProjectsToShow = 8
+	projectsShown := 0
+
+	for _, project := range allProjects {
+		if projectsShown >= maxProjectsToShow {
+			break
+		}
+
+		isAssigned := assignedProjectMap[project.ID]
+		status := "➕ Assign"
+		if isAssigned {
+			status = "✅ Assigned"
+		}
+
+		// Create individual project blocks with status
+		blocks = append(blocks, Block{
+			Type: "section",
+			Text: &Text{
+				Type: "mrkdwn",
+				Text: fmt.Sprintf("*%s*\n%s", project.Name, status),
+			},
+		})
+
+		projectsShown++
+	}
+
+	// Show limitation message if needed
+	if len(allProjects) > maxProjectsToShow {
+		blocks = append(blocks, Block{
+			Type: "context",
+			Elements: []Element{
+				{
+					Type: "mrkdwn",
+					Text: fmt.Sprintf("_Showing %d of %d projects. Use `/oye assign \"Project Name\"` for others._", maxProjectsToShow, len(allProjects)),
+				},
 			},
 		})
 	}

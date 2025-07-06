@@ -110,18 +110,9 @@ func handleUnifiedOYECommand(w http.ResponseWriter, r *http.Request) {
 
 	logger.Infof("Received /oye command from user %s: %s", req.UserName, req.Text)
 
-	// Parse project name from command if present
-	projectName, remainingText := ParseProjectFromCommand(req.Text)
-
-	// Update the request with parsed project info
-	if projectName != "" && projectName != "all" {
-		req.ProjectName = projectName
-		req.Text = remainingText // Update text to remaining command after project name
-	}
-
 	text := strings.ToLower(strings.TrimSpace(req.Text))
 
-	// Check for project assignment commands first
+	// Check for project assignment commands FIRST (before project parsing)
 	if strings.HasPrefix(text, "assign ") || strings.HasPrefix(text, "unassign ") ||
 		text == "my-projects" || text == "available-projects" {
 		if err := globalRouter.HandleProjectAssignmentRequest(req); err != nil {
@@ -131,6 +122,16 @@ func handleUnifiedOYECommand(w http.ResponseWriter, r *http.Request) {
 			sendImmediateResponse(w, "✅ Processing your project assignment...", "ephemeral")
 		}
 		return
+	}
+
+	// Parse project name from command if present (only after checking for management commands)
+	projectName, remainingText := ParseProjectFromCommand(req.Text)
+
+	// Update the request with parsed project info
+	if projectName != "" && projectName != "all" {
+		req.ProjectName = projectName
+		req.Text = remainingText                            // Update text to remaining command after project name
+		text = strings.ToLower(strings.TrimSpace(req.Text)) // Update text variable too
 	}
 
 	// Route to appropriate handler based on command content
