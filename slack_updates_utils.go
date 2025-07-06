@@ -72,11 +72,11 @@ type Field struct {
 
 // Element represents an element in Slack blocks
 type Element struct {
-	Type     string `json:"type"`
-	Text     string `json:"text"`
-	ActionID string `json:"action_id,omitempty"`
-	Style    string `json:"style,omitempty"`
-	Value    string `json:"value,omitempty"`
+	Type     string      `json:"type"`
+	Text     interface{} `json:"text,omitempty"`
+	ActionID string      `json:"action_id,omitempty"`
+	Style    string      `json:"style,omitempty"`
+	Value    string      `json:"value,omitempty"`
 }
 
 // Accessory represents an accessory in Slack blocks
