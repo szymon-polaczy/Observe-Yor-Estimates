@@ -6,72 +6,182 @@ This document provides a comprehensive overview of the Observe-Yor-Estimates (OY
 
 ### High-Level Architecture
 
-```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   TimeCamp API  │    │   OYE Service   │    │   Slack API     │
-│                 │◄──►│                 │◄──►│                 │
-│ • Tasks         │    │ • HTTP Server   │    │ • Slash Cmds    │
-│ • Time Entries  │    │ • Cron Jobs     │    │ • Webhooks      │
-│ • Users         │    │ • Smart Router  │    │ • Bot Messages  │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-                               │
-                               ▼
-                    ┌─────────────────┐
-                    │ PostgreSQL DB   │
-                    │                 │
-                    │ • Tasks         │
-                    │ • Time Entries  │
-                    │ • Users         │
-                    │ • Sync Status   │
-                    └─────────────────┘
+```mermaid
+graph TB
+    subgraph "External Services"
+        TC[TimeCamp API<br/>📅 Tasks & Time Entries]
+        SA[Slack API<br/>💬 Commands & Responses]
+    end
+    
+    subgraph "OYE Application"
+        WS[Web Server<br/>🌐 HTTP Endpoints]
+        SR[Smart Router<br/>🧠 Command Processing]
+        CS[Cron Scheduler<br/>⏰ Automated Jobs]
+        JQ[Job Queue<br/>📋 Async Processing]
+    end
+    
+    subgraph "Data Layer"
+        DB[(PostgreSQL<br/>🗄️ Database)]
+        SS[Sync Status<br/>📊 Tracking]
+    end
+    
+    subgraph "Background Processes"
+        TS[Task Sync<br/>📥 Every 5 min]
+        TES[Time Entry Sync<br/>📊 Every 10 min]
+        RS[Report Scheduler<br/>📧 Daily/Weekly]
+    end
+    
+    TC -->|Fetch Data| SR
+    SA -->|Slash Commands| WS
+    WS -->|Route Commands| SR
+    SR -->|Queue Jobs| JQ
+    JQ -->|Process| TS
+    JQ -->|Process| TES
+    JQ -->|Process| RS
+    
+    TS -->|Store| DB
+    TES -->|Store| DB
+    RS -->|Read| DB
+    RS -->|Send Reports| SA
+    
+    CS -->|Trigger| TS
+    CS -->|Trigger| TES
+    CS -->|Trigger| RS
+    
+    DB -->|Track| SS
+    SS -->|Monitor| CS
 ```
 
-### Monolithic Design
+### 🎯 Monolithic Design Philosophy
 
 OYE follows a **monolithic architecture** for several key reasons:
 
-1. **Simplicity**: Single deployment unit, easier to manage
-2. **Performance**: No network latency between components
-3. **Consistency**: Single database transaction scope
-4. **Development**: Easier debugging and testing
-5. **Resource Efficiency**: Lower overhead than microservices
+| Benefit | Description |
+|---------|-------------|
+| **Simplicity** | Single deployment unit, easier to manage and debug |
+| **Performance** | No network latency between components |
+| **Consistency** | Single database transaction scope ensures data integrity |
+| **Development** | Easier testing, debugging, and feature development |
+| **Resource Efficiency** | Lower overhead compared to microservices |
+
+### 📊 Data Flow Visualization
+
+```mermaid
+graph LR
+    subgraph "Data Sources"
+        TC[TimeCamp API<br/>📅 Source Data]
+        SC[Slack Commands<br/>💬 User Requests]
+    end
+    
+    subgraph "OYE Processing"
+        direction TB
+        SR[Smart Router<br/>🧠 Command Logic]
+        DS[Data Sync<br/>🔄 ETL Process]
+        RA[Report Aggregator<br/>📊 Analytics]
+        RF[Response Formatter<br/>🎨 Slack Blocks]
+    end
+    
+    subgraph "Storage"
+        DB[(PostgreSQL<br/>🗄️ Normalized Data)]
+        SS[Sync Status<br/>📊 Metadata]
+    end
+    
+    subgraph "Outputs"
+        SR_OUT[Slack Reports<br/>📈 Formatted]
+        UP[User Presence<br/>👥 Active Users]
+        AL[Alerts<br/>⚠️ Thresholds]
+    end
+    
+    TC -->|Raw Data| DS
+    DS -->|Normalized| DB
+    DB -->|Metadata| SS
+    
+    SC -->|Commands| SR
+    SR -->|Trigger| DS
+    SR -->|Query| DB
+    
+    DB -->|Aggregated| RA
+    RA -->|Processed| RF
+    RF -->|Formatted| SR_OUT
+    
+    DB -->|Monitor| UP
+    DB -->|Check| AL
+```
+
+### 🔄 Request Processing Flow
+
+```mermaid
+sequenceDiagram
+    participant User as 👤 Slack User
+    participant Slack as 💬 Slack API
+    participant OYE as 🎯 OYE Server
+    participant TC as 📅 TimeCamp API
+    participant DB as 🗄️ Database
+    
+    User->>Slack: /oye daily
+    Slack->>OYE: POST /slack/oye
+    
+    Note over OYE: Verify token &<br/>parse command
+    
+    OYE->>Slack: 200 OK: "⏳ Processing..."
+    OYE->>OYE: Queue async job
+    
+    par Background Processing
+        OYE->>DB: Query time entries
+        OYE->>DB: Query user data
+        DB-->>OYE: Return aggregated data
+        
+        opt If sync needed
+            OYE->>TC: Fetch latest data
+            TC-->>OYE: Return updates
+            OYE->>DB: Store updates
+        end
+    end
+    
+    Note over OYE: Format report<br/>with Slack blocks
+    
+    OYE->>Slack: POST response_url
+    Slack->>User: 📊 Daily Report
+    
+    Note over User: Report visible<br/>in Slack channel
+```
 
 ## 🔧 Core Components
 
 ### 1. HTTP Server (`server.go`)
 
-**Purpose**: Handles external HTTP requests from Slack
+**Purpose**: 🌐 Handles external HTTP requests from Slack
 
 **Key Features**:
-- RESTful endpoints for Slack slash commands
-- Request validation and authentication
-- Asynchronous job processing via Smart Router
-- Graceful shutdown handling
+- ✅ RESTful endpoints for Slack slash commands
+- 🔒 Request validation and authentication
+- 🚀 Asynchronous job processing via Smart Router
+- 🛑 Graceful shutdown handling
 
 **Endpoints**:
-```
-POST /slack/oye        # Unified OYE command handler
-GET  /health          # Health check endpoint
-```
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/slack/oye` | POST | Unified OYE command handler |
+| `/health` | GET | Health check endpoint |
 
 **Request Flow**:
-1. Receives Slack slash command
-2. Validates request token
-3. Routes to Smart Router
-4. Returns immediate acknowledgment
-5. Processes request asynchronously
+1. 📥 Receives Slack slash command
+2. 🔍 Validates request token
+3. 🔄 Routes to Smart Router
+4. ⚡ Returns immediate acknowledgment
+5. 🔄 Processes request asynchronously
 
 ### 2. Smart Router (`smart_router.go`)
 
-**Purpose**: Intelligent request routing and job management
+**Purpose**: 🧠 Intelligent request routing and job management
 
 **Key Features**:
-- Command parsing and classification
-- Asynchronous job queuing
-- Progress tracking and reporting
-- Context-aware responses
+- 📝 Command parsing and classification
+- 📋 Asynchronous job queuing
+- 📊 Progress tracking and reporting
+- 🎯 Context-aware responses
 
-**Command Types**:
+**Command Classification**:
 ```go
 type CommandType int
 
@@ -84,37 +194,39 @@ const (
 ```
 
 **Processing Pipeline**:
-1. Parse command text
-2. Determine command type
-3. Queue appropriate job
-4. Send immediate response
-5. Execute job asynchronously
-6. Send progress updates
+1. 📝 Parse command text
+2. 🔍 Determine command type
+3. 📋 Queue appropriate job
+4. ⚡ Send immediate response
+5. 🔄 Execute job asynchronously
+6. 📊 Send progress updates
 
-### 3. Data Synchronization
+### 3. Data Synchronization Layer
 
-#### TimeCamp Sync (`sync_*.go`)
+#### 📅 TimeCamp Integration (`sync_*.go`)
 
 **Tasks Sync** (`sync_tasks_to_db.go`):
-- Fetches project/task hierarchy from TimeCamp
-- Updates local database with latest task information
-- Handles project assignments and task relationships
+- 📥 Fetches project/task hierarchy from TimeCamp
+- 🔄 Updates local database with latest task information
+- 🔗 Handles project assignments and task relationships
 
 **Time Entries Sync** (`sync_time_entries_to_db.go`):
-- Fetches time entries for specified date ranges
-- Processes and stores time tracking data
-- Handles orphaned entries and data cleanup
+- 📊 Fetches time entries for specified date ranges
+- 🔄 Processes and stores time tracking data
+- 🧹 Handles orphaned entries and data cleanup
 
 **Full Sync** (`full_sync.go`):
-- Orchestrates complete data synchronization
-- Coordinates tasks and time entries sync
-- Provides progress feedback during sync
+- 🎯 Orchestrates complete data synchronization
+- 📊 Coordinates tasks and time entries sync
+- 📈 Provides progress feedback during sync
 
-#### Sync Strategies
+#### 🔄 Sync Strategies
 
-1. **Incremental Sync**: Default for regular operations
-2. **Full Sync**: Complete data refresh
-3. **Date Range Sync**: Targeted sync for specific periods
+| Strategy | Use Case | Frequency |
+|----------|----------|-----------|
+| **Incremental Sync** | Regular operations | Every 5-10 minutes |
+| **Full Sync** | Complete data refresh | On-demand or daily |
+| **Date Range Sync** | Specific periods | User-triggered |
 
 ### 4. Scheduled Tasks (Cron Jobs)
 
@@ -130,13 +242,13 @@ monthlyUpdateSchedule   = "0 9 1 * *"       // 9 AM 1st of month
 ```
 
 **Job Types**:
-- **Data Sync Jobs**: Keep database current with TimeCamp
-- **Report Jobs**: Generate and send Slack updates
-- **Maintenance Jobs**: Clean orphaned data, optimize database
+- 📊 **Data Sync Jobs**: Keep database current with TimeCamp
+- 📈 **Report Jobs**: Generate and send Slack updates
+- 🧹 **Maintenance Jobs**: Clean orphaned data, optimize database
 
 ### 5. Database Layer
 
-**Technology**: PostgreSQL with `lib/pq` driver
+**Technology**: 🗄️ PostgreSQL with `lib/pq` driver
 
 **Schema Design**:
 ```sql
@@ -150,19 +262,19 @@ sync_status (table_name, last_sync, status, ...)
 ```
 
 **Key Patterns**:
-- **Foreign Key Constraints**: Ensure data integrity
-- **Indexes**: Optimize query performance
-- **Transactions**: Atomic operations for data consistency
+- 🔗 **Foreign Key Constraints**: Ensure data integrity
+- 🚀 **Indexes**: Optimize query performance
+- 🔄 **Transactions**: Atomic operations for data consistency
 
 ### 6. User Management (`user_management.go`)
 
-**Purpose**: Resolve user IDs to human-readable names
+**Purpose**: 👥 Resolve user IDs to human-readable names
 
 **Features**:
-- User CRUD operations
-- Bulk user import/export
-- Display name preferences
-- Fallback to user ID if name unavailable
+- ✅ User CRUD operations
+- 📊 Bulk user import/export
+- 🎯 Display name preferences
+- 🔄 Fallback to user ID if name unavailable
 
 **CLI Commands**:
 ```bash
@@ -172,57 +284,11 @@ sync_status (table_name, last_sync, status, ...)
 ./oye populate-users
 ```
 
-## 🔄 Data Flow
-
-### 1. Slack Command Processing
-
-```
-Slack User → /oye command
-    ↓
-HTTP Server → validates request
-    ↓
-Smart Router → parses command
-    ↓
-Job Queue → stores async job
-    ↓
-Worker → processes job
-    ↓
-Response → sends result to Slack
-```
-
-### 2. Data Synchronization Flow
-
-```
-Cron Trigger → sync job starts
-    ↓
-TimeCamp API → fetch data
-    ↓
-Data Processing → transform/validate
-    ↓
-Database → store/update records
-    ↓
-Sync Status → record completion
-```
-
-### 3. Report Generation Flow
-
-```
-Report Request → determine period/filter
-    ↓
-Database Query → aggregate time data
-    ↓
-User Resolution → convert IDs to names
-    ↓
-Format Response → create Slack blocks
-    ↓
-Send to Slack → deliver formatted report
-```
-
 ## 🎯 Design Patterns
 
 ### 1. Repository Pattern
 
-**Implementation**: Database access through centralized functions
+**Implementation**: Centralized database access
 
 ```go
 // Examples
@@ -232,9 +298,9 @@ func GetUserByID(userID int) (*User, error)
 ```
 
 **Benefits**:
-- Consistent database access
-- Easy to test with mocks
-- Centralized error handling
+- ✅ Consistent database access
+- 🧪 Easy to test with mocks
+- 🔄 Centralized error handling
 
 ### 2. Command Pattern
 
@@ -248,116 +314,133 @@ type CommandHandler interface {
 ```
 
 **Benefits**:
-- Extensible command system
-- Consistent error handling
-- Easy to add new commands
+- 🎯 Clear command separation
+- 🔄 Easy to extend with new commands
+- 🧪 Testable command logic
 
 ### 3. Observer Pattern
 
-**Implementation**: Progress tracking for long-running operations
+**Implementation**: Event-driven sync status updates
 
 ```go
-type ProgressReporter interface {
-    ReportProgress(stage string, percent int)
-    ReportCompletion(result interface{})
-    ReportError(err error)
+type SyncObserver interface {
+    OnSyncStart(syncType string)
+    OnSyncProgress(syncType string, progress int)
+    OnSyncComplete(syncType string, result SyncResult)
 }
 ```
-
-### 4. Factory Pattern
-
-**Implementation**: Smart Router creates appropriate handlers
-
-```go
-func (sr *SmartRouter) CreateHandler(cmdType CommandType) CommandHandler {
-    switch cmdType {
-    case CommandUpdate:
-        return &UpdateHandler{}
-    case CommandSync:
-        return &SyncHandler{}
-    // ...
-    }
-}
-```
-
-## 🔒 Security Considerations
-
-### 1. Request Validation
-
-- **Slack Token Verification**: Validates requests from Slack
-- **Input Sanitization**: Prevents injection attacks
-- **Rate Limiting**: Prevents abuse (planned)
-
-### 2. API Key Management
-
-- **Environment Variables**: Secure storage of sensitive data
-- **No Hardcoded Secrets**: All secrets configurable
-- **Minimal Permissions**: APIs use least privilege
-
-### 3. Database Security
-
-- **Connection Encryption**: SSL/TLS for database connections
-- **Parameterized Queries**: Prevents SQL injection
-- **Limited User Permissions**: Database user has minimal required access
-
-## 📈 Performance Characteristics
-
-### 1. Scalability
-
-**Current Limits**:
-- Single instance design
-- PostgreSQL connection pool
-- Memory usage scales with data volume
-
-**Scaling Strategies**:
-- Vertical scaling (more CPU/RAM)
-- Database optimization (indexes, queries)
-- Caching layer (planned)
-
-### 2. Response Times
-
-**Slack Commands**: < 3 seconds (immediate acknowledgment)
-**Report Generation**: 5-30 seconds (depending on data volume)
-**Data Sync**: 1-10 minutes (depending on TimeCamp data)
-
-### 3. Resource Usage
-
-**Memory**: ~50-200MB (depending on data cache)
-**CPU**: Low (mostly I/O bound)
-**Storage**: Grows with time entries (~1MB per 1000 entries)
-
-## 🔮 Future Architecture Considerations
-
-### 1. Microservices Migration
-
-**Potential Split**:
-- **API Service**: Handle Slack requests
-- **Sync Service**: Manage TimeCamp synchronization  
-- **Report Service**: Generate and format reports
-- **Notification Service**: Handle Slack messaging
-
-### 2. Event-Driven Architecture
 
 **Benefits**:
-- Better decoupling
-- Improved scalability
-- Enhanced monitoring
+- 📊 Real-time progress tracking
+- 🔄 Decoupled status reporting
+- 📈 Easy monitoring integration
 
-**Implementation**:
-- Message queue (Redis, RabbitMQ)
-- Event sourcing for audit trail
-- CQRS for read/write separation
+## 🔧 Configuration Management
 
-### 3. Caching Layer
+### Environment Variables
 
-**Candidates**:
-- Redis for session/job state
-- In-memory cache for user lookups
-- CDN for static assets (if web UI added)
+| Variable | Purpose | Example |
+|----------|---------|---------|
+| `DATABASE_URL` | Database connection | `postgresql://user:pass@host:5432/db` |
+| `TIMECAMP_API_KEY` | TimeCamp API access | `abc123def456...` |
+| `SLACK_BOT_TOKEN` | Slack bot authentication | `xoxb-123-456-789...` |
+| `SLACK_VERIFICATION_TOKEN` | Request verification | `abc123def456...` |
 
-## 📖 Related Documentation
+### Schedule Configuration
 
-- [Database Schema](DATABASE.md) - Detailed database design
-- [API Reference](API_REFERENCE.md) - Complete API documentation
-- [Performance Guide](PERFORMANCE.md) - Optimization strategies
-- [Security Guide](SECURITY.md) - Security best practices 
+```bash
+# Custom sync schedules (cron format)
+TASK_SYNC_SCHEDULE="*/5 * * * *"
+TIME_ENTRIES_SYNC_SCHEDULE="*/10 * * * *"
+DAILY_UPDATE_SCHEDULE="0 6 * * *"
+WEEKLY_UPDATE_SCHEDULE="0 8 * * 1"
+MONTHLY_UPDATE_SCHEDULE="0 9 1 * *"
+```
+
+## 🚀 Performance Considerations
+
+### Database Optimization
+
+- 📊 **Indexes**: On frequently queried columns
+- 🔄 **Connection Pooling**: Efficient resource usage
+- 🧹 **Regular Cleanup**: Remove old orphaned data
+
+### API Rate Limiting
+
+- ⏰ **Intelligent Backoff**: Respect TimeCamp rate limits
+- 🔄 **Batch Operations**: Reduce API calls
+- 📊 **Caching**: Store frequently accessed data
+
+### Memory Management
+
+- 🧹 **Garbage Collection**: Efficient Go runtime usage
+- 📊 **Batch Processing**: Handle large datasets efficiently
+- 🔄 **Stream Processing**: For large sync operations
+
+## 🛡️ Security Architecture
+
+### Authentication Flow
+
+```mermaid
+graph TD
+    Request[📥 Slack Request] --> Token{🔍 Valid Token?}
+    Token -->|Yes| Process[🔄 Process Command]
+    Token -->|No| Reject[❌ 401 Unauthorized]
+    Process --> Response[📤 Send Response]
+```
+
+### Security Measures
+
+- 🔒 **Token Validation**: All requests verified
+- 🔐 **Environment Variables**: Secure credential storage
+- 🛡️ **Input Sanitization**: Prevent injection attacks
+- 📊 **Audit Logging**: Track all operations
+
+## 🔍 Monitoring & Observability
+
+### Health Checks
+
+- 🩺 **Database Connectivity**: Verify database access
+- 🌐 **API Endpoints**: Test external service availability
+- 📊 **Sync Status**: Monitor data synchronization health
+
+### Logging Strategy
+
+```go
+// Structured logging levels
+logger.Info("Command processed", "user", userID, "command", cmd)
+logger.Error("Sync failed", "error", err, "syncType", syncType)
+logger.Debug("Database query", "query", query, "duration", duration)
+```
+
+### Metrics Collection
+
+- 📊 **Command Usage**: Track popular commands
+- ⏰ **Response Times**: Monitor performance
+- 🔄 **Sync Statistics**: Data processing metrics
+- ⚠️ **Error Rates**: Identify issues early
+
+## 🎯 Scalability Considerations
+
+### Horizontal Scaling
+
+- 📋 **Stateless Design**: Easy to add instances
+- 🔄 **Database Sharing**: Single source of truth
+- 📊 **Load Distribution**: Nginx/HAProxy integration
+
+### Vertical Scaling
+
+- 💾 **Memory Optimization**: Efficient data structures
+- 🔄 **CPU Utilization**: Concurrent processing
+- 📊 **Database Tuning**: Query optimization
+
+## 📚 Related Documentation
+
+- [Installation Guide](INSTALLATION.md) - Setup instructions
+- [API Reference](API_REFERENCE.md) - Endpoint documentation
+- [CLI Commands](CLI_COMMANDS.md) - Command reference
+- [Troubleshooting](TROUBLESHOOTING.md) - Common issues
+
+---
+
+*This architecture documentation is maintained to reflect the current system design. Last updated: $(date)* 

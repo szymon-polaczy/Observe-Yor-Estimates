@@ -1,18 +1,51 @@
 # Quick Start Guide
 
-Get OYE (Observe-Yor-Estimates) up and running in under 10 minutes.
+Get OYE (Observe-Yor-Estimates) up and running in under 10 minutes with our streamlined setup process.
+
+## 🗺️ Setup Workflow Overview
+
+```mermaid
+graph TD
+    Start([Start Setup]) --> Choice{Development or<br/>Production?}
+    
+    Choice -->|Development| DevPath[Development Setup]
+    Choice -->|Production| ProdPath[Production Setup]
+    
+    DevPath --> D1[1. Clone Repository<br/>git clone repo]
+    D1 --> D2[2. Install Dependencies<br/>go mod download]
+    D2 --> D3[3. Setup Database<br/>PostgreSQL local/Docker]
+    D3 --> D4[4. Configure Environment<br/>Create .env file]
+    D4 --> D5[5. Initialize Database<br/>./oye --init-db]
+    D5 --> D6[6. Test Installation<br/>./oye --build-test]
+    D6 --> DevReady[✅ Ready for Development]
+    
+    ProdPath --> P1[1. Choose Platform<br/>Railway/Docker/Binary]
+    P1 --> P2[2. Configure Database<br/>PostgreSQL hosted]
+    P2 --> P3[3. Set Environment<br/>Production variables]
+    P3 --> P4[4. Deploy Application<br/>Build & deploy]
+    P4 --> P5[5. Initialize Database<br/>./oye --init-db]
+    P5 --> P6[6. Configure Slack<br/>Create app & commands]
+    P6 --> ProdReady[✅ Ready for Production]
+    
+    DevReady --> API[Get API Keys<br/>TimeCamp & Slack]
+    ProdReady --> API
+    API --> Final[🎉 Complete Setup]
+```
 
 ## ⚡ Prerequisites
 
 Before starting, ensure you have:
-- [x] Go 1.18+ installed
-- [x] PostgreSQL database access (local or hosted)
-- [x] TimeCamp account with API access
-- [x] Slack workspace admin access
+
+| Component | Version | Purpose |
+|-----------|---------|---------|
+| **Go** | 1.18+ | Application runtime |
+| **PostgreSQL** | 12+ | Database storage |
+| **TimeCamp Account** | Active | API access for time tracking |
+| **Slack Workspace** | Admin access | Bot installation permissions |
 
 ## 🚀 5-Minute Local Setup
 
-### 1. Clone and Setup (2 minutes)
+### Step 1: Clone and Setup (2 minutes)
 
 ```bash
 # Clone the repository
@@ -26,9 +59,13 @@ go mod download
 go run . --version
 ```
 
-### 2. Database Setup (1 minute)
+**✅ Success indicator**: Version number displays without errors
 
-**Option A: Docker (Fastest)**
+### Step 2: Database Setup (1 minute)
+
+Choose your preferred database setup:
+
+**Option A: Docker (Recommended)**
 ```bash
 docker run --name oye-postgres \
   -e POSTGRES_DB=oye_db \
@@ -40,25 +77,42 @@ docker run --name oye-postgres \
 
 **Option B: Local PostgreSQL**
 ```bash
+# Ubuntu/Debian
+sudo apt install postgresql postgresql-contrib
 createdb oye_db
 ```
 
-### 3. Environment Configuration (1 minute)
-
-Create `.env` file:
+**Option C: Use existing PostgreSQL**
 ```bash
-cat > .env << EOF
-DATABASE_URL=postgresql://your_user:your_password@localhost:5432/your_database
+# Just ensure you have connection details ready
+psql -h your-host -U your-user -d your-db -c "SELECT 1;"
+```
+
+### Step 3: Environment Configuration (1 minute)
+
+Create `.env` file with your configuration:
+
+```bash
+cat > .env << 'EOF'
+# Database Configuration
+DATABASE_URL=postgresql://oye_user:oye_pass@localhost:5432/oye_db
+
+# TimeCamp API (get from TimeCamp dashboard)
 TIMECAMP_API_KEY=your_timecamp_api_key_here
+
+# Slack Configuration (get from Slack app dashboard)
 SLACK_BOT_TOKEN=xoxb-your-bot-token-here
 SLACK_VERIFICATION_TOKEN=your_verification_token_here
+
+# Optional: Custom port
+PORT=8080
 EOF
 ```
 
-### 4. Initialize and Test (1 minute)
+### Step 4: Initialize and Test (1 minute)
 
 ```bash
-# Initialize database
+# Initialize database tables
 go run . --init-db
 
 # Test the application
@@ -68,162 +122,226 @@ go run . --build-test
 go run .
 ```
 
-**✅ Success Indicators:**
-- Database initialized without errors
-- Build test passes
-- Server starts on port 8080
-- Health check responds: `curl localhost:8080/health`
+**✅ Success indicators**:
+- Database initialized: `Database initialized successfully`
+- Build test passes: `Build test successful`
+- Server starts: `Server listening on :8080`
+- Health check works: `curl localhost:8080/health` returns `{"status":"healthy"}`
 
 ## 🌐 10-Minute Production Setup
 
-### Quick Railway Deployment
+### Option 1: Railway Deployment (Recommended)
 
-1. **Fork Repository** (30 seconds)
-   - Fork this repository to your GitHub account
+#### Step 1: Prepare Repository (1 minute)
+```bash
+# Ensure your code is ready
+git add .
+git commit -m "Prepare for Railway deployment"
+git push origin main
+```
 
-2. **Deploy to Railway** (2 minutes)
-   - Visit [railway.app](https://railway.app)
-   - Click "New Project" → "Deploy from GitHub"
-   - Select your forked repository
-   - Railway auto-detects Dockerfile
+#### Step 2: Deploy to Railway (2 minutes)
+1. 🌐 Visit [railway.app](https://railway.app)
+2. 📂 Click **"New Project"** → **"Deploy from GitHub"**
+3. 🔗 Select your forked repository
+4. 🚀 Railway auto-detects Dockerfile and deploys
 
-3. **Add Database** (1 minute)
-   - In Railway project: "New Service" → "PostgreSQL"
-   - Copy the connection string
+#### Step 3: Add PostgreSQL Database (1 minute)
+1. 🗄️ In Railway project: **"New Service"** → **"PostgreSQL"**
+2. 📋 Copy the connection string from the database service
+3. 🔧 Add as `DATABASE_URL` environment variable
 
-4. **Configure Environment** (2 minutes)
-   ```
-   DATABASE_URL=<your_railway_postgres_url>
-   TIMECAMP_API_KEY=<your_timecamp_api_key>
-   SLACK_BOT_TOKEN=<your_slack_bot_token>
-   SLACK_VERIFICATION_TOKEN=<your_slack_verification_token>
-   ```
+#### Step 4: Configure Environment Variables (2 minutes)
+Add these in Railway dashboard under **"Variables"**:
+```bash
+DATABASE_URL=postgresql://postgres:password@host:5432/railway
+TIMECAMP_API_KEY=your_timecamp_api_key
+SLACK_BOT_TOKEN=xoxb-your-slack-bot-token
+SLACK_VERIFICATION_TOKEN=your_slack_verification_token
+```
 
-5. **Get Public URL** (30 seconds)
-   - Railway project → Settings → Generate Domain
-   - Note your URL: `https://yourapp.up.railway.app`
+#### Step 5: Get Public URL (1 minute)
+1. 🌐 Railway project → **"Settings"** → **"Generate Domain"**
+2. 📝 Note your URL: `https://yourapp.up.railway.app`
 
-6. **Configure Slack** (4 minutes)
-   - Create Slack App at [api.slack.com](https://api.slack.com/apps)
-   - Add slash command `/oye` → `https://yourapp.up.railway.app/slack/oye`
-   - Install app to workspace
-   - Copy tokens to Railway environment
+#### Step 6: Configure Slack Integration (3 minutes)
+1. 🔗 Visit [Slack API](https://api.slack.com/apps) → **"Create New App"**
+2. ⚙️ Add slash command `/oye` → `https://yourapp.up.railway.app/slack/oye`
+3. 🔑 Install app to workspace and copy tokens
+4. 🔄 Update Railway environment variables with actual tokens
 
-## 🔑 API Keys - Quick Setup
+### Option 2: Docker Deployment
 
-### TimeCamp API Key (1 minute)
-1. Login to [TimeCamp](https://www.timecamp.com)
-2. Account Settings → Add-ons → API
-3. Copy the API key
+#### Build and Deploy
+```bash
+# Build the Docker image
+docker build -t observe-yor-estimates .
 
-### Slack App Setup (3 minutes)
-1. Visit [Slack API](https://api.slack.com/apps) → "Create New App"
-2. Choose "From scratch" → Enter name and workspace
-3. **OAuth & Permissions**:
+# Run with environment file
+docker run -d \
+  --name oye-app \
+  -p 8080:8080 \
+  --env-file .env \
+  --restart unless-stopped \
+  observe-yor-estimates
+```
+
+### Option 3: Binary Deployment
+
+#### Build and Deploy
+```bash
+# Build for your target platform
+GOOS=linux GOARCH=amd64 go build -o oye-time-tracker
+
+# Deploy to server
+scp oye-time-tracker user@server:/opt/oye/
+scp .env user@server:/opt/oye/
+
+# Set up as system service (systemd example)
+sudo systemctl enable oye
+sudo systemctl start oye
+```
+
+## 🔑 API Keys - Quick Setup Guide
+
+### TimeCamp API Key (2 minutes)
+
+1. 🔐 Login to [TimeCamp](https://www.timecamp.com)
+2. ⚙️ Go to **Account Settings** → **Add-ons** → **API**
+3. 🗝️ Generate or copy your API key
+4. 📋 Add to `.env` file as `TIMECAMP_API_KEY`
+
+**Test your key:**
+```bash
+curl -H "Authorization: Bearer YOUR_API_KEY" \
+  "https://www.timecamp.com/third_party/api/users/format/json"
+```
+
+### Slack App Setup (4 minutes)
+
+#### Create Slack App (2 minutes)
+1. 🔗 Visit [Slack API](https://api.slack.com/apps) → **"Create New App"**
+2. 📝 Choose **"From scratch"** → Enter app name and workspace
+3. 🔧 Configure in **"OAuth & Permissions"**:
    - Add scopes: `chat:write`, `commands`
-   - Install to workspace → Copy Bot Token (`xoxb-...`)
-4. **Slash Commands**:
-   - Create command `/oye`
-   - Request URL: `https://your-domain.com/slack/oye`
-5. **Basic Information** → Copy Verification Token
+   - Install to workspace
+   - Copy **Bot User OAuth Token** (starts with `xoxb-`)
 
-## ✅ Quick Verification
+#### Create Slash Command (2 minutes)
+1. 💬 Go to **"Slash Commands"** → **"Create New Command"**
+2. ⚙️ Configure:
+   - **Command**: `/oye`
+   - **Request URL**: `https://your-domain.com/slack/oye`
+   - **Description**: "OYE time tracking commands"
+   - **Usage Hint**: `[daily|weekly|monthly|sync|help] [public]`
+3. 🔄 **Save** and **reinstall app** to activate
+
+## ✅ Quick Verification Checklist
 
 ### Test Database Connection
 ```bash
 ./oye --init-db
-# Should complete without errors
+# ✅ Should complete without errors
 ```
 
-### Test TimeCamp Sync
+### Test TimeCamp Integration
 ```bash
 ./oye sync-tasks
-# Should fetch and store tasks
+# ✅ Should fetch and display task information
 ```
 
 ### Test Slack Integration
-In Slack:
+In your Slack workspace:
 ```
 /oye help
-# Should show help message
+# ✅ Should show help message
 ```
 
-## 📊 First Commands to Try
-
-### Get Your First Report
+### Test Application Health
+```bash
+curl https://your-domain.com/health
+# ✅ Should return: {"status":"healthy"}
 ```
+
+## 📊 Your First Commands
+
+### Get Time Reports
+```bash
 /oye daily          # Private daily summary
-/oye weekly public  # Public weekly report
+/oye weekly public  # Public weekly report to channel
+/oye monthly        # Monthly overview
 ```
 
 ### Sync Your Data
-```
-/oye sync          # Full data synchronization
+```bash
+/oye sync          # Quick data refresh
+/oye full-sync     # Complete synchronization
 ```
 
-### Monitor Estimates
-```
-/oye over 80 weekly  # Tasks over 80% of estimate
+### Monitor Project Health
+```bash
+/oye over 80 weekly   # Tasks over 80% of estimate
+/oye over 100 daily   # Tasks over budget
 ```
 
 ## 🔧 Quick Troubleshooting
 
-### Command Not Working?
+### Common Issues & Solutions
+
+| Issue | Quick Fix |
+|-------|-----------|
+| **Database connection failed** | Check `DATABASE_URL` format |
+| **Slack command not found** | Verify app installation & slash command |
+| **No response from /oye** | Check app URL and health endpoint |
+| **Empty reports** | Run `./oye full-sync` to populate data |
+| **API errors** | Verify TimeCamp API key validity |
+
+### Debug Commands
 ```bash
-# Check health
-curl https://your-domain.com/health
+# Check environment
+env | grep -E "(DATABASE_|TIMECAMP_|SLACK_)" | head -3
 
-# Verify environment
-echo $SLACK_BOT_TOKEN | cut -c1-10  # Should show: xoxb-12345
-echo $DATABASE_URL | cut -d@ -f2     # Should show: host:port/db
+# Test components
+./oye --build-test      # Application
+./oye list-users        # Database
+./oye sync-tasks        # TimeCamp API
+
+# Monitor logs
+./oye | grep -E "(ERROR|WARN|INFO)"
 ```
-
-### No Data in Reports?
-```bash
-# Force sync
-./oye full-sync
-
-# Check data
-./oye list-users
-./oye active-users
-```
-
-### Slack App Issues?
-1. Ensure app is installed to workspace
-2. Verify request URL is accessible
-3. Check slash command configuration
-4. Reinstall app after changes
 
 ## 🎯 Next Steps
 
-Once everything is working:
+Once your setup is complete:
 
-1. **Add Team Members**: [User Management Guide](USER_MANAGEMENT.md)
-2. **Configure Schedules**: [Scheduled Tasks](SCHEDULED_TASKS.md)  
-3. **Customize Reports**: [Configuration Guide](CONFIGURATION.md)
-4. **Set Up Monitoring**: [Troubleshooting Guide](TROUBLESHOOTING.md)
+1. **👥 Add Team Members**: [User Management Guide](USER_MANAGEMENT.md)
+2. **⏰ Configure Schedules**: [Scheduled Tasks Documentation](SCHEDULED_TASKS.md)
+3. **📊 Customize Reports**: [Configuration Guide](CONFIGURATION.md)
+4. **🔍 Set Up Monitoring**: [Troubleshooting Guide](TROUBLESHOOTING.md)
 
-## 🆘 Need Help?
+## 📱 Mobile-Friendly Usage
 
-**Quick Fixes:**
-- Database issues → Check `DATABASE_URL` format
-- Slack issues → Verify tokens and app installation
-- API issues → Test keys with curl commands
+OYE works great from Slack mobile app:
 
-**Detailed Help:**
-- [Installation Guide](INSTALLATION.md) - Complete setup instructions
-- [Troubleshooting](TROUBLESHOOTING.md) - Common issues and solutions
-- [CLI Commands](CLI_COMMANDS.md) - All available commands
-
-## 📱 Mobile-Friendly Commands
-
-Once set up, you can use OYE from Slack mobile:
-
-```
+```bash
 /oye                # Quick daily update
-/oye weekly         # Weekly summary
+/oye weekly         # Weekly team summary
 /oye sync           # Refresh data
-/oye over 100 daily # Check overruns
+/oye over 100 daily # Check budget overruns
 ```
 
-Perfect for checking project status on the go! 📲 
+Perfect for checking project status on the go! 📲
+
+## 🆘 Getting Help
+
+**Quick Resources:**
+- 📚 [Installation Guide](INSTALLATION.md) - Detailed setup instructions
+- 🔧 [Troubleshooting](TROUBLESHOOTING.md) - Common issues & solutions
+- 💻 [CLI Commands](CLI_COMMANDS.md) - All available commands
+- 🏗️ [Architecture](ARCHITECTURE.md) - System design overview
+
+**Need immediate help?** Check the [Troubleshooting Decision Tree](TROUBLESHOOTING.md#quick-diagnosis) for step-by-step issue resolution.
+
+---
+
+*This quick start guide is designed to get you productive immediately. For detailed configuration and advanced features, explore the full documentation.* 
