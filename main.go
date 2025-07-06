@@ -289,14 +289,14 @@ func handleCliCommands(args []string, logger *Logger) {
 		}
 		testCommand := args[1]
 		logger.Infof("Testing local OYE command: %s", testCommand)
-		
+
 		// Remove "/oye " prefix if present
 		testCommand = strings.TrimPrefix(testCommand, "/oye ")
 		testCommand = strings.TrimSpace(testCommand)
-		
+
 		// Parse project name from command if present
 		projectName, remainingText := ParseProjectFromCommand(testCommand)
-		
+
 		fmt.Printf("\n=== OYE Test Command Results ===\n")
 		fmt.Printf("Original command: %s\n", testCommand)
 		if projectName != "" {
@@ -304,20 +304,20 @@ func handleCliCommands(args []string, logger *Logger) {
 		}
 		fmt.Printf("Remaining text: %s\n", remainingText)
 		fmt.Printf("=====================================\n\n")
-		
+
 		// Get database connection
 		db, err := GetDB()
 		if err != nil {
 			logger.Errorf("Failed to get database connection: %v", err)
 			os.Exit(1)
 		}
-		
+
 		// Parse the time period
 		router := NewSmartRouter()
 		periodInfo := router.parsePeriodFromText(remainingText, "")
-		
+
 		fmt.Printf("Parsed period: %s (type: %s, days: %d)\n\n", periodInfo.DisplayName, periodInfo.Type, periodInfo.Days)
-		
+
 		// Handle project-specific query
 		var taskInfos []TaskUpdateInfo
 		if projectName != "" && projectName != "all" {
@@ -327,7 +327,7 @@ func handleCliCommands(args []string, logger *Logger) {
 				logger.Errorf("Failed to find project: %v", err)
 				os.Exit(1)
 			}
-			
+
 			if len(projects) == 0 {
 				fmt.Printf("❌ Project '%s' not found.\n", projectName)
 				fmt.Println("\nAvailable projects:")
@@ -339,7 +339,7 @@ func handleCliCommands(args []string, logger *Logger) {
 				}
 				return
 			}
-			
+
 			if len(projects) > 1 {
 				fmt.Printf("⚠️ Multiple projects found for '%s':\n", projectName)
 				for _, p := range projects {
@@ -348,10 +348,10 @@ func handleCliCommands(args []string, logger *Logger) {
 				fmt.Println("\nPlease be more specific.")
 				return
 			}
-			
+
 			project := projects[0]
 			fmt.Printf("Found project: %s (TimeCamp Task ID: %d)\n", project.Name, project.TimeCampTaskID)
-			
+
 			// Get project-specific task data
 			taskInfos, err = getTaskChangesWithProject(db, periodInfo.Type, &project.TimeCampTaskID)
 			if err != nil {
@@ -366,10 +366,10 @@ func handleCliCommands(args []string, logger *Logger) {
 				os.Exit(1)
 			}
 		}
-		
+
 		fmt.Printf("\n📊 Results for %s:\n", periodInfo.DisplayName)
 		fmt.Printf("Found %d tasks with time entries\n\n", len(taskInfos))
-		
+
 		if len(taskInfos) == 0 {
 			fmt.Println("No tasks found with time entries for the specified period.")
 		} else {
@@ -385,9 +385,9 @@ func handleCliCommands(args []string, logger *Logger) {
 				fmt.Println()
 			}
 		}
-		
+
 		fmt.Println("=== Test command completed ===")
-		
+
 		// Additional debugging: Check project task relationships
 		if projectName != "" && projectName != "all" {
 			fmt.Printf("\n=== Debug: Project Task Relationships ===\n")
@@ -395,7 +395,7 @@ func handleCliCommands(args []string, logger *Logger) {
 			if err == nil && len(projects) > 0 {
 				project := projects[0]
 				fmt.Printf("Project: %s (TimeCamp Task ID: %d)\n", project.Name, project.TimeCampTaskID)
-				
+
 				// Check how many tasks are linked to this project
 				var taskCount int
 				err = db.QueryRow(`SELECT COUNT(*) FROM tasks WHERE project_id = (
@@ -404,7 +404,7 @@ func handleCliCommands(args []string, logger *Logger) {
 				if err == nil {
 					fmt.Printf("Tasks linked to this project: %d\n", taskCount)
 				}
-				
+
 				// Show sample tasks linked to this project
 				rows, err := db.Query(`SELECT task_id, name FROM tasks WHERE project_id = (
 					SELECT id FROM projects WHERE timecamp_task_id = $1
@@ -420,7 +420,7 @@ func handleCliCommands(args []string, logger *Logger) {
 						}
 					}
 				}
-				
+
 				// Also check if there are tasks with "Filestage" in the name but not linked to the project
 				fmt.Println("\nTasks with 'Filestage' in name (regardless of project):")
 				rows2, err := db.Query(`SELECT task_id, name, project_id FROM tasks WHERE LOWER(name) LIKE LOWER('%filestage%') LIMIT 20`)
@@ -443,26 +443,26 @@ func handleCliCommands(args []string, logger *Logger) {
 		}
 	case "test-message-limits":
 		logger.Info("Testing Slack message limits with mock data")
-		
+
 		// Generate test tasks with various sizes
 		testTasks := generateTestTasks(50) // Generate 50 tasks to test limits
-		
+
 		fmt.Printf("\n=== Message Limits Test ===\n")
 		fmt.Printf("Generated %d test tasks\n", len(testTasks))
-		
+
 		// Test formatProjectMessageWithComments
 		fmt.Println("\n--- Testing formatProjectMessageWithComments ---")
 		messages := formatProjectMessageWithComments("Test Project", testTasks, "monthly")
-		
+
 		fmt.Printf("Generated %d messages\n", len(messages))
-		
+
 		for i, message := range messages {
 			validation := validateSlackMessage(message)
 			status := "✅ VALID"
 			if !validation.IsValid {
 				status = "❌ INVALID"
 			}
-			
+
 			fmt.Printf("Message %d: %s\n", i+1, status)
 			fmt.Printf("  - Blocks: %d/%d\n", validation.BlockCount, MaxSlackBlocks)
 			fmt.Printf("  - Characters: %d/%d\n", validation.CharacterCount, MaxSlackMessageChars)
@@ -470,44 +470,44 @@ func handleCliCommands(args []string, logger *Logger) {
 				fmt.Printf("  - Error: %s\n", validation.ErrorMessage)
 			}
 		}
-		
+
 		// Test individual message validation
 		fmt.Println("\n--- Testing Large Single Message ---")
 		largeTestTasks := generateTestTasks(100) // Even more tasks
 		largeMessage := formatProjectMessage("Large Project", largeTestTasks, "monthly")
 		validation := validateSlackMessage(largeMessage)
-		
+
 		status := "✅ VALID"
 		if !validation.IsValid {
 			status = "❌ INVALID"
 		}
-		
+
 		fmt.Printf("Large message validation: %s\n", status)
 		fmt.Printf("  - Blocks: %d/%d\n", validation.BlockCount, MaxSlackBlocks)
 		fmt.Printf("  - Characters: %d/%d\n", validation.CharacterCount, MaxSlackMessageChars)
 		if !validation.IsValid {
 			fmt.Printf("  - Error: %s\n", validation.ErrorMessage)
 		}
-		
+
 		// Test comment overflow
 		fmt.Println("\n--- Testing Comment Overflow ---")
 		tasksWithComments := generateTestTasksWithComments(10, 20) // 10 tasks with 20 comments each
 		commentMessages := formatProjectMessageWithComments("Comment Heavy Project", tasksWithComments, "daily")
-		
+
 		// Test extreme comment overflow
 		fmt.Println("\n--- Testing Extreme Comment Overflow ---")
 		extremeTasks := generateTestTasksWithComments(3, 50) // 3 tasks with 50 comments each
 		extremeMessages := formatProjectMessageWithComments("Extreme Project", extremeTasks, "daily")
-		
+
 		fmt.Printf("Generated %d messages for comment-heavy tasks\n", len(commentMessages))
-		
+
 		for i, message := range commentMessages {
 			validation := validateSlackMessage(message)
 			status := "✅ VALID"
 			if !validation.IsValid {
 				status = "❌ INVALID"
 			}
-			
+
 			fmt.Printf("Comment Message %d: %s\n", i+1, status)
 			fmt.Printf("  - Blocks: %d/%d\n", validation.BlockCount, MaxSlackBlocks)
 			fmt.Printf("  - Characters: %d/%d\n", validation.CharacterCount, MaxSlackMessageChars)
@@ -515,16 +515,16 @@ func handleCliCommands(args []string, logger *Logger) {
 				fmt.Printf("  - Error: %s\n", validation.ErrorMessage)
 			}
 		}
-		
+
 		fmt.Printf("\nGenerated %d messages for extreme comment tasks\n", len(extremeMessages))
-		
+
 		for i, message := range extremeMessages {
 			validation := validateSlackMessage(message)
 			status := "✅ VALID"
 			if !validation.IsValid {
 				status = "❌ INVALID"
 			}
-			
+
 			fmt.Printf("Extreme Message %d: %s\n", i+1, status)
 			fmt.Printf("  - Blocks: %d/%d\n", validation.BlockCount, MaxSlackBlocks)
 			fmt.Printf("  - Characters: %d/%d\n", validation.CharacterCount, MaxSlackMessageChars)
@@ -532,9 +532,9 @@ func handleCliCommands(args []string, logger *Logger) {
 				fmt.Printf("  - Error: %s\n", validation.ErrorMessage)
 			}
 		}
-		
+
 		fmt.Println("\n=== Message Limits Test Completed ===")
-		
+
 		// Summary
 		allValid := true
 		for _, messages := range [][]SlackMessage{messages, commentMessages, extremeMessages, {largeMessage}} {
@@ -545,7 +545,7 @@ func handleCliCommands(args []string, logger *Logger) {
 				}
 			}
 		}
-		
+
 		if allValid {
 			fmt.Println("🎉 All messages passed validation!")
 		} else {
@@ -574,14 +574,6 @@ func setupCronJobs(logger *Logger) {
 
 	addCronJob(cronScheduler, "DAILY_UPDATE_SCHEDULE", "0 6 * * *", "daily Slack update", logger, func() {
 		SendSlackUpdate("daily", "", false)
-	})
-
-	addCronJob(cronScheduler, "WEEKLY_UPDATE_SCHEDULE", "0 8 * * 1", "weekly Slack update", logger, func() {
-		SendSlackUpdate("weekly", "", false)
-	})
-
-	addCronJob(cronScheduler, "MONTHLY_UPDATE_SCHEDULE", "0 9 1 * *", "monthly Slack update", logger, func() {
-		SendSlackUpdate("monthly", "", false)
 	})
 
 	// Add threshold monitoring cron job (every 15 minutes)
@@ -735,7 +727,7 @@ func handleDirectSlackUpdate(period string) {
 // generateTestTasks creates mock TaskUpdateInfo for testing message limits
 func generateTestTasks(count int) []TaskUpdateInfo {
 	tasks := make([]TaskUpdateInfo, count)
-	
+
 	for i := 0; i < count; i++ {
 		tasks[i] = TaskUpdateInfo{
 			TaskID:           1000 + i,
@@ -758,14 +750,14 @@ func generateTestTasks(count int) []TaskUpdateInfo {
 			},
 		}
 	}
-	
+
 	return tasks
 }
 
 // generateTestTasksWithComments creates mock TaskUpdateInfo with many comments for testing
 func generateTestTasksWithComments(taskCount, commentsPerTask int) []TaskUpdateInfo {
 	tasks := make([]TaskUpdateInfo, taskCount)
-	
+
 	for i := 0; i < taskCount; i++ {
 		tasks[i] = TaskUpdateInfo{
 			TaskID:           2000 + i,
@@ -788,7 +780,7 @@ func generateTestTasksWithComments(taskCount, commentsPerTask int) []TaskUpdateI
 			},
 		}
 	}
-	
+
 	return tasks
 }
 
@@ -797,7 +789,7 @@ func generateTestComments(count int) []string {
 	if count == 0 {
 		return []string{}
 	}
-	
+
 	comments := make([]string, count)
 	sampleComments := []string{
 		"This is a test comment for validating message formatting and character limits in Slack messages.",
@@ -811,11 +803,11 @@ func generateTestComments(count int) []string {
 		"Refactored the legacy code to use modern patterns and improve maintainability.",
 		"Coordinating with the design team to finalize the user interface specifications.",
 	}
-	
+
 	for i := 0; i < count; i++ {
 		commentIndex := i % len(sampleComments)
 		comments[i] = fmt.Sprintf("%s (Comment #%d)", sampleComments[commentIndex], i+1)
 	}
-	
+
 	return comments
 }
