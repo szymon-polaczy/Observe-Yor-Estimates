@@ -64,6 +64,7 @@ func HandleAppHome(w http.ResponseWriter, r *http.Request) {
 
 // PublishAppHomeView publishes the app home view for a user
 func PublishAppHomeView(userID string) error {
+	logger := GetGlobalLogger()
 	slackClient := NewSlackAPIClient()
 
 	// Get user's current project assignments
@@ -87,6 +88,20 @@ func PublishAppHomeView(userID string) error {
 	payload := map[string]interface{}{
 		"user_id": userID,
 		"view":    view,
+	}
+
+	// Validate payload size before sending
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal app home payload: %w", err)
+	}
+
+	const maxAppHomeSize = 3000 // Slack's character limit for App Home
+	if len(payloadJSON) > maxAppHomeSize {
+		logger.Errorf("App Home payload too large: %d > %d characters", len(payloadJSON), maxAppHomeSize)
+		// Return a simplified view instead of failing
+		simpleView := BuildFallbackAppHomeView(len(userProjects), len(allProjects))
+		payload["view"] = simpleView
 	}
 
 	return slackClient.sendSlackAPIRequest("views.publish", payload)
@@ -114,7 +129,7 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 		},
 	})
 
-	// Show current assignments
+	// Show current assignments (limited to prevent overflow)
 	if len(userProjects) == 0 {
 		blocks = append(blocks, Block{
 			Type: "section",
@@ -124,14 +139,27 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 			},
 		})
 	} else {
+		const maxProjectsToShow = 10
 		assignmentText := ""
-		for i, project := range userProjects {
+		projectsToShow := userProjects
+
+		if len(userProjects) > maxProjectsToShow {
+			projectsToShow = userProjects[:maxProjectsToShow]
+		}
+
+		for i, project := range projectsToShow {
 			if i > 0 {
 				assignmentText += "\n"
 			}
 			assignmentText += fmt.Sprintf("• ☑️ %s", project.Name)
 		}
-		assignmentText += "\n\n_Use `/oye unassign \"Project Name\"` to remove assignments_"
+
+		if len(userProjects) > maxProjectsToShow {
+			remaining := len(userProjects) - maxProjectsToShow
+			assignmentText += fmt.Sprintf("\n• _...and %d more projects_", remaining)
+		}
+
+		assignmentText += "\n\n_Use `/oye my-projects` to see all assignments or `/oye unassign \"Project Name\"` to remove assignments_"
 
 		blocks = append(blocks, Block{
 			Type: "section",
@@ -142,40 +170,13 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 		})
 	}
 
-	// Available projects section
+	// Project management section
 	blocks = append(blocks, Block{Type: "divider"})
 	blocks = append(blocks, Block{
 		Type: "section",
 		Text: &Text{
 			Type: "mrkdwn",
-			Text: "*📁 Available Projects*",
-		},
-	})
-
-	// Create a map for quick lookup of assigned projects
-	assignedProjects := make(map[int]bool)
-	for _, project := range userProjects {
-		assignedProjects[project.ID] = true
-	}
-
-	// Show available projects
-	projectText := ""
-	for i, project := range allProjects {
-		if i > 0 {
-			projectText += "\n"
-		}
-		if assignedProjects[project.ID] {
-			projectText += fmt.Sprintf("• ☑️ %s _(assigned)_", project.Name)
-		} else {
-			projectText += fmt.Sprintf("• ☐ %s", project.Name)
-		}
-	}
-
-	blocks = append(blocks, Block{
-		Type: "section",
-		Text: &Text{
-			Type: "mrkdwn",
-			Text: projectText,
+			Text: fmt.Sprintf("*📁 Project Management*\n\n• **Total projects available:** %d\n• **Your assignments:** %d\n\n*Quick Commands:*\n• `/oye available-projects` - View all projects\n• `/oye assign \"Project Name\"` - Assign yourself\n• `/oye unassign \"Project Name\"` - Remove assignment", len(allProjects), len(userProjects)),
 		},
 	})
 
@@ -185,7 +186,7 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 		Type: "section",
 		Text: &Text{
 			Type: "mrkdwn",
-			Text: "*💡 How to Manage Your Projects*\n\n• **Assign yourself:** `/oye assign \"Project Name\"`\n• **Remove assignment:** `/oye unassign \"Project Name\"`\n• **View your projects:** `/oye my-projects`\n• **View all projects:** `/oye available-projects`\n\n_When you have project assignments, automatic updates will only show your assigned projects. If you have no assignments, you'll see all projects._",
+			Text: "*💡 How Project Filtering Works*\n\n• **With assignments:** Automatic updates show only your assigned projects\n• **Without assignments:** Automatic updates show all projects\n\n*Note: Use the commands above to manage your project assignments efficiently.*",
 		},
 	})
 
@@ -197,6 +198,43 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 				Type: "mrkdwn",
 				Text: "🔄 This page updates automatically when you make changes",
 			},
+		},
+	})
+
+	return AppHomeView{
+		Type:   "home",
+		Blocks: blocks,
+	}
+}
+
+// BuildFallbackAppHomeView builds a minimal App Home view when the regular view is too large
+func BuildFallbackAppHomeView(userProjectCount, totalProjectCount int) AppHomeView {
+	var blocks []Block
+
+	// Minimal header
+	blocks = append(blocks, Block{
+		Type: "header",
+		Text: &Text{
+			Type: "plain_text",
+			Text: "🏠 OYE Time Tracker",
+		},
+	})
+
+	// Simple summary
+	blocks = append(blocks, Block{
+		Type: "section",
+		Text: &Text{
+			Type: "mrkdwn",
+			Text: fmt.Sprintf("*Project Summary*\n• Your assignments: %d\n• Total projects: %d", userProjectCount, totalProjectCount),
+		},
+	})
+
+	// Essential commands
+	blocks = append(blocks, Block{
+		Type: "section",
+		Text: &Text{
+			Type: "mrkdwn",
+			Text: "*Commands*\n• `/oye my-projects` - View your assignments\n• `/oye available-projects` - View all projects\n• `/oye assign \"Project Name\"` - Assign project\n• `/oye unassign \"Project Name\"` - Remove assignment",
 		},
 	})
 
