@@ -85,7 +85,52 @@ func PublishAppHomeView(userID string) error {
 		return fmt.Errorf("failed to get all projects: %w", err)
 	}
 
-	view := BuildSimpleAppHomeView(userProjects, allProjects, userID)
+	view := BuildSimpleAppHomeView(userProjects, allProjects, userID, 0)
+
+	payload := map[string]interface{}{
+		"user_id": userID,
+		"view":    view,
+	}
+
+	// Validate payload size before sending
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal app home payload: %w", err)
+	}
+
+	const maxAppHomeSize = 3000 // Slack's character limit for App Home
+	if len(payloadJSON) > maxAppHomeSize {
+		logger.Errorf("App Home payload too large: %d > %d characters", len(payloadJSON), maxAppHomeSize)
+		// Return a simplified view instead of failing
+		simpleView := BuildFallbackAppHomeView(len(userProjects), len(allProjects))
+		payload["view"] = simpleView
+	}
+
+	return slackClient.sendSlackAPIRequest("views.publish", payload)
+}
+
+// PublishAppHomeViewWithPage publishes the app home view for a user with a specific page
+func PublishAppHomeViewWithPage(userID string, page int) error {
+	logger := GetGlobalLogger()
+	slackClient := NewSlackAPIClient()
+
+	// Get user's current project assignments
+	db, err := GetDB()
+	if err != nil {
+		return fmt.Errorf("failed to get database connection: %w", err)
+	}
+
+	userProjects, err := GetUserProjects(db, userID)
+	if err != nil {
+		return fmt.Errorf("failed to get user projects: %w", err)
+	}
+
+	allProjects, err := GetAllProjects(db)
+	if err != nil {
+		return fmt.Errorf("failed to get all projects: %w", err)
+	}
+
+	view := BuildSimpleAppHomeView(userProjects, allProjects, userID, page)
 
 	payload := map[string]interface{}{
 		"user_id": userID,
@@ -110,7 +155,7 @@ func PublishAppHomeView(userID string) error {
 }
 
 // BuildSimpleAppHomeView builds a simplified App Home view without complex interactive components
-func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userID string) AppHomeView {
+func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userID string, page int) AppHomeView {
 	var blocks []Block
 
 	// Header
@@ -177,38 +222,44 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 		assignedProjectMap[up.ID] = true
 	}
 
-	// Create individual toggle buttons for ALL projects
+	// Show projects with pagination to stay within payload limits
+	const projectsPerPage = 20
+	currentPage := page // Use provided page parameter
+
+	startIdx := currentPage * projectsPerPage
+	endIdx := startIdx + projectsPerPage
+	if endIdx > len(allProjects) {
+		endIdx = len(allProjects)
+	}
+
+	totalPages := (len(allProjects) + projectsPerPage - 1) / projectsPerPage
+
+	// Header with pagination info
 	blocks = append(blocks, Block{
 		Type: "section",
 		Text: &Text{
 			Type: "mrkdwn",
-			Text: "*🔧 Toggle Project Assignments*\nClick any project to assign/unassign yourself:",
+			Text: fmt.Sprintf("*🔧 Toggle Project Assignments* (Page %d of %d)\nClick any project to assign/unassign yourself:", currentPage+1, totalPages),
 		},
 	})
 
-	// Split projects into manageable chunks for display
-	const projectsPerChunk = 25
-	for i := 0; i < len(allProjects); i += projectsPerChunk {
-		end := i + projectsPerChunk
-		if end > len(allProjects) {
-			end = len(allProjects)
-		}
+	// Show current page of projects
+	if startIdx < len(allProjects) {
+		currentPageProjects := allProjects[startIdx:endIdx]
 
-		chunk := allProjects[i:end]
-
-		// Create buttons for this chunk
+		// Create toggle buttons for current page
 		var elements []Element
-		for _, project := range chunk {
+		for _, project := range currentPageProjects {
 			isAssigned := assignedProjectMap[project.ID]
 			status := "➕"
 			style := "primary"
 			if isAssigned {
 				status = "✅"
-				style = "danger" // Red button to indicate "click to remove"
+				style = "danger"
 			}
 
 			buttonText := fmt.Sprintf("%s %s", status, project.Name)
-			if len(buttonText) > 75 { // Slack button text limit
+			if len(buttonText) > 75 {
 				buttonText = fmt.Sprintf("%s %s...", status, project.Name[:70])
 			}
 
@@ -221,9 +272,9 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 			})
 		}
 
-		// Add action block with buttons (max 5 buttons per actions block)
-		for j := 0; j < len(elements); j += 5 {
-			endIdx := j + 5
+		// Add buttons in rows of 3 (conservative to avoid size issues)
+		for j := 0; j < len(elements); j += 3 {
+			endIdx := j + 3
 			if endIdx > len(elements) {
 				endIdx = len(elements)
 			}
@@ -234,16 +285,55 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 			})
 		}
 
-		// Add some spacing between large chunks
-		if end < len(allProjects) && len(chunk) == projectsPerChunk {
-			blocks = append(blocks, Block{
-				Type: "context",
-				Elements: []Element{
-					{
-						Type: "mrkdwn",
-						Text: fmt.Sprintf("_Showing projects %d-%d of %d_", i+1, end, len(allProjects)),
-					},
+		// Show pagination info
+		blocks = append(blocks, Block{
+			Type: "context",
+			Elements: []Element{
+				{
+					Type: "mrkdwn",
+					Text: fmt.Sprintf("_Showing projects %d-%d of %d total_", startIdx+1, endIdx, len(allProjects)),
 				},
+			},
+		})
+
+		// Pagination navigation (only show if we have multiple pages)
+		if totalPages > 1 {
+			var navElements []Element
+
+			// Previous button
+			if currentPage > 0 {
+				navElements = append(navElements, Element{
+					Type:     "button",
+					Text:     "⬅️ Previous",
+					ActionID: fmt.Sprintf("page_%d", currentPage-1),
+					Style:    "default",
+					Value:    fmt.Sprintf("%d", currentPage-1),
+				})
+			}
+
+			// Page indicator
+			navElements = append(navElements, Element{
+				Type:     "button",
+				Text:     fmt.Sprintf("Page %d/%d", currentPage+1, totalPages),
+				ActionID: "page_info",
+				Style:    "default",
+				Value:    "info",
+			})
+
+			// Next button
+			if currentPage < totalPages-1 {
+				navElements = append(navElements, Element{
+					Type:     "button",
+					Text:     "Next ➡️",
+					ActionID: fmt.Sprintf("page_%d", currentPage+1),
+					Style:    "default",
+					Value:    fmt.Sprintf("%d", currentPage+1),
+				})
+			}
+
+			blocks = append(blocks, Block{
+				Type:     "actions",
+				Elements: navElements,
 			})
 		}
 	}
@@ -412,6 +502,13 @@ func HandleInteractiveComponents(w http.ResponseWriter, r *http.Request) {
 			} else {
 				logger.Info("App Home view refreshed successfully")
 			}
+		} else if strings.HasPrefix(action.ActionID, "page_") {
+			logger.Info("Processing page navigation...")
+			if err := HandlePageNavigation(payload.User.ID, action.ActionID, action.Value); err != nil {
+				logger.Errorf("Failed to handle page navigation: %v", err)
+				http.Error(w, "Failed to process page navigation", http.StatusInternalServerError)
+				return
+			}
 		} else {
 			logger.Warnf("Unknown action ID: %s", action.ActionID)
 		}
@@ -515,6 +612,31 @@ func HandleProjectAssignmentCheckboxes(userID string, selectedOptions []Selected
 	}
 
 	logger.Infof("Project assignment update completed for user %s: %d added, %d removed", userID, len(toAdd), len(toRemove))
+	return nil
+}
+
+// HandlePageNavigation processes page navigation button clicks
+func HandlePageNavigation(userID, actionID, value string) error {
+	logger := GetGlobalLogger()
+
+	// Skip the page_info button (just shows current page)
+	if actionID == "page_info" {
+		return nil
+	}
+
+	// Extract page number from value
+	pageNum, err := strconv.Atoi(value)
+	if err != nil {
+		return fmt.Errorf("invalid page number: %s", value)
+	}
+
+	// Refresh the App Home view with the new page
+	logger.Infof("Navigating to page %d for user %s", pageNum, userID)
+	if err := PublishAppHomeViewWithPage(userID, pageNum); err != nil {
+		return fmt.Errorf("failed to refresh app home view with page %d: %w", pageNum, err)
+	}
+
+	logger.Infof("Successfully navigated to page %d for user %s", pageNum, userID)
 	return nil
 }
 
