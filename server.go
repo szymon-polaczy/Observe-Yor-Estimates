@@ -80,6 +80,10 @@ func setupSlackRoutes() {
 	// Unified handler for all OYE commands
 	http.HandleFunc("/slack/oye", handleUnifiedOYECommand)
 	http.HandleFunc("/health", handleHealthCheck)
+
+    // New App Home routes
+    http.HandleFunc("/slack/events", HandleAppHome)
+    http.HandleFunc("/slack/interactive", HandleInteractiveComponents
 }
 
 // handleUnifiedOYECommand handles the new unified /oye command
