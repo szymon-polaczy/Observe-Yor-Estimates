@@ -285,7 +285,7 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 			},
 			Accessory: &Accessory{
 				Type:           "checkboxes",
-				ActionID:       "project_assignments",
+				ActionID:       fmt.Sprintf("project_assignments_page_%d", currentPage),
 				Options:        checkboxOptions,
 				InitialOptions: initialOptions,
 			},
@@ -466,15 +466,27 @@ func HandleInteractiveComponents(w http.ResponseWriter, r *http.Request) {
 
 		if strings.HasPrefix(action.ActionID, "project_assignments") {
 			logger.Info("Processing project assignment checkboxes...")
-			if err := HandleProjectAssignmentCheckboxes(payload.User.ID, action.SelectedOptions); err != nil {
+
+			// Extract page number from action_id
+			pageNum := 0
+			if strings.Contains(action.ActionID, "page_") {
+				parts := strings.Split(action.ActionID, "page_")
+				if len(parts) > 1 {
+					if num, err := strconv.Atoi(parts[1]); err == nil {
+						pageNum = num
+					}
+				}
+			}
+
+			if err := HandleProjectAssignmentCheckboxes(payload.User.ID, action.SelectedOptions, pageNum); err != nil {
 				logger.Errorf("Failed to handle project assignment checkboxes: %v", err)
 				http.Error(w, "Failed to process assignments", http.StatusInternalServerError)
 				return
 			}
 
-			// Refresh the App Home view
+			// Refresh the App Home view with the same page
 			logger.Info("Refreshing App Home view...")
-			if err := PublishAppHomeView(payload.User.ID); err != nil {
+			if err := PublishAppHomeViewWithPage(payload.User.ID, pageNum); err != nil {
 				logger.Errorf("Failed to refresh app home view: %v", err)
 			} else {
 				logger.Info("App Home view refreshed successfully")
@@ -519,7 +531,7 @@ type SelectedOption struct {
 }
 
 // HandleProjectAssignmentCheckboxes processes checkbox selections for project assignments
-func HandleProjectAssignmentCheckboxes(userID string, selectedOptions []SelectedOption) error {
+func HandleProjectAssignmentCheckboxes(userID string, selectedOptions []SelectedOption, pageNum int) error {
 	logger := GetGlobalLogger()
 
 	db, err := GetDB()
@@ -531,6 +543,32 @@ func HandleProjectAssignmentCheckboxes(userID string, selectedOptions []Selected
 	currentProjects, err := GetUserProjects(db, userID)
 	if err != nil {
 		return fmt.Errorf("failed to get current user projects: %w", err)
+	}
+
+	// Get all projects to determine which are visible on current page
+	allProjects, err := GetAllProjects(db)
+	if err != nil {
+		return fmt.Errorf("failed to get all projects: %w", err)
+	}
+
+	// Calculate which projects are visible on current page using same pagination logic
+	const projectsPerPage = 10
+	startIdx := pageNum * projectsPerPage
+	endIdx := startIdx + projectsPerPage
+	if endIdx > len(allProjects) {
+		endIdx = len(allProjects)
+	}
+
+	if startIdx >= len(allProjects) {
+		return fmt.Errorf("page %d is out of range", pageNum)
+	}
+
+	currentPageProjects := allProjects[startIdx:endIdx]
+
+	// Create a map of projects visible on current page
+	visibleProjectIDs := make(map[int]bool)
+	for _, project := range currentPageProjects {
+		visibleProjectIDs[project.ID] = true
 	}
 
 	// Convert current assignments to a map for easy lookup
@@ -550,20 +588,20 @@ func HandleProjectAssignmentCheckboxes(userID string, selectedOptions []Selected
 		selectedProjectIDs[projectID] = true
 	}
 
-	// Determine what to add and what to remove
+	// Determine what to add and what to remove - ONLY for projects visible on current page
 	var toAdd []int
 	var toRemove []int
 
-	// Find projects to add (selected but not currently assigned)
+	// Find projects to add (selected but not currently assigned, and visible on current page)
 	for projectID := range selectedProjectIDs {
-		if !currentAssignments[projectID] {
+		if visibleProjectIDs[projectID] && !currentAssignments[projectID] {
 			toAdd = append(toAdd, projectID)
 		}
 	}
 
-	// Find projects to remove (currently assigned but not selected)
-	for projectID := range currentAssignments {
-		if !selectedProjectIDs[projectID] {
+	// Find projects to remove (currently assigned, visible on current page, but not selected)
+	for projectID := range visibleProjectIDs {
+		if currentAssignments[projectID] && !selectedProjectIDs[projectID] {
 			toRemove = append(toRemove, projectID)
 		}
 	}
@@ -588,7 +626,7 @@ func HandleProjectAssignmentCheckboxes(userID string, selectedOptions []Selected
 		}
 	}
 
-	logger.Infof("Project assignment update completed for user %s: %d added, %d removed", userID, len(toAdd), len(toRemove))
+	logger.Infof("Project assignment update completed for user %s on page %d: %d added, %d removed", userID, pageNum, len(toAdd), len(toRemove))
 	return nil
 }
 

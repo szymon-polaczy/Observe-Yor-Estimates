@@ -1044,7 +1044,7 @@ func sendFailureNotification(operation string, err error) {
 	}
 
 	message := SlackMessage{
-		Text: fmt.Sprintf("⚠️ System Alert: %s failed"),
+		Text: fmt.Sprintf("⚠️ System Alert: %s failed", operation),
 		Blocks: []Block{
 			{
 				Type: "header",
