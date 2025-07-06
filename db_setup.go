@@ -714,13 +714,12 @@ func createUserProjectAssignmentsTable(db *sql.DB) error {
 
 	createTableSQL := `CREATE TABLE user_project_assignments (
 id SERIAL PRIMARY KEY,
-user_id INTEGER NOT NULL,
+slack_user_id TEXT NOT NULL,
 project_id INTEGER NOT NULL,
 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-FOREIGN KEY (user_id) REFERENCES users(user_id),
 FOREIGN KEY (project_id) REFERENCES projects(id),
-UNIQUE(user_id, project_id)
+UNIQUE(slack_user_id, project_id)
 );`
 
 	_, err := db.Exec(createTableSQL)

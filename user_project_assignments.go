@@ -6,24 +6,24 @@ import (
 )
 
 type UserProjectAssignment struct {
-	ID        int    `json:"id"`
-	UserID    int    `json:"user_id"`
-	ProjectID int    `json:"project_id"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	ID          int    `json:"id"`
+	SlackUserID string `json:"slack_user_id"`
+	ProjectID   int    `json:"project_id"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
 }
 
 // GetUserProjects returns all projects assigned to a user
-func GetUserProjects(db *sql.DB, userID int) ([]Project, error) {
+func GetUserProjects(db *sql.DB, slackUserID string) ([]Project, error) {
 	query := `
 		SELECT p.id, p.name, p.timecamp_task_id, p.created_at, p.updated_at
 		FROM projects p
 		INNER JOIN user_project_assignments upa ON p.id = upa.project_id
-		WHERE upa.user_id = $1
+		WHERE upa.slack_user_id = $1
 		ORDER BY p.name
 	`
 
-	rows, err := db.Query(query, userID)
+	rows, err := db.Query(query, slackUserID)
 	if err != nil {
 		return nil, err
 	}
@@ -44,21 +44,21 @@ func GetUserProjects(db *sql.DB, userID int) ([]Project, error) {
 }
 
 // AssignUserToProject assigns a user to a project
-func AssignUserToProject(db *sql.DB, userID int, projectID int) error {
+func AssignUserToProject(db *sql.DB, slackUserID string, projectID int) error {
 	query := `
-		INSERT INTO user_project_assignments (user_id, project_id, updated_at)
+		INSERT INTO user_project_assignments (slack_user_id, project_id, updated_at)
 		VALUES ($1, $2, CURRENT_TIMESTAMP)
-		ON CONFLICT (user_id, project_id) DO UPDATE SET
+		ON CONFLICT (slack_user_id, project_id) DO UPDATE SET
 			updated_at = CURRENT_TIMESTAMP
 	`
-	_, err := db.Exec(query, userID, projectID)
+	_, err := db.Exec(query, slackUserID, projectID)
 	return err
 }
 
 // UnassignUserFromProject removes a user from a project
-func UnassignUserFromProject(db *sql.DB, userID int, projectID int) error {
-	query := `DELETE FROM user_project_assignments WHERE user_id = $1 AND project_id = $2`
-	result, err := db.Exec(query, userID, projectID)
+func UnassignUserFromProject(db *sql.DB, slackUserID string, projectID int) error {
+	query := `DELETE FROM user_project_assignments WHERE slack_user_id = $1 AND project_id = $2`
+	result, err := db.Exec(query, slackUserID, projectID)
 	if err != nil {
 		return err
 	}
@@ -76,9 +76,9 @@ func UnassignUserFromProject(db *sql.DB, userID int, projectID int) error {
 }
 
 // GetUsersForProject returns all users assigned to a project
-func GetUsersForProject(db *sql.DB, projectID int) ([]int, error) {
+func GetUsersForProject(db *sql.DB, projectID int) ([]string, error) {
 	query := `
-		SELECT user_id FROM user_project_assignments 
+		SELECT slack_user_id FROM user_project_assignments 
 		WHERE project_id = $1
 	`
 
@@ -88,9 +88,9 @@ func GetUsersForProject(db *sql.DB, projectID int) ([]int, error) {
 	}
 	defer rows.Close()
 
-	var userIDs []int
+	var userIDs []string
 	for rows.Next() {
-		var userID int
+		var userID string
 		err := rows.Scan(&userID)
 		if err != nil {
 			return nil, err
@@ -104,9 +104,9 @@ func GetUsersForProject(db *sql.DB, projectID int) ([]int, error) {
 // GetUserProjectAssignments returns all user-project assignments
 func GetUserProjectAssignments(db *sql.DB) ([]UserProjectAssignment, error) {
 	query := `
-		SELECT id, user_id, project_id, created_at, updated_at
+		SELECT id, slack_user_id, project_id, created_at, updated_at
 		FROM user_project_assignments
-		ORDER BY user_id, project_id
+		ORDER BY slack_user_id, project_id
 	`
 
 	rows, err := db.Query(query)
@@ -118,7 +118,7 @@ func GetUserProjectAssignments(db *sql.DB) ([]UserProjectAssignment, error) {
 	var assignments []UserProjectAssignment
 	for rows.Next() {
 		var assignment UserProjectAssignment
-		err := rows.Scan(&assignment.ID, &assignment.UserID, &assignment.ProjectID,
+		err := rows.Scan(&assignment.ID, &assignment.SlackUserID, &assignment.ProjectID,
 			&assignment.CreatedAt, &assignment.UpdatedAt)
 		if err != nil {
 			return nil, err

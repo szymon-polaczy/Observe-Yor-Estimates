@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strconv"
 )
 
 // AppHomeView represents the App Home tab view
@@ -73,12 +72,7 @@ func PublishAppHomeView(userID string) error {
 		return fmt.Errorf("failed to get database connection: %w", err)
 	}
 
-	userIDInt, err := strconv.Atoi(userID)
-	if err != nil {
-		return fmt.Errorf("invalid user ID: %w", err)
-	}
-
-	userProjects, err := GetUserProjects(db, userIDInt)
+	userProjects, err := GetUserProjects(db, userID)
 	if err != nil {
 		return fmt.Errorf("failed to get user projects: %w", err)
 	}
@@ -88,7 +82,7 @@ func PublishAppHomeView(userID string) error {
 		return fmt.Errorf("failed to get all projects: %w", err)
 	}
 
-	view := BuildSimpleAppHomeView(userProjects, allProjects, userIDInt)
+	view := BuildSimpleAppHomeView(userProjects, allProjects, userID)
 
 	payload := map[string]interface{}{
 		"user_id": userID,
@@ -99,7 +93,7 @@ func PublishAppHomeView(userID string) error {
 }
 
 // BuildSimpleAppHomeView builds a simplified App Home view without complex interactive components
-func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userID int) AppHomeView {
+func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userID string) AppHomeView {
 	var blocks []Block
 
 	// Header

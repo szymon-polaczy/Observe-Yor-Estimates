@@ -101,14 +101,8 @@ func (sr *SmartRouter) handleAssignProject(ctx *ConversationContext, args []stri
 		return sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Multiple projects found: %s. Please be more specific.", strings.Join(projectNames, ", ")))
 	}
 
-	// Convert userID to int
-	userIDInt, err := strconv.Atoi(userID)
-	if err != nil {
-		return sr.slackClient.SendErrorResponse(ctx, "Invalid user ID")
-	}
-
 	project := projects[0]
-	err = AssignUserToProject(db, userIDInt, project.ID)
+	err = AssignUserToProject(db, userID, project.ID)
 	if err != nil {
 		return sr.slackClient.SendErrorResponse(ctx, "Failed to assign project")
 	}
@@ -164,14 +158,8 @@ func (sr *SmartRouter) handleUnassignProject(ctx *ConversationContext, args []st
 		return sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Multiple projects found: %s. Please be more specific.", strings.Join(projectNames, ", ")))
 	}
 
-	// Convert userID to int
-	userIDInt, err := strconv.Atoi(userID)
-	if err != nil {
-		return sr.slackClient.SendErrorResponse(ctx, "Invalid user ID")
-	}
-
 	project := projects[0]
-	err = UnassignUserFromProject(db, userIDInt, project.ID)
+	err = UnassignUserFromProject(db, userID, project.ID)
 	if err != nil {
 		return sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to unassign project: %v", err))
 	}
@@ -202,12 +190,7 @@ func (sr *SmartRouter) handleMyProjects(ctx *ConversationContext, userID string)
 		return sr.slackClient.SendErrorResponse(ctx, "Database connection failed")
 	}
 
-	userIDInt, err := strconv.Atoi(userID)
-	if err != nil {
-		return sr.slackClient.SendErrorResponse(ctx, "Invalid user ID")
-	}
-
-	projects, err := GetUserProjects(db, userIDInt)
+	projects, err := GetUserProjects(db, userID)
 	if err != nil {
 		return sr.slackClient.SendErrorResponse(ctx, "Failed to retrieve your projects")
 	}
@@ -370,13 +353,7 @@ func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, perio
 		time.Sleep(1 * time.Second)
 
 		// Check if user has specific project assignments
-		userIDInt, err := strconv.Atoi(ctx.UserID)
-		if err != nil {
-			sr.slackClient.SendErrorResponse(ctx, "Invalid user ID")
-			return
-		}
-
-		userProjects, err := GetUserProjects(db, userIDInt)
+		userProjects, err := GetUserProjects(db, ctx.UserID)
 		if err != nil {
 			sr.logger.Errorf("Failed to get user projects: %v", err)
 			// Continue with all projects if we can't get user assignments
@@ -755,13 +732,7 @@ func (sr *SmartRouter) processThresholdWithProgress(ctx *ConversationContext, th
 		time.Sleep(1 * time.Second)
 
 		// Check if user has specific project assignments
-		userIDInt, err := strconv.Atoi(ctx.UserID)
-		if err != nil {
-			sr.slackClient.SendErrorResponse(ctx, "Invalid user ID")
-			return
-		}
-
-		userProjects, err := GetUserProjects(db, userIDInt)
+		userProjects, err := GetUserProjects(db, ctx.UserID)
 		if err != nil {
 			sr.logger.Errorf("Failed to get user projects: %v", err)
 			// Continue with all projects if we can't get user assignments
