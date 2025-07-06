@@ -313,7 +313,6 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 						"text": "⬅️ Previous",
 					},
 					ActionID: fmt.Sprintf("page_%d", currentPage-1),
-					Style:    "default",
 					Value:    fmt.Sprintf("%d", currentPage-1),
 				})
 			}
@@ -326,7 +325,6 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 					"text": fmt.Sprintf("Page %d/%d", currentPage+1, totalPages),
 				},
 				ActionID: "page_info",
-				Style:    "default",
 				Value:    "info",
 			})
 
@@ -339,7 +337,6 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 						"text": "Next ➡️",
 					},
 					ActionID: fmt.Sprintf("page_%d", currentPage+1),
-					Style:    "default",
 					Value:    fmt.Sprintf("%d", currentPage+1),
 				})
 			}
