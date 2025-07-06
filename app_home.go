@@ -223,7 +223,7 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 	}
 
 	// Show projects with pagination to stay within payload limits
-	const projectsPerPage = 5
+	const projectsPerPage = 10
 	currentPage := page // Use provided page parameter
 
 	startIdx := currentPage * projectsPerPage
@@ -347,26 +347,6 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 			})
 		}
 	}
-
-	// Project management section
-	blocks = append(blocks, Block{Type: "divider"})
-	blocks = append(blocks, Block{
-		Type: "section",
-		Text: &Text{
-			Type: "mrkdwn",
-			Text: fmt.Sprintf("*📁 Project Management*\n\n• **Total projects available:** %d\n• **Your assignments:** %d\n\n*Quick Commands:*\n• `/oye available-projects` - View all projects\n• `/oye assign \"Project Name\"` - Assign yourself\n• `/oye unassign \"Project Name\"` - Remove assignment", len(allProjects), len(userProjects)),
-		},
-	})
-
-	// Instructions section
-	blocks = append(blocks, Block{Type: "divider"})
-	blocks = append(blocks, Block{
-		Type: "section",
-		Text: &Text{
-			Type: "mrkdwn",
-			Text: "*💡 How Project Filtering Works*\n\n• **With assignments:** Automatic updates show only your assigned projects\n• **Without assignments:** Automatic updates show all projects\n\n*Note: Use the commands above to manage your project assignments efficiently.*",
-		},
-	})
 
 	// Footer
 	blocks = append(blocks, Block{
