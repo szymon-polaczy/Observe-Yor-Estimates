@@ -248,25 +248,106 @@ func (sr *SmartRouter) handleAvailableProjects(ctx *ConversationContext) error {
 		return sr.slackClient.sendSlackAPIRequest("chat.postEphemeral", payload)
 	}
 
-	message := "📁 **Available Projects:**\n\n"
-	for _, project := range projects {
-		message += fmt.Sprintf("• %s\n", project.Name)
-	}
-	message += "\nUse `/oye assign \"Project Name\"` to assign yourself to a project."
+	// Split projects into chunks to respect Slack's message limits
+	projectChunks := sr.splitProjectsIntoChunks(projects)
 
-	payload := map[string]interface{}{
-		"channel": ctx.ChannelID,
-		"user":    ctx.UserID,
-		"text":    message,
-		"blocks": []Block{
+	for i, chunk := range projectChunks {
+		var message string
+		var blocks []Block
+
+		if i == 0 {
+			// First message - include header
+			message = fmt.Sprintf("📁 **Available Projects** (%d total):\n\n", len(projects))
+		} else {
+			// Subsequent messages - continuation
+			message = fmt.Sprintf("📁 **Available Projects** (continued - part %d of %d):\n\n", i+1, len(projectChunks))
+		}
+
+		// Add projects in this chunk
+		for _, project := range chunk {
+			message += fmt.Sprintf("• %s\n", project.Name)
+		}
+
+		// Add footer to last message
+		if i == len(projectChunks)-1 {
+			message += "\n💡 Use `/oye assign \"Project Name\"` to assign yourself to a project."
+		}
+
+		blocks = []Block{
 			{
 				Type: "section",
 				Text: &Text{Type: "mrkdwn", Text: message},
 			},
-		},
+		}
+
+		// Add part indicator for multiple parts
+		if len(projectChunks) > 1 {
+			blocks = append(blocks, Block{
+				Type: "context",
+				Elements: []Element{
+					{
+						Type: "mrkdwn",
+						Text: fmt.Sprintf("Part %d of %d", i+1, len(projectChunks)),
+					},
+				},
+			})
+		}
+
+		payload := map[string]interface{}{
+			"channel": ctx.ChannelID,
+			"user":    ctx.UserID,
+			"text":    message,
+			"blocks":  blocks,
+		}
+
+		if err := sr.slackClient.sendSlackAPIRequest("chat.postEphemeral", payload); err != nil {
+			return err
+		}
+
+		// Small delay between messages to avoid rate limiting
+		if i < len(projectChunks)-1 {
+			time.Sleep(500 * time.Millisecond)
+		}
 	}
 
-	return sr.slackClient.sendSlackAPIRequest("chat.postEphemeral", payload)
+	return nil
+}
+
+// splitProjectsIntoChunks splits projects into chunks that fit within Slack's message limits
+func (sr *SmartRouter) splitProjectsIntoChunks(projects []Project) [][]Project {
+	const maxMessageSize = 1000 // Conservative size to account for JSON overhead
+	var chunks [][]Project
+	var currentChunk []Project
+	var currentSize int
+
+	for _, project := range projects {
+		// Estimate the size this project would add (project name + bullet + newline)
+		projectSize := len(project.Name) + 3 // "• " + "\n"
+
+		// Check if adding this project would exceed the size limit
+		if currentSize+projectSize > maxMessageSize && len(currentChunk) > 0 {
+			// Start a new chunk
+			chunks = append(chunks, currentChunk)
+			currentChunk = []Project{project}
+			currentSize = projectSize + 150 // Add buffer for headers
+		} else {
+			// Add to current chunk
+			currentChunk = append(currentChunk, project)
+			currentSize += projectSize
+		}
+	}
+
+	// Add the last chunk if it has projects
+	if len(currentChunk) > 0 {
+		chunks = append(chunks, currentChunk)
+	}
+
+	// If no chunks were created (empty project list), return empty slice
+	if len(chunks) == 0 {
+		chunks = append(chunks, []Project{})
+	}
+
+	return chunks
 }
 
 // HandleLongRunningUpdate shows progress and delivers final result

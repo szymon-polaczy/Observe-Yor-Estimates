@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 )
 
 // AppHomeView represents the App Home tab view
@@ -159,13 +160,13 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 		})
 	}
 
-	// Interactive project assignment section
+	// Interactive project assignment section with checkboxes
 	blocks = append(blocks, Block{Type: "divider"})
 	blocks = append(blocks, Block{
 		Type: "section",
 		Text: &Text{
 			Type: "mrkdwn",
-			Text: "*🔧 Quick Project Assignment*\nClick to assign/unassign yourself to projects:",
+			Text: "*🔧 Quick Project Assignment*\nCheck/uncheck projects to assign yourself:",
 		},
 	})
 
@@ -175,31 +176,48 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 		assignedProjectMap[up.ID] = true
 	}
 
-	// Show a limited number of projects with toggle buttons
-	const maxProjectsToShow = 8
-	projectsShown := 0
+	// Create checkbox options
+	const maxProjectsToShow = 10
+	var checkboxOptions []map[string]interface{}
+	var initialOptions []map[string]interface{}
 
-	for _, project := range allProjects {
-		if projectsShown >= maxProjectsToShow {
+	for i, project := range allProjects {
+		if i >= maxProjectsToShow {
 			break
 		}
 
-		isAssigned := assignedProjectMap[project.ID]
-		status := "➕ Assign"
-		if isAssigned {
-			status = "✅ Assigned"
+		option := map[string]interface{}{
+			"text": map[string]interface{}{
+				"type": "plain_text",
+				"text": project.Name,
+			},
+			"value": fmt.Sprintf("%d", project.ID),
 		}
 
-		// Create individual project blocks with status
+		checkboxOptions = append(checkboxOptions, option)
+
+		// Add to initial options if already assigned
+		if assignedProjectMap[project.ID] {
+			initialOptions = append(initialOptions, option)
+		}
+	}
+
+	// Add the checkboxes as an input block
+	if len(checkboxOptions) > 0 {
 		blocks = append(blocks, Block{
-			Type: "section",
-			Text: &Text{
-				Type: "mrkdwn",
-				Text: fmt.Sprintf("*%s*\n%s", project.Name, status),
+			Type:    "input",
+			BlockID: "project_checkboxes",
+			Label: &Text{
+				Type: "plain_text",
+				Text: "Select your projects:",
+			},
+			Element: map[string]interface{}{
+				"type":            "checkboxes",
+				"action_id":       "project_assignments",
+				"options":         checkboxOptions,
+				"initial_options": initialOptions,
 			},
 		})
-
-		projectsShown++
 	}
 
 	// Show limitation message if needed
@@ -303,8 +321,43 @@ type SlackEvent struct {
 func HandleInteractiveComponents(w http.ResponseWriter, r *http.Request) {
 	logger := GetGlobalLogger()
 
-	// For now, just acknowledge the request since we're using a simplified approach
-	logger.Info("Interactive component request received")
+	// Parse the interactive payload
+	if err := r.ParseForm(); err != nil {
+		logger.Errorf("Failed to parse interactive form: %v", err)
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	payloadStr := r.FormValue("payload")
+	if payloadStr == "" {
+		logger.Error("No payload in interactive request")
+		http.Error(w, "No payload", http.StatusBadRequest)
+		return
+	}
+
+	var payload SlackInteractivePayload
+	if err := json.Unmarshal([]byte(payloadStr), &payload); err != nil {
+		logger.Errorf("Failed to unmarshal interactive payload: %v", err)
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+
+	logger.Infof("Interactive component request from user %s", payload.User.ID)
+
+	// Handle checkbox actions
+	if len(payload.Actions) > 0 && payload.Actions[0].ActionID == "project_assignments" {
+		if err := HandleProjectAssignmentCheckboxes(payload.User.ID, payload.Actions[0].SelectedOptions); err != nil {
+			logger.Errorf("Failed to handle project assignment checkboxes: %v", err)
+			http.Error(w, "Failed to process assignments", http.StatusInternalServerError)
+			return
+		}
+
+		// Refresh the App Home view
+		if err := PublishAppHomeView(payload.User.ID); err != nil {
+			logger.Errorf("Failed to refresh app home view: %v", err)
+		}
+	}
+
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -322,4 +375,78 @@ type SlackInteractivePayload struct {
 
 type SelectedOption struct {
 	Value string `json:"value"`
+}
+
+// HandleProjectAssignmentCheckboxes processes checkbox selections for project assignments
+func HandleProjectAssignmentCheckboxes(userID string, selectedOptions []SelectedOption) error {
+	logger := GetGlobalLogger()
+
+	db, err := GetDB()
+	if err != nil {
+		return fmt.Errorf("failed to get database connection: %w", err)
+	}
+
+	// Get current user assignments
+	currentProjects, err := GetUserProjects(db, userID)
+	if err != nil {
+		return fmt.Errorf("failed to get current user projects: %w", err)
+	}
+
+	// Convert current assignments to a map for easy lookup
+	currentAssignments := make(map[int]bool)
+	for _, project := range currentProjects {
+		currentAssignments[project.ID] = true
+	}
+
+	// Convert selected options to project IDs
+	selectedProjectIDs := make(map[int]bool)
+	for _, option := range selectedOptions {
+		projectID, err := strconv.Atoi(option.Value)
+		if err != nil {
+			logger.Warnf("Invalid project ID in checkbox selection: %s", option.Value)
+			continue
+		}
+		selectedProjectIDs[projectID] = true
+	}
+
+	// Determine what to add and what to remove
+	var toAdd []int
+	var toRemove []int
+
+	// Find projects to add (selected but not currently assigned)
+	for projectID := range selectedProjectIDs {
+		if !currentAssignments[projectID] {
+			toAdd = append(toAdd, projectID)
+		}
+	}
+
+	// Find projects to remove (currently assigned but not selected)
+	for projectID := range currentAssignments {
+		if !selectedProjectIDs[projectID] {
+			toRemove = append(toRemove, projectID)
+		}
+	}
+
+	// Add new assignments
+	for _, projectID := range toAdd {
+		if err := AssignUserToProject(db, userID, projectID); err != nil {
+			logger.Errorf("Failed to assign user %s to project %d: %v", userID, projectID, err)
+			// Continue with other assignments even if one fails
+		} else {
+			logger.Infof("Assigned user %s to project %d", userID, projectID)
+		}
+	}
+
+	// Remove old assignments
+	for _, projectID := range toRemove {
+		if err := UnassignUserFromProject(db, userID, projectID); err != nil {
+			logger.Errorf("Failed to unassign user %s from project %d: %v", userID, projectID, err)
+			// Continue with other unassignments even if one fails
+		} else {
+			logger.Infof("Unassigned user %s from project %d", userID, projectID)
+		}
+	}
+
+	logger.Infof("Project assignment update completed for user %s: %d added, %d removed", userID, len(toAdd), len(toRemove))
+	return nil
 }

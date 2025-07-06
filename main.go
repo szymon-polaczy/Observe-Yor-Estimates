@@ -294,7 +294,34 @@ func handleCliCommands(args []string, logger *Logger) {
 		testCommand = strings.TrimPrefix(testCommand, "/oye ")
 		testCommand = strings.TrimSpace(testCommand)
 
-		// Parse project name from command if present
+		// Check for project assignment commands FIRST (before project parsing)
+		text := strings.ToLower(strings.TrimSpace(testCommand))
+		if strings.HasPrefix(text, "assign ") || strings.HasPrefix(text, "unassign ") ||
+			text == "my-projects" || text == "available-projects" {
+
+			fmt.Printf("\n=== OYE Test Command Results ===\n")
+			fmt.Printf("Original command: %s\n", testCommand)
+			fmt.Printf("Command type: Project assignment command\n")
+			fmt.Printf("=====================================\n\n")
+
+			// Create mock request for project assignment commands
+			req := &SlackCommandRequest{
+				UserID: "TEST_USER",
+				Text:   testCommand,
+			}
+
+			// Test the project assignment handler
+			router := NewSmartRouter()
+			if err := router.HandleProjectAssignmentRequest(req); err != nil {
+				logger.Errorf("Failed to handle project assignment request: %v", err)
+				os.Exit(1)
+			}
+
+			fmt.Println("=== Project assignment test completed ===")
+			return
+		}
+
+		// Parse project name from command if present (only after checking for management commands)
 		projectName, remainingText := ParseProjectFromCommand(testCommand)
 
 		fmt.Printf("\n=== OYE Test Command Results ===\n")

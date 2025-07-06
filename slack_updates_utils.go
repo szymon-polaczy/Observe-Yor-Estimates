@@ -30,7 +30,7 @@ type TaskUpdateInfo struct {
 	DaysWorked       int
 	Comments         []string
 	// User breakdown: map of user_id to time contributions
-	UserBreakdown    map[int]UserTimeContribution
+	UserBreakdown map[int]UserTimeContribution
 }
 
 // UserTimeContribution represents time contributed by a specific user
@@ -48,11 +48,14 @@ type SlackMessage struct {
 
 // Block represents a block in Slack blocks
 type Block struct {
-	Type      string     `json:"type"`
-	Text      *Text      `json:"text,omitempty"`
-	Fields    []Field    `json:"fields,omitempty"`
-	Elements  []Element  `json:"elements,omitempty"`
-	Accessory *Accessory `json:"accessory,omitempty"`
+	Type      string                 `json:"type"`
+	Text      *Text                  `json:"text,omitempty"`
+	Fields    []Field                `json:"fields,omitempty"`
+	Elements  []Element              `json:"elements,omitempty"`
+	Accessory *Accessory             `json:"accessory,omitempty"`
+	BlockID   string                 `json:"block_id,omitempty"`
+	Label     *Text                  `json:"label,omitempty"`
+	Element   map[string]interface{} `json:"element,omitempty"`
 }
 
 // Text represents text in Slack blocks
@@ -94,26 +97,26 @@ type ThresholdAlert struct {
 
 // Constants for Slack API limits
 const (
-	MaxSlackBlocks = 50
-	MaxSlackMessageChars = 3000
-	MaxBlocksPerMessage = 47 // Leave buffer for header/footer blocks
+	MaxSlackBlocks            = 50
+	MaxSlackMessageChars      = 3000
+	MaxBlocksPerMessage       = 47   // Leave buffer for header/footer blocks
 	MaxMessageCharsWithBuffer = 2900 // Leave buffer for safety margin
 )
 
 // MessageValidationResult holds validation results
 type MessageValidationResult struct {
-	IsValid         bool
-	BlockCount      int
-	CharacterCount  int
-	ExceedsBlocks   bool
-	ExceedsChars    bool
-	ErrorMessage    string
+	IsValid        bool
+	BlockCount     int
+	CharacterCount int
+	ExceedsBlocks  bool
+	ExceedsChars   bool
+	ErrorMessage   string
 }
 
 // validateSlackMessage checks if a message meets Slack API limits
 func validateSlackMessage(message SlackMessage) MessageValidationResult {
 	blockCount := len(message.Blocks)
-	
+
 	// Calculate total character count of the entire message payload
 	// This is what Slack actually limits
 	messageJson, err := json.Marshal(message)
@@ -130,28 +133,28 @@ func validateSlackMessage(message SlackMessage) MessageValidationResult {
 	} else {
 		charCount = len(string(messageJson))
 	}
-	
+
 	exceedsBlocks := blockCount > MaxSlackBlocks
 	exceedsChars := charCount > MaxSlackMessageChars
 	isValid := !exceedsBlocks && !exceedsChars
-	
+
 	var errorMsg string
 	if exceedsBlocks && exceedsChars {
-		errorMsg = fmt.Sprintf("Message exceeds both block limit (%d > %d) and character limit (%d > %d)", 
+		errorMsg = fmt.Sprintf("Message exceeds both block limit (%d > %d) and character limit (%d > %d)",
 			blockCount, MaxSlackBlocks, charCount, MaxSlackMessageChars)
 	} else if exceedsBlocks {
 		errorMsg = fmt.Sprintf("Message exceeds block limit (%d > %d)", blockCount, MaxSlackBlocks)
 	} else if exceedsChars {
 		errorMsg = fmt.Sprintf("Message exceeds character limit (%d > %d)", charCount, MaxSlackMessageChars)
 	}
-	
+
 	return MessageValidationResult{
-		IsValid:         isValid,
-		BlockCount:      blockCount,
-		CharacterCount:  charCount,
-		ExceedsBlocks:   exceedsBlocks,
-		ExceedsChars:    exceedsChars,
-		ErrorMessage:    errorMsg,
+		IsValid:        isValid,
+		BlockCount:     blockCount,
+		CharacterCount: charCount,
+		ExceedsBlocks:  exceedsBlocks,
+		ExceedsChars:   exceedsChars,
+		ErrorMessage:   errorMsg,
 	}
 }
 
@@ -161,7 +164,7 @@ func countBlocksInTasks(tasks []TaskUpdateInfo) int {
 	blockCount := 0
 	for _, task := range tasks {
 		blockCount++ // Base task block
-		
+
 		// Additional blocks for comments if they're very long
 		task.Comments = removeEmptyComments(task.Comments)
 		if len(task.Comments) > 10 {
@@ -177,12 +180,12 @@ func splitTasksByBlockLimit(tasks []TaskUpdateInfo, headerBlocks int) [][]TaskUp
 	var chunks [][]TaskUpdateInfo
 	var currentChunk []TaskUpdateInfo
 	currentBlockCount := headerBlocks // Start with header blocks
-	
+
 	for _, task := range tasks {
 		taskBlocks := 1 // Base assumption: 1 block per task
-		
+
 		// Check if adding this task would exceed the block limit
-		if currentBlockCount + taskBlocks + 1 > MaxBlocksPerMessage { // +1 for footer
+		if currentBlockCount+taskBlocks+1 > MaxBlocksPerMessage { // +1 for footer
 			// Start a new chunk
 			if len(currentChunk) > 0 {
 				chunks = append(chunks, currentChunk)
@@ -190,33 +193,33 @@ func splitTasksByBlockLimit(tasks []TaskUpdateInfo, headerBlocks int) [][]TaskUp
 				currentBlockCount = headerBlocks
 			}
 		}
-		
+
 		// Add the task to current chunk
 		newChunk := append(currentChunk, task)
-		
+
 		// Create a test message to check character limits
 		testMessage := formatProjectMessage("Test", newChunk, "test")
 		validation := validateSlackMessage(testMessage)
-		
+
 		// If adding this task would exceed character limits (with buffer), start a new chunk
 		if validation.CharacterCount > MaxMessageCharsWithBuffer && len(currentChunk) > 0 {
 			chunks = append(chunks, currentChunk)
 			currentChunk = []TaskUpdateInfo{task}
 			currentBlockCount = headerBlocks + taskBlocks
-			
+
 			// Check if even a single task exceeds limits
 			singleTaskMessage := formatProjectMessage("Test", []TaskUpdateInfo{task}, "test")
 			singleTaskValidation := validateSlackMessage(singleTaskMessage)
 			if singleTaskValidation.CharacterCount > MaxSlackMessageChars {
 				// This single task is too large - we need to truncate its comments
 				logger := GetGlobalLogger()
-				logger.Warnf("Task '%s' exceeds character limit even alone (%d chars), truncating comments", 
+				logger.Warnf("Task '%s' exceeds character limit even alone (%d chars), truncating comments",
 					task.Name, singleTaskValidation.CharacterCount)
-				
+
 				// Truncate comments to make it fit
 				truncatedTask := task
 				truncatedTask.Comments = truncateCommentsToFit(task, MaxSlackMessageChars-500) // Leave buffer for headers
-				
+
 				// Verify the truncated task now fits
 				verifyMessage := formatProjectMessage("Test", []TaskUpdateInfo{truncatedTask}, "test")
 				verifyValidation := validateSlackMessage(verifyMessage)
@@ -225,7 +228,7 @@ func splitTasksByBlockLimit(tasks []TaskUpdateInfo, headerBlocks int) [][]TaskUp
 					// As last resort, remove all comments
 					truncatedTask.Comments = []string{}
 				}
-				
+
 				currentChunk = []TaskUpdateInfo{truncatedTask}
 			}
 		} else {
@@ -233,17 +236,17 @@ func splitTasksByBlockLimit(tasks []TaskUpdateInfo, headerBlocks int) [][]TaskUp
 			currentBlockCount += taskBlocks
 		}
 	}
-	
+
 	// Add the last chunk if it has tasks
 	if len(currentChunk) > 0 {
 		chunks = append(chunks, currentChunk)
 	}
-	
+
 	// If no chunks were created (empty task list), return empty slice
 	if len(chunks) == 0 {
 		chunks = append(chunks, []TaskUpdateInfo{})
 	}
-	
+
 	return chunks
 }
 
@@ -252,7 +255,7 @@ func truncateCommentsToFit(task TaskUpdateInfo, maxChars int) []string {
 	if len(task.Comments) == 0 {
 		return task.Comments
 	}
-	
+
 	// Try reducing comments one by one until it fits
 	for commentsToKeep := len(task.Comments); commentsToKeep >= 0; commentsToKeep-- {
 		testTask := task
@@ -263,38 +266,38 @@ func truncateCommentsToFit(task TaskUpdateInfo, maxChars int) []string {
 			// Add truncation notice if we removed comments
 			if commentsToKeep < len(task.Comments) {
 				remaining := len(task.Comments) - commentsToKeep
-				testTask.Comments = append(testTask.Comments, 
+				testTask.Comments = append(testTask.Comments,
 					fmt.Sprintf("... and %d more comments (truncated due to size limits)", remaining))
 			}
 		}
-		
+
 		// Test if this fits using the actual message format that will be used
 		testMessage := formatProjectMessage("Test", []TaskUpdateInfo{testTask}, "test")
 		validation := validateSlackMessage(testMessage)
-		
+
 		if validation.CharacterCount <= maxChars {
 			return testTask.Comments
 		}
 	}
-	
+
 	// If even with no comments it doesn't fit, we need to truncate the comment text itself
 	logger := GetGlobalLogger()
 	logger.Warnf("Task still too large even with no comments, will truncate individual comment text")
-	
+
 	// Try with very short comments
 	if len(task.Comments) > 0 {
 		shortComments := []string{"[Comments truncated - too large to display]"}
 		testTask := task
 		testTask.Comments = shortComments
-		
+
 		testMessage := formatProjectMessage("Test", []TaskUpdateInfo{testTask}, "test")
 		validation := validateSlackMessage(testMessage)
-		
+
 		if validation.CharacterCount <= maxChars {
 			return shortComments
 		}
 	}
-	
+
 	// If even with minimal comments it doesn't fit, return empty comments
 	return []string{}
 }
@@ -519,7 +522,7 @@ func formatProjectMessage(project string, tasks []TaskUpdateInfo, period string)
 	headerBlockCount := len(headerBlocks)
 	footerBlockCount := 1 // One spacing block at the bottom
 	maxTasksForMessage := MaxBlocksPerMessage - headerBlockCount - footerBlockCount
-	
+
 	blocks := make([]Block, 0, MaxBlocksPerMessage)
 	blocks = append(blocks, headerBlocks...)
 
@@ -551,7 +554,7 @@ func formatProjectMessage(project string, tasks []TaskUpdateInfo, period string)
 	if !validation.IsValid {
 		logger := GetGlobalLogger()
 		logger.Warnf("Message validation failed: %s", validation.ErrorMessage)
-		
+
 		// If still too large, truncate text and try again
 		if validation.ExceedsChars {
 			truncatedText := message.Text
@@ -576,26 +579,26 @@ func formatSingleTaskBlock(task TaskUpdateInfo) Block {
 	timeInfo := fmt.Sprintf("• %s: %s | %s: %s",
 		task.CurrentPeriod, task.CurrentTime,
 		task.PreviousPeriod, task.PreviousTime)
-	
+
 	// Add user breakdown if there are multiple users
 	if len(task.UserBreakdown) > 1 {
 		timeInfo += " ["
 		var userContribs []string
 		var sortedUserIDs []int
-		
+
 		// Collect and sort user IDs for consistent ordering
 		for userID := range task.UserBreakdown {
 			sortedUserIDs = append(sortedUserIDs, userID)
 		}
 		sort.Ints(sortedUserIDs)
-		
+
 		// Get database connection for user name lookups
 		db, err := GetDB()
 		var userDisplayNames map[int]string
 		if err == nil {
 			userDisplayNames = GetAllUserDisplayNames(db, sortedUserIDs)
 		}
-		
+
 		for _, userID := range sortedUserIDs {
 			contrib := task.UserBreakdown[userID]
 			// Only show users who contributed time in the current period
@@ -609,7 +612,7 @@ func formatSingleTaskBlock(task TaskUpdateInfo) Block {
 				userContribs = append(userContribs, fmt.Sprintf("%s: %s", userName, contrib.CurrentTime))
 			}
 		}
-		
+
 		if len(userContribs) > 0 {
 			timeInfo += strings.Join(userContribs, ", ") + "]"
 		} else {
@@ -765,28 +768,28 @@ func appendTaskTextMessage(builder *strings.Builder, task TaskUpdateInfo) {
 	if task.EstimationInfo != "" {
 		builder.WriteString(fmt.Sprintf(" | %s", task.EstimationInfo))
 	}
-	
+
 	timeText := fmt.Sprintf("\nTime worked: %s: %s, %s: %s", task.CurrentPeriod, task.CurrentTime, task.PreviousPeriod, task.PreviousTime)
-	
+
 	// Add user breakdown if there are multiple users
 	if len(task.UserBreakdown) > 1 {
 		timeText += " ["
 		var userContribs []string
 		var sortedUserIDs []int
-		
+
 		// Collect and sort user IDs for consistent ordering
 		for userID := range task.UserBreakdown {
 			sortedUserIDs = append(sortedUserIDs, userID)
 		}
 		sort.Ints(sortedUserIDs)
-		
+
 		// Get database connection for user name lookups
 		db, err := GetDB()
 		var userDisplayNames map[int]string
 		if err == nil {
 			userDisplayNames = GetAllUserDisplayNames(db, sortedUserIDs)
 		}
-		
+
 		for _, userID := range sortedUserIDs {
 			contrib := task.UserBreakdown[userID]
 			// Only show users who contributed time in the current period
@@ -800,7 +803,7 @@ func appendTaskTextMessage(builder *strings.Builder, task TaskUpdateInfo) {
 				userContribs = append(userContribs, fmt.Sprintf("%s: %s", userName, contrib.CurrentTime))
 			}
 		}
-		
+
 		if len(userContribs) > 0 {
 			timeText += strings.Join(userContribs, ", ") + "]"
 		} else {
@@ -808,7 +811,7 @@ func appendTaskTextMessage(builder *strings.Builder, task TaskUpdateInfo) {
 			timeText = strings.TrimSuffix(timeText, " [")
 		}
 	}
-	
+
 	builder.WriteString(timeText)
 	builder.WriteString("\n\n")
 }
@@ -851,14 +854,14 @@ func sendNoChangesNotification(period, responseURL string, asJSON bool) error {
 // sendSlackMessage sends a message to Slack using the webhook
 func sendSlackMessage(message SlackMessage) error {
 	logger := GetGlobalLogger()
-	
+
 	// Validate message before sending
 	validation := validateSlackMessage(message)
 	if !validation.IsValid {
 		logger.Errorf("Message validation failed before sending: %s", validation.ErrorMessage)
 		return fmt.Errorf("message validation failed: %s", validation.ErrorMessage)
 	}
-	
+
 	webhookURL := os.Getenv("SLACK_WEBHOOK_URL")
 	if webhookURL == "" {
 		return fmt.Errorf("SLACK_WEBHOOK_URL environment variable not set")
@@ -1257,16 +1260,16 @@ func getAllTasks(db *sql.DB) (map[int]Task, error) {
 // formatProjectMessageWithComments creates multiple messages if needed to display all comments
 func formatProjectMessageWithComments(project string, tasks []TaskUpdateInfo, period string) []SlackMessage {
 	var messages []SlackMessage
-	
+
 	// Split tasks into chunks that respect block limits
 	headerBlockCount := 4 // spacing, header, context, divider
 	// Note: splitTasksByBlockLimit internally accounts for footer blocks
 	taskChunks := splitTasksByBlockLimit(tasks, headerBlockCount)
-	
+
 	// Create messages for each chunk
 	for i, taskChunk := range taskChunks {
 		var chunkMessage SlackMessage
-		
+
 		if len(taskChunks) == 1 {
 			// Single message - use the original format
 			chunkMessage = formatProjectMessage(project, taskChunk, period)
@@ -1274,13 +1277,13 @@ func formatProjectMessageWithComments(project string, tasks []TaskUpdateInfo, pe
 			// Multiple messages - add part indicator
 			chunkMessage = formatProjectMessageChunk(project, taskChunk, period, i+1, len(taskChunks))
 		}
-		
+
 		// Validate the message before adding
 		validation := validateSlackMessage(chunkMessage)
 		if !validation.IsValid {
 			logger := GetGlobalLogger()
 			logger.Warnf("Message chunk validation failed: %s", validation.ErrorMessage)
-			
+
 			// If still too large, try to truncate text
 			if validation.ExceedsChars {
 				truncatedText := chunkMessage.Text
@@ -1289,7 +1292,7 @@ func formatProjectMessageWithComments(project string, tasks []TaskUpdateInfo, pe
 				}
 				chunkMessage.Text = truncatedText
 			}
-			
+
 			// If still too many blocks, we need to split further (shouldn't happen with our logic, but safety check)
 			if validation.ExceedsBlocks {
 				logger.Errorf("Message still exceeds block limit after splitting: %d blocks", validation.BlockCount)
@@ -1304,7 +1307,7 @@ func formatProjectMessageWithComments(project string, tasks []TaskUpdateInfo, pe
 				}
 			}
 		}
-		
+
 		messages = append(messages, chunkMessage)
 	}
 
@@ -1378,7 +1381,7 @@ func formatProjectMessageWithComments(project string, tasks []TaskUpdateInfo, pe
 				Text:   fmt.Sprintf("Additional Comments for %s", project),
 				Blocks: messageBlocks,
 			}
-			
+
 			// Validate additional message
 			validation := validateSlackMessage(additionalMessage)
 			if !validation.IsValid {
@@ -1477,10 +1480,10 @@ func GetTasksOverThresholdWithProject(db *sql.DB, threshold float64, period stri
 	var projectFilterClause string
 	var userQueryArgs []interface{}
 	var mainQueryArgs []interface{}
-	
+
 	userQueryArgs = append(userQueryArgs, fromDate, toDate)
 	mainQueryArgs = append(mainQueryArgs, fromDate, toDate)
-	
+
 	if projectTaskID != nil {
 		projectTaskIDs, err := GetProjectTaskIDs(db, *projectTaskID)
 		if err != nil {
@@ -1837,7 +1840,7 @@ func SendThresholdAlerts(alerts []ThresholdAlert) error {
 			} else {
 				defer userRows.Close()
 				userBreakdowns = make(map[int]map[int]UserTimeContribution)
-				
+
 				for userRows.Next() {
 					var taskID, userID, totalDuration int
 					err := userRows.Scan(&taskID, &userID, &totalDuration)
