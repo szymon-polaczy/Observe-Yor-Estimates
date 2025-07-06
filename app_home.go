@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 )
 
 // AppHomeView represents the App Home tab view
@@ -176,60 +177,75 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 		assignedProjectMap[up.ID] = true
 	}
 
-	// Create checkbox options
-	const maxProjectsToShow = 10
-	var checkboxOptions []map[string]interface{}
-	var initialOptions []map[string]interface{}
+	// Create individual toggle buttons for ALL projects
+	blocks = append(blocks, Block{
+		Type: "section",
+		Text: &Text{
+			Type: "mrkdwn",
+			Text: "*🔧 Toggle Project Assignments*\nClick any project to assign/unassign yourself:",
+		},
+	})
 
-	for i, project := range allProjects {
-		if i >= maxProjectsToShow {
-			break
+	// Split projects into manageable chunks for display
+	const projectsPerChunk = 25
+	for i := 0; i < len(allProjects); i += projectsPerChunk {
+		end := i + projectsPerChunk
+		if end > len(allProjects) {
+			end = len(allProjects)
 		}
 
-		option := map[string]interface{}{
-			"text": map[string]interface{}{
-				"type": "plain_text",
-				"text": project.Name,
-			},
-			"value": fmt.Sprintf("%d", project.ID),
+		chunk := allProjects[i:end]
+
+		// Create buttons for this chunk
+		var elements []Element
+		for _, project := range chunk {
+			isAssigned := assignedProjectMap[project.ID]
+			status := "➕"
+			style := "primary"
+			if isAssigned {
+				status = "✅"
+				style = "danger" // Red button to indicate "click to remove"
+			}
+
+			buttonText := fmt.Sprintf("%s %s", status, project.Name)
+			if len(buttonText) > 75 { // Slack button text limit
+				buttonText = fmt.Sprintf("%s %s...", status, project.Name[:70])
+			}
+
+			elements = append(elements, Element{
+				Type:     "button",
+				Text:     buttonText,
+				ActionID: fmt.Sprintf("toggle_project_%d", project.ID),
+				Style:    style,
+				Value:    fmt.Sprintf("%d", project.ID),
+			})
 		}
 
-		checkboxOptions = append(checkboxOptions, option)
+		// Add action block with buttons (max 5 buttons per actions block)
+		for j := 0; j < len(elements); j += 5 {
+			endIdx := j + 5
+			if endIdx > len(elements) {
+				endIdx = len(elements)
+			}
 
-		// Add to initial options if already assigned
-		if assignedProjectMap[project.ID] {
-			initialOptions = append(initialOptions, option)
+			blocks = append(blocks, Block{
+				Type:     "actions",
+				Elements: elements[j:endIdx],
+			})
 		}
-	}
 
-	// Add the checkboxes as a section block instead of input block
-	if len(checkboxOptions) > 0 {
-		blocks = append(blocks, Block{
-			Type: "section",
-			Text: &Text{
-				Type: "mrkdwn",
-				Text: "*Select your projects:*",
-			},
-			Accessory: &Accessory{
-				Type:           "checkboxes",
-				ActionID:       "project_assignments",
-				Options:        checkboxOptions,
-				InitialOptions: initialOptions,
-			},
-		})
-	}
-
-	// Show limitation message if needed
-	if len(allProjects) > maxProjectsToShow {
-		blocks = append(blocks, Block{
-			Type: "context",
-			Elements: []Element{
-				{
-					Type: "mrkdwn",
-					Text: fmt.Sprintf("_Showing %d of %d projects. Use `/oye assign \"Project Name\"` for others._", maxProjectsToShow, len(allProjects)),
+		// Add some spacing between large chunks
+		if end < len(allProjects) && len(chunk) == projectsPerChunk {
+			blocks = append(blocks, Block{
+				Type: "context",
+				Elements: []Element{
+					{
+						Type: "mrkdwn",
+						Text: fmt.Sprintf("_Showing projects %d-%d of %d_", i+1, end, len(allProjects)),
+					},
 				},
-			},
-		})
+			})
+		}
 	}
 
 	// Project management section
@@ -366,11 +382,26 @@ func HandleInteractiveComponents(w http.ResponseWriter, r *http.Request) {
 		action := payload.Actions[0]
 		logger.Infof("Action ID: %s, Selected options: %d", action.ActionID, len(action.SelectedOptions))
 
-		if action.ActionID == "project_assignments" {
+		if strings.HasPrefix(action.ActionID, "project_assignments") {
 			logger.Info("Processing project assignment checkboxes...")
 			if err := HandleProjectAssignmentCheckboxes(payload.User.ID, action.SelectedOptions); err != nil {
 				logger.Errorf("Failed to handle project assignment checkboxes: %v", err)
 				http.Error(w, "Failed to process assignments", http.StatusInternalServerError)
+				return
+			}
+
+			// Refresh the App Home view
+			logger.Info("Refreshing App Home view...")
+			if err := PublishAppHomeView(payload.User.ID); err != nil {
+				logger.Errorf("Failed to refresh app home view: %v", err)
+			} else {
+				logger.Info("App Home view refreshed successfully")
+			}
+		} else if strings.HasPrefix(action.ActionID, "toggle_project_") {
+			logger.Info("Processing project toggle button...")
+			if err := HandleProjectToggle(payload.User.ID, action.ActionID, action.Value); err != nil {
+				logger.Errorf("Failed to handle project toggle: %v", err)
+				http.Error(w, "Failed to process project toggle", http.StatusInternalServerError)
 				return
 			}
 
@@ -484,5 +515,51 @@ func HandleProjectAssignmentCheckboxes(userID string, selectedOptions []Selected
 	}
 
 	logger.Infof("Project assignment update completed for user %s: %d added, %d removed", userID, len(toAdd), len(toRemove))
+	return nil
+}
+
+// HandleProjectToggle processes individual project toggle button clicks
+func HandleProjectToggle(userID, actionID, value string) error {
+	logger := GetGlobalLogger()
+
+	projectID, err := strconv.Atoi(value)
+	if err != nil {
+		return fmt.Errorf("invalid project ID: %s", value)
+	}
+
+	db, err := GetDB()
+	if err != nil {
+		return fmt.Errorf("failed to get database connection: %w", err)
+	}
+
+	// Check if user is currently assigned to this project
+	userProjects, err := GetUserProjects(db, userID)
+	if err != nil {
+		return fmt.Errorf("failed to get user projects: %w", err)
+	}
+
+	isCurrentlyAssigned := false
+	for _, project := range userProjects {
+		if project.ID == projectID {
+			isCurrentlyAssigned = true
+			break
+		}
+	}
+
+	// Toggle the assignment
+	if isCurrentlyAssigned {
+		// Remove assignment
+		if err := UnassignUserFromProject(db, userID, projectID); err != nil {
+			return fmt.Errorf("failed to unassign user from project %d: %w", projectID, err)
+		}
+		logger.Infof("Unassigned user %s from project %d via toggle", userID, projectID)
+	} else {
+		// Add assignment
+		if err := AssignUserToProject(db, userID, projectID); err != nil {
+			return fmt.Errorf("failed to assign user to project %d: %w", projectID, err)
+		}
+		logger.Infof("Assigned user %s to project %d via toggle", userID, projectID)
+	}
+
 	return nil
 }
