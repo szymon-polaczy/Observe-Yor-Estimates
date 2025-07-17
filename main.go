@@ -603,8 +603,8 @@ func setupCronJobs(logger *Logger) {
 		SendSlackUpdate("daily", "", false)
 	})
 
-	// Add threshold monitoring cron job (every 15 minutes)
-	addCronJob(cronScheduler, "THRESHOLD_MONITORING_SCHEDULE", "*/15 * * * *", "threshold monitoring", logger, func() {
+	// Add threshold monitoring cron job (every minute)
+	addCronJob(cronScheduler, "THRESHOLD_MONITORING_SCHEDULE", "* * * * *", "threshold monitoring", logger, func() {
 		if err := RunThresholdMonitoring(); err != nil {
 			logger.Errorf("Threshold monitoring failed: %v", err)
 		}

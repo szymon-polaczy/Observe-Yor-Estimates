@@ -1659,12 +1659,12 @@ func CheckThresholdAlerts(db *sql.DB) ([]ThresholdAlert, error) {
 
 	// Get current time for comparison
 	now := time.Now()
-	fifteenMinutesAgo := now.Add(-15 * time.Minute)
+	sixHoursAgo := now.Add(-6 * time.Hour) // Look back 6 hours for testing (will reduce back to reasonable time)
 	oneHourAgo := now.Add(-1 * time.Hour)
 
 	for _, threshold := range thresholds {
 		// Check for newly crossed thresholds (primary detection)
-		alerts, err := getTasksJustCrossedThreshold(db, float64(threshold), fifteenMinutesAgo)
+		alerts, err := getTasksJustCrossedThreshold(db, float64(threshold), sixHoursAgo)
 		if err != nil {
 			logger.Errorf("Failed to check %d%% threshold crossings: %v", threshold, err)
 		} else {
@@ -1685,24 +1685,56 @@ func CheckThresholdAlerts(db *sql.DB) ([]ThresholdAlert, error) {
 	return allAlerts, nil
 }
 
-// getTasksJustCrossedThreshold finds tasks that just crossed a threshold in the last 15 minutes
+// getTasksJustCrossedThreshold finds tasks that just crossed a threshold in the last time period
 func getTasksJustCrossedThreshold(db *sql.DB, threshold float64, since time.Time) ([]ThresholdAlert, error) {
 	logger := GetGlobalLogger()
 
-	// Enhanced query - get tasks with estimations and recent activity, regardless of time entry timing
+	logger.Debugf("Checking for %.1f%% threshold crossings since %s (%.1f minutes ago)",
+		threshold, since.Format("15:04:05"), time.Since(since).Minutes())
+
+	// First, let's check how many tasks have estimations at all
+	estimationQuery := `
+		SELECT COUNT(*) 
+		FROM tasks 
+		WHERE name ~ '\[([0-9]+(?:[.,][0-9]+)?h?[-+][0-9]+(?:[.,][0-9]+)?h?|[0-9]+(?:[.,][0-9]+)?h?)\]'
+	`
+	var estimationCount int
+	err := db.QueryRow(estimationQuery).Scan(&estimationCount)
+	if err != nil {
+		logger.Warnf("Failed to count tasks with estimations: %v", err)
+	} else {
+		logger.Debugf("Total tasks with estimation patterns: %d", estimationCount)
+	}
+
+	// Check how many time entries are in our recent window (using date as text)
+	recentQuery := `
+		SELECT COUNT(*) 
+		FROM time_entries 
+		WHERE date = to_char(CURRENT_DATE, 'YYYY-MM-DD') AND duration > 0
+	`
+	var recentCount int
+	err = db.QueryRow(recentQuery).Scan(&recentCount)
+	if err != nil {
+		logger.Warnf("Failed to count recent time entries: %v", err)
+	} else {
+		logger.Debugf("Recent time entries (today): %d", recentCount)
+	}
+
+	// Enhanced query - get tasks with estimations and recent activity using date as text
 	query := `
-		WITH tasks_with_estimations AS (
-			-- Get tasks that have estimation patterns
-			SELECT t.task_id, t.parent_id, t.name
-			FROM tasks t
-			WHERE t.name ~ '\[([0-9]+(?:[.,][0-9]+)?h?[-+][0-9]+(?:[.,][0-9]+)?h?|[0-9]+(?:[.,][0-9]+)?h?)\]'  -- Only tasks with estimation patterns
-		),
-		recent_entries AS (
-			-- Get time entries from the last 15 minutes
+		WITH recent_entries AS (
+			-- Get time entries from today (date stored as text in YYYY-MM-DD format)
 			SELECT task_id, duration
 			FROM time_entries 
-			WHERE modify_time >= $1
+			WHERE date = to_char(CURRENT_DATE, 'YYYY-MM-DD')
 			  AND duration > 0
+		),
+		tasks_with_estimations AS (
+			-- Get tasks that have estimation patterns AND recent activity
+			SELECT DISTINCT t.task_id, t.parent_id, t.name
+			FROM tasks t
+			INNER JOIN recent_entries re ON t.task_id = re.task_id
+			WHERE t.name ~ '\[([0-9]+(?:[.,][0-9]+)?h?[-+][0-9]+(?:[.,][0-9]+)?h?|[0-9]+(?:[.,][0-9]+)?h?)\]'  -- Only tasks with estimation patterns
 		),
 		task_totals AS (
 			-- Calculate total time and recent time for tasks with estimations
@@ -1728,7 +1760,7 @@ func getTasksJustCrossedThreshold(db *sql.DB, threshold float64, since time.Time
 		  AND recent_duration > 0  -- Only tasks that had recent activity
 	`
 
-	rows, err := db.Query(query, since)
+	rows, err := db.Query(query) // No parameter needed since we use CURRENT_DATE
 	if err != nil {
 		return nil, fmt.Errorf("could not query threshold crossings: %w", err)
 	}
@@ -1736,6 +1768,8 @@ func getTasksJustCrossedThreshold(db *sql.DB, threshold float64, since time.Time
 
 	var alerts []ThresholdAlert
 	var alertTaskIDs []int
+	taskCount := 0
+
 	for rows.Next() {
 		var taskID, parentID int
 		var name string
@@ -1747,10 +1781,15 @@ func getTasksJustCrossedThreshold(db *sql.DB, threshold float64, since time.Time
 			continue
 		}
 
+		taskCount++
+		logger.Debugf("Found task with recent activity: %s (total: %d min, recent: %d min)",
+			name, totalDuration, recentDuration)
+
 		// Parse estimation using existing Go function
 		_, status := parseEstimation(name)
 		if status != "" {
 			// Skip tasks without valid estimations
+			logger.Debugf("Skipping task %s: %s", name, status)
 			continue
 		}
 
@@ -1778,6 +1817,9 @@ func getTasksJustCrossedThreshold(db *sql.DB, threshold float64, since time.Time
 			continue
 		}
 
+		logger.Debugf("Task %s: %.1f%% -> %.1f%% (threshold: %.1f%%)",
+			name, previousPercentage, currentPercentage, threshold)
+
 		// Check if this task just crossed the threshold
 		if previousPercentage < threshold && currentPercentage >= threshold {
 			alert := ThresholdAlert{
@@ -1796,8 +1838,13 @@ func getTasksJustCrossedThreshold(db *sql.DB, threshold float64, since time.Time
 
 			alerts = append(alerts, alert)
 			alertTaskIDs = append(alertTaskIDs, taskID)
+
+			logger.Infof("THRESHOLD CROSSING: Task %s crossed %.1f%% threshold (%.1f%% -> %.1f%%)",
+				name, threshold, previousPercentage, currentPercentage)
 		}
 	}
+
+	logger.Debugf("Processed %d tasks with recent activity for %.1f%% threshold", taskCount, threshold)
 
 	if len(alerts) > 0 {
 		logger.Infof("Found %d tasks that just crossed %.1f%% threshold", len(alerts), threshold)
@@ -1819,7 +1866,7 @@ func getTasksPersistentlyOverThreshold(db *sql.DB, threshold float64, since time
 	// Query for tasks with estimations that are currently over 100% AND have recent activity
 	query := `
 		WITH recent_entries AS (
-			-- Get time entries from the last hour
+			-- Get time entries from the last 5 minutes (matching threshold crossing window)
 			SELECT task_id, duration
 			FROM time_entries 
 			WHERE modify_time >= $1
