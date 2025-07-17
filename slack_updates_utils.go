@@ -1649,7 +1649,7 @@ func GetTasksOverThresholdWithProject(db *sql.DB, threshold float64, period stri
 	return tasks, nil
 }
 
-// CheckThresholdAlerts checks for tasks that just crossed specific thresholds
+// CheckThresholdAlerts checks for tasks that just crossed specific thresholds or are persistently over critical thresholds
 func CheckThresholdAlerts(db *sql.DB) ([]ThresholdAlert, error) {
 	logger := GetGlobalLogger()
 
@@ -1660,14 +1660,26 @@ func CheckThresholdAlerts(db *sql.DB) ([]ThresholdAlert, error) {
 	// Get current time for comparison
 	now := time.Now()
 	fifteenMinutesAgo := now.Add(-15 * time.Minute)
+	oneHourAgo := now.Add(-1 * time.Hour)
 
 	for _, threshold := range thresholds {
+		// Check for newly crossed thresholds (primary detection)
 		alerts, err := getTasksJustCrossedThreshold(db, float64(threshold), fifteenMinutesAgo)
 		if err != nil {
-			logger.Errorf("Failed to check %d%% threshold: %v", threshold, err)
-			continue
+			logger.Errorf("Failed to check %d%% threshold crossings: %v", threshold, err)
+		} else {
+			allAlerts = append(allAlerts, alerts...)
 		}
-		allAlerts = append(allAlerts, alerts...)
+
+		// For 100% threshold only, send periodic alerts for tasks that have been worked on recently and got worse
+		if threshold == 100 {
+			persistentAlerts, err := getTasksPersistentlyOverThreshold(db, float64(threshold), oneHourAgo)
+			if err != nil {
+				logger.Errorf("Failed to check persistent %d%% threshold tasks: %v", threshold, err)
+			} else {
+				allAlerts = append(allAlerts, persistentAlerts...)
+			}
+		}
 	}
 
 	return allAlerts, nil
@@ -1677,33 +1689,33 @@ func CheckThresholdAlerts(db *sql.DB) ([]ThresholdAlert, error) {
 func getTasksJustCrossedThreshold(db *sql.DB, threshold float64, since time.Time) ([]ThresholdAlert, error) {
 	logger := GetGlobalLogger()
 
-	// Simplified query - get tasks with recent activity and let Go handle the threshold logic
+	// Enhanced query - get tasks with estimations and recent activity, regardless of time entry timing
 	query := `
-		WITH recent_entries AS (
+		WITH tasks_with_estimations AS (
+			-- Get tasks that have estimation patterns
+			SELECT t.task_id, t.parent_id, t.name
+			FROM tasks t
+			WHERE t.name ~ '\[([0-9]+(?:[.,][0-9]+)?h?[-+][0-9]+(?:[.,][0-9]+)?h?|[0-9]+(?:[.,][0-9]+)?h?)\]'  -- Only tasks with estimation patterns
+		),
+		recent_entries AS (
 			-- Get time entries from the last 15 minutes
 			SELECT task_id, duration
 			FROM time_entries 
 			WHERE modify_time >= $1
 			  AND duration > 0
 		),
-		tasks_with_recent_activity AS (
-			-- Get tasks that had recent time entries
-			SELECT DISTINCT t.task_id, t.parent_id, t.name
-			FROM tasks t
-			INNER JOIN recent_entries re ON t.task_id = re.task_id
-			WHERE t.name ~ '\[([0-9]+(?:[.,][0-9]+)?h?[-+][0-9]+(?:[.,][0-9]+)?h?|[0-9]+(?:[.,][0-9]+)?h?)\]'  -- Only tasks with estimation patterns
-		),
 		task_totals AS (
-			-- Calculate total time and recent time for these tasks
+			-- Calculate total time and recent time for tasks with estimations
 			SELECT 
-				tra.task_id,
-				tra.parent_id,
-				tra.name,
+				twe.task_id,
+				twe.parent_id,
+				twe.name,
 				COALESCE(SUM(te.duration), 0) as total_duration,
-				COALESCE(SUM(CASE WHEN te.modify_time >= $1 THEN te.duration ELSE 0 END), 0) as recent_duration
-			FROM tasks_with_recent_activity tra
-			LEFT JOIN time_entries te ON tra.task_id = te.task_id
-			GROUP BY tra.task_id, tra.parent_id, tra.name
+				COALESCE(SUM(CASE WHEN re.task_id IS NOT NULL THEN re.duration ELSE 0 END), 0) as recent_duration
+			FROM tasks_with_estimations twe
+			LEFT JOIN time_entries te ON twe.task_id = te.task_id
+			LEFT JOIN recent_entries re ON twe.task_id = re.task_id
+			GROUP BY twe.task_id, twe.parent_id, twe.name
 		)
 		SELECT 
 			task_id,
@@ -1713,6 +1725,7 @@ func getTasksJustCrossedThreshold(db *sql.DB, threshold float64, since time.Time
 			recent_duration
 		FROM task_totals
 		WHERE total_duration > 0
+		  AND recent_duration > 0  -- Only tasks that had recent activity
 	`
 
 	rows, err := db.Query(query, since)
@@ -1793,6 +1806,139 @@ func getTasksJustCrossedThreshold(db *sql.DB, threshold float64, since time.Time
 	return alerts, nil
 }
 
+// getTasksPersistentlyOverThreshold finds tasks that have been over 100% threshold and got worse with recent work
+// Only triggers for 100% threshold when tasks have recent activity and percentage increased
+func getTasksPersistentlyOverThreshold(db *sql.DB, threshold float64, since time.Time) ([]ThresholdAlert, error) {
+	logger := GetGlobalLogger()
+
+	// Only run for 100% threshold
+	if threshold != 100 {
+		return []ThresholdAlert{}, nil
+	}
+
+	// Query for tasks with estimations that are currently over 100% AND have recent activity
+	query := `
+		WITH recent_entries AS (
+			-- Get time entries from the last hour
+			SELECT task_id, duration
+			FROM time_entries 
+			WHERE modify_time >= $1
+			  AND duration > 0
+		),
+		tasks_with_estimations AS (
+			-- Get tasks that have estimation patterns AND recent activity
+			SELECT DISTINCT t.task_id, t.parent_id, t.name
+			FROM tasks t
+			INNER JOIN recent_entries re ON t.task_id = re.task_id
+			WHERE t.name ~ '\[([0-9]+(?:[.,][0-9]+)?h?[-+][0-9]+(?:[.,][0-9]+)?h?|[0-9]+(?:[.,][0-9]+)?h?)\]'  -- Only tasks with estimation patterns
+		),
+		task_totals AS (
+			-- Calculate total time and recent time for these tasks
+			SELECT 
+				twe.task_id,
+				twe.parent_id,
+				twe.name,
+				COALESCE(SUM(te.duration), 0) as total_duration,
+				COALESCE(SUM(CASE WHEN re.task_id IS NOT NULL THEN re.duration ELSE 0 END), 0) as recent_duration
+			FROM tasks_with_estimations twe
+			LEFT JOIN time_entries te ON twe.task_id = te.task_id
+			LEFT JOIN recent_entries re ON twe.task_id = re.task_id
+			GROUP BY twe.task_id, twe.parent_id, twe.name
+		)
+		SELECT 
+			task_id,
+			parent_id,
+			name,
+			total_duration,
+			recent_duration
+		FROM task_totals
+		WHERE total_duration > 0
+		  AND recent_duration > 0  -- Only tasks that had recent activity
+	`
+
+	rows, err := db.Query(query, since)
+	if err != nil {
+		return nil, fmt.Errorf("could not query persistent threshold violations: %w", err)
+	}
+	defer rows.Close()
+
+	var alerts []ThresholdAlert
+	for rows.Next() {
+		var taskID, parentID int
+		var name string
+		var totalDuration, recentDuration int
+
+		err := rows.Scan(&taskID, &parentID, &name, &totalDuration, &recentDuration)
+		if err != nil {
+			logger.Warnf("Failed to scan task row: %v", err)
+			continue
+		}
+
+		// Parse estimation using existing Go function
+		_, status := parseEstimation(name)
+		if status != "" {
+			// Skip tasks without valid estimations
+			continue
+		}
+
+		// Calculate current and previous percentages
+		previousTotal := totalDuration - recentDuration
+
+		// Calculate current percentage (with recent work)
+		currentPercentage, _, err := calculateTimeUsagePercentage(
+			formatDuration(recentDuration),
+			formatDuration(previousTotal),
+			name,
+		)
+		if err != nil {
+			logger.Warnf("Failed to calculate current percentage for task %s: %v", name, err)
+			continue
+		}
+
+		// Calculate previous percentage (before recent work)
+		previousPercentage, _, err := calculateTimeUsagePercentage(
+			"0h 0m",
+			formatDuration(previousTotal),
+			name,
+		)
+		if err != nil {
+			logger.Warnf("Failed to calculate previous percentage for task %s: %v", name, err)
+			continue
+		}
+
+		// Only alert if:
+		// 1. Task is currently over 100% threshold
+		// 2. The percentage has increased due to recent work (got worse)
+		// 3. It was already over 100% before (persistent violation)
+		if currentPercentage >= threshold && previousPercentage >= threshold && currentPercentage > previousPercentage {
+			alert := ThresholdAlert{
+				TaskID:           taskID,
+				ParentID:         parentID,
+				Name:             name,
+				CurrentTime:      formatDuration(totalDuration),
+				PreviousTime:     formatDuration(previousTotal),
+				Percentage:       currentPercentage,
+				ThresholdCrossed: int(threshold),
+				JustCrossed:      false, // This is a persistent alert with worsening
+			}
+
+			// Parse estimation info
+			alert.EstimationInfo, _ = parseEstimationWithUsage(alert.Name, alert.CurrentTime, alert.PreviousTime)
+
+			alerts = append(alerts, alert)
+
+			logger.Debugf("Persistent 100%% alert for task %s: %.1f%% -> %.1f%% (got %.1f%% worse)",
+				name, previousPercentage, currentPercentage, currentPercentage-previousPercentage)
+		}
+	}
+
+	if len(alerts) > 0 {
+		logger.Infof("Found %d tasks over 100%% that got worse with recent work", len(alerts))
+	}
+
+	return alerts, nil
+}
+
 // SendThresholdAlerts sends Slack notifications for threshold crossings
 func SendThresholdAlerts(alerts []ThresholdAlert) error {
 	if len(alerts) == 0 {
@@ -1801,10 +1947,16 @@ func SendThresholdAlerts(alerts []ThresholdAlert) error {
 
 	logger := GetGlobalLogger()
 
-	// Group alerts by threshold
-	thresholdGroups := make(map[int][]ThresholdAlert)
+	// Group alerts by threshold and type (new crossing vs persistent)
+	newCrossingGroups := make(map[int][]ThresholdAlert)
+	persistentGroups := make(map[int][]ThresholdAlert)
+
 	for _, alert := range alerts {
-		thresholdGroups[alert.ThresholdCrossed] = append(thresholdGroups[alert.ThresholdCrossed], alert)
+		if alert.JustCrossed {
+			newCrossingGroups[alert.ThresholdCrossed] = append(newCrossingGroups[alert.ThresholdCrossed], alert)
+		} else {
+			persistentGroups[alert.ThresholdCrossed] = append(persistentGroups[alert.ThresholdCrossed], alert)
+		}
 	}
 
 	// Get all tasks for hierarchy mapping
@@ -1818,106 +1970,132 @@ func SendThresholdAlerts(alerts []ThresholdAlert) error {
 		return fmt.Errorf("failed to get all tasks for hierarchy mapping: %w", err)
 	}
 
-	// Send a message for each threshold that was crossed
-	for threshold, thresholdAlerts := range thresholdGroups {
-		// Get task IDs for user breakdown query
-		var alertTaskIDs []int
-		for _, alert := range thresholdAlerts {
-			alertTaskIDs = append(alertTaskIDs, alert.TaskID)
+	// Send messages for new threshold crossings (higher priority)
+	for threshold, thresholdAlerts := range newCrossingGroups {
+		err := sendThresholdAlertsForGroup(thresholdAlerts, threshold, true, allTasks, db)
+		if err != nil {
+			logger.Errorf("Failed to send new crossing alerts for %d%% threshold: %v", threshold, err)
 		}
+	}
 
-		// Get user breakdown data for threshold alerts
-		var userBreakdowns map[int]map[int]UserTimeContribution
-		if len(alertTaskIDs) > 0 {
-			userBreakdownQuery := `
-				SELECT 
-					te.task_id,
-					te.user_id,
-					COALESCE(SUM(te.duration), 0) as total_duration
-				FROM time_entries te
-				WHERE te.task_id = ANY($1)
-				GROUP BY te.task_id, te.user_id
-				HAVING COALESCE(SUM(te.duration), 0) > 0
-			`
-
-			userRows, err := db.Query(userBreakdownQuery, pq.Array(alertTaskIDs))
+	// Send messages for persistent threshold violations (only for 100% threshold)
+	for threshold, thresholdAlerts := range persistentGroups {
+		if threshold == 100 { // Only send persistent alerts for 100% threshold
+			err := sendThresholdAlertsForGroup(thresholdAlerts, threshold, false, allTasks, db)
 			if err != nil {
-				logger.Warnf("Failed to query user breakdown for threshold alerts: %v", err)
-			} else {
-				defer userRows.Close()
-				userBreakdowns = make(map[int]map[int]UserTimeContribution)
-
-				for userRows.Next() {
-					var taskID, userID, totalDuration int
-					err := userRows.Scan(&taskID, &userID, &totalDuration)
-					if err != nil {
-						logger.Warnf("Failed to scan user breakdown row for threshold alerts: %v", err)
-						continue
-					}
-
-					if _, exists := userBreakdowns[taskID]; !exists {
-						userBreakdowns[taskID] = make(map[int]UserTimeContribution)
-					}
-
-					userBreakdowns[taskID][userID] = UserTimeContribution{
-						UserID:       userID,
-						CurrentTime:  formatDuration(totalDuration),
-						PreviousTime: "0h 0m", // For threshold alerts, we show total vs 0
-					}
-				}
+				logger.Errorf("Failed to send persistent alerts for %d%% threshold: %v", threshold, err)
 			}
-		}
-
-		// Convert ThresholdAlert to TaskUpdateInfo for compatibility with existing functions
-		var taskInfos []TaskUpdateInfo
-		for _, alert := range thresholdAlerts {
-			taskInfo := TaskUpdateInfo{
-				TaskID:           alert.TaskID,
-				ParentID:         alert.ParentID,
-				Name:             alert.Name,
-				EstimationInfo:   alert.EstimationInfo,
-				EstimationStatus: "",
-				CurrentPeriod:    "Current",
-				CurrentTime:      alert.CurrentTime,
-				PreviousPeriod:   "Previous",
-				PreviousTime:     alert.PreviousTime,
-				DaysWorked:       0,
-				Comments:         []string{}, // We could add comments here if needed
-			}
-
-			// Add user breakdown if available
-			if userBreakdowns != nil {
-				if breakdown, exists := userBreakdowns[alert.TaskID]; exists {
-					taskInfo.UserBreakdown = breakdown
-				}
-			}
-
-			taskInfos = append(taskInfos, taskInfo)
-		}
-
-		// Group by project
-		projectGroups := groupTasksByTopParent(taskInfos, allTasks)
-
-		// Format the alert message
-		for project, tasks := range projectGroups {
-			message := formatThresholdAlertMessage(project, tasks, threshold)
-
-			if err := sendSlackMessage(message); err != nil {
-				logger.Errorf("Failed to send threshold alert for %s at %d%%: %v", project, threshold, err)
-			} else {
-				logger.Infof("Sent threshold alert for %s: %d tasks crossed %d%% threshold", project, len(tasks), threshold)
-			}
-
-			// Increased delay for better visual separation between projects
-			time.Sleep(1500 * time.Millisecond)
 		}
 	}
 
 	return nil
 }
 
+// sendThresholdAlertsForGroup sends alerts for a specific threshold group
+func sendThresholdAlertsForGroup(thresholdAlerts []ThresholdAlert, threshold int, isNewCrossing bool, allTasks map[int]Task, db *sql.DB) error {
+	logger := GetGlobalLogger()
+
+	// Get task IDs for user breakdown query
+	var alertTaskIDs []int
+	for _, alert := range thresholdAlerts {
+		alertTaskIDs = append(alertTaskIDs, alert.TaskID)
+	}
+
+	// Get user breakdown data for threshold alerts
+	var userBreakdowns map[int]map[int]UserTimeContribution
+	if len(alertTaskIDs) > 0 {
+		userBreakdownQuery := `
+			SELECT 
+				te.task_id,
+				te.user_id,
+				COALESCE(SUM(te.duration), 0) as total_duration
+			FROM time_entries te
+			WHERE te.task_id = ANY($1)
+			GROUP BY te.task_id, te.user_id
+			HAVING COALESCE(SUM(te.duration), 0) > 0
+		`
+
+		userRows, err := db.Query(userBreakdownQuery, pq.Array(alertTaskIDs))
+		if err != nil {
+			logger.Warnf("Failed to query user breakdown for threshold alerts: %v", err)
+		} else {
+			defer userRows.Close()
+			userBreakdowns = make(map[int]map[int]UserTimeContribution)
+
+			for userRows.Next() {
+				var taskID, userID, totalDuration int
+				err := userRows.Scan(&taskID, &userID, &totalDuration)
+				if err != nil {
+					logger.Warnf("Failed to scan user breakdown row for threshold alerts: %v", err)
+					continue
+				}
+
+				if _, exists := userBreakdowns[taskID]; !exists {
+					userBreakdowns[taskID] = make(map[int]UserTimeContribution)
+				}
+
+				userBreakdowns[taskID][userID] = UserTimeContribution{
+					UserID:       userID,
+					CurrentTime:  formatDuration(totalDuration),
+					PreviousTime: "0h 0m", // For threshold alerts, we show total vs 0
+				}
+			}
+		}
+	}
+
+	// Convert ThresholdAlert to TaskUpdateInfo for compatibility with existing functions
+	var taskInfos []TaskUpdateInfo
+	for _, alert := range thresholdAlerts {
+		taskInfo := TaskUpdateInfo{
+			TaskID:           alert.TaskID,
+			ParentID:         alert.ParentID,
+			Name:             alert.Name,
+			EstimationInfo:   alert.EstimationInfo,
+			EstimationStatus: "",
+			CurrentPeriod:    "Current",
+			CurrentTime:      alert.CurrentTime,
+			PreviousPeriod:   "Previous",
+			PreviousTime:     alert.PreviousTime,
+			DaysWorked:       0,
+			Comments:         []string{}, // We could add comments here if needed
+		}
+
+		// Add user breakdown if available
+		if userBreakdowns != nil {
+			if breakdown, exists := userBreakdowns[alert.TaskID]; exists {
+				taskInfo.UserBreakdown = breakdown
+			}
+		}
+
+		taskInfos = append(taskInfos, taskInfo)
+	}
+
+	// Group by project
+	projectGroups := groupTasksByTopParent(taskInfos, allTasks)
+
+	// Format and send the alert messages
+	for project, tasks := range projectGroups {
+		message := formatThresholdAlertMessage(project, tasks, threshold, isNewCrossing)
+
+		if err := sendSlackMessage(message); err != nil {
+			logger.Errorf("Failed to send threshold alert for %s at %d%%: %v", project, threshold, err)
+		} else {
+			alertType := "new crossing"
+			if !isNewCrossing {
+				alertType = "persistent violation"
+			}
+			logger.Infof("Sent %s alert for %s: %d tasks at %d%% threshold", alertType, project, len(tasks), threshold)
+		}
+
+		// Increased delay for better visual separation between projects
+		time.Sleep(1500 * time.Millisecond)
+	}
+
+	return nil
+}
+
 // formatThresholdAlertMessage formats a threshold crossing alert message
-func formatThresholdAlertMessage(project string, tasks []TaskUpdateInfo, threshold int) SlackMessage {
+func formatThresholdAlertMessage(project string, tasks []TaskUpdateInfo, threshold int, isNewCrossing bool) SlackMessage {
 	var emoji string
 	var urgency string
 
@@ -1939,14 +2117,26 @@ func formatThresholdAlertMessage(project string, tasks []TaskUpdateInfo, thresho
 		urgency = "Alert"
 	}
 
-	title := fmt.Sprintf("%s %s: Tasks Crossed %d%% Threshold", emoji, urgency, threshold)
-	if project != "Other" && project != "" {
-		title = fmt.Sprintf("%s %s: %s Tasks Crossed %d%% Threshold", emoji, urgency, project, threshold)
+	var title string
+	if isNewCrossing {
+		title = fmt.Sprintf("%s %s: Tasks Crossed %d%% Threshold", emoji, urgency, threshold)
+		if project != "Other" && project != "" {
+			title = fmt.Sprintf("%s %s: %s Tasks Crossed %d%% Threshold", emoji, urgency, project, threshold)
+		}
+	} else {
+		title = fmt.Sprintf("%s %s: Tasks Over %d%% Got Worse", emoji, urgency, threshold)
+		if project != "Other" && project != "" {
+			title = fmt.Sprintf("%s %s: %s Tasks Over %d%% Got Worse", emoji, urgency, project, threshold)
+		}
 	}
 
 	var messageText strings.Builder
 	messageText.WriteString(fmt.Sprintf("*%s*\n", title))
-	messageText.WriteString(fmt.Sprintf("⏰ Detected at %s\n\n", time.Now().Format("15:04 on January 2, 2006")))
+	if isNewCrossing {
+		messageText.WriteString(fmt.Sprintf("⏰ Detected at %s\n\n", time.Now().Format("15:04 on January 2, 2006")))
+	} else {
+		messageText.WriteString(fmt.Sprintf("📈 Tasks got worse with recent work at %s\n\n", time.Now().Format("15:04 on January 2, 2006")))
+	}
 
 	blocks := []Block{
 		// Add spacing at the top for better separation
