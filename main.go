@@ -604,7 +604,7 @@ func setupCronJobs(logger *Logger) {
 	})
 
 	// Add threshold monitoring cron job (every minute)
-	addCronJob(cronScheduler, "THRESHOLD_MONITORING_SCHEDULE", "* * * * *", "threshold monitoring", logger, func() {
+	addCronJob(cronScheduler, "THRESHOLD_MONITORING_SCHEDULE", "*/15 * * * *", "threshold monitoring", logger, func() {
 		if err := RunThresholdMonitoring(); err != nil {
 			logger.Errorf("Threshold monitoring failed: %v", err)
 		}

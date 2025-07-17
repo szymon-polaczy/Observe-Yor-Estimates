@@ -1822,6 +1822,15 @@ func getTasksJustCrossedThreshold(db *sql.DB, threshold float64, since time.Time
 
 		// Check if this task just crossed the threshold
 		if previousPercentage < threshold && currentPercentage >= threshold {
+			// Check if we already sent a notification for this threshold
+			alreadyNotified, err := hasNotificationBeenSent(db, taskID, int(threshold))
+			if err != nil {
+				logger.Warnf("Failed to check notification status for task %d, threshold %d: %v", taskID, int(threshold), err)
+			} else if alreadyNotified {
+				logger.Debugf("Skipping already notified task %s for %.1f%% threshold", name, threshold)
+				continue
+			}
+
 			alert := ThresholdAlert{
 				TaskID:           taskID,
 				ParentID:         parentID,
@@ -2132,6 +2141,24 @@ func sendThresholdAlertsForGroup(thresholdAlerts []ThresholdAlert, threshold int
 				alertType = "persistent violation"
 			}
 			logger.Infof("Sent %s alert for %s: %d tasks at %d%% threshold", alertType, project, len(tasks), threshold)
+
+			// Record the notifications as sent for these tasks
+			for _, task := range tasks {
+				// Find the original alert to get percentage
+				var percentage float64
+				for _, alert := range thresholdAlerts {
+					if alert.TaskID == task.TaskID {
+						percentage = alert.Percentage
+						break
+					}
+				}
+
+				if err := recordNotificationSent(db, task.TaskID, threshold, percentage); err != nil {
+					logger.Warnf("Failed to record notification for task %d, threshold %d: %v", task.TaskID, threshold, err)
+				} else {
+					logger.Debugf("Recorded notification for task %d at %d%% threshold", task.TaskID, threshold)
+				}
+			}
 		}
 
 		// Increased delay for better visual separation between projects
@@ -2269,4 +2296,42 @@ func RunThresholdMonitoring() error {
 	}
 
 	return nil
+}
+
+// hasNotificationBeenSent checks if we've already sent a notification for this task/threshold combination
+func hasNotificationBeenSent(db *sql.DB, taskID int, threshold int) (bool, error) {
+	query := `
+		SELECT 1 
+		FROM threshold_notifications 
+		WHERE task_id = $1 AND threshold_percentage = $2 
+		  AND last_time_entry_date = to_char(CURRENT_DATE, 'YYYY-MM-DD')
+		LIMIT 1
+	`
+
+	var dummy int
+	err := db.QueryRow(query, taskID, threshold).Scan(&dummy)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// recordNotificationSent records that we sent a notification for this task/threshold combination
+func recordNotificationSent(db *sql.DB, taskID int, threshold int, percentage float64) error {
+	query := `
+		INSERT INTO threshold_notifications 
+		(task_id, threshold_percentage, current_percentage, last_time_entry_date)
+		VALUES ($1, $2, $3, to_char(CURRENT_DATE, 'YYYY-MM-DD'))
+		ON CONFLICT (task_id, threshold_percentage) 
+		DO UPDATE SET 
+			current_percentage = EXCLUDED.current_percentage,
+			notified_at = CURRENT_TIMESTAMP,
+			last_time_entry_date = EXCLUDED.last_time_entry_date
+	`
+
+	_, err := db.Exec(query, taskID, threshold, percentage)
+	return err
 }

@@ -175,6 +175,12 @@ func GetDB() (*sql.DB, error) {
 			return
 		}
 
+		if err := migrateThresholdNotificationsTable(db); err != nil {
+			db.Close()
+			initErr = fmt.Errorf("failed to migrate threshold_notifications table: %w", err)
+			return
+		}
+
 		logger.Info("Database connection established and tables migrated successfully")
 
 		dbMutex.Lock()
@@ -728,5 +734,50 @@ UNIQUE(slack_user_id, project_id)
 	}
 
 	logger.Info("User project assignments table created successfully")
+	return nil
+}
+
+// migrateThresholdNotificationsTable ensures the threshold_notifications table exists
+func migrateThresholdNotificationsTable(db *sql.DB) error {
+	logger := GetGlobalLogger()
+
+	// Check if table exists (PostgreSQL way)
+	row := db.QueryRow("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'threshold_notifications');")
+	var exists bool
+	err := row.Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("error checking if threshold_notifications table exists: %w", err)
+	}
+
+	if !exists {
+		// Table does not exist, create it
+		logger.Info("Threshold notifications table does not exist, creating it")
+		return createThresholdNotificationsTable(db)
+	}
+
+	logger.Debug("Threshold notifications table already exists")
+	return nil
+}
+
+func createThresholdNotificationsTable(db *sql.DB) error {
+	logger := GetGlobalLogger()
+
+	createTableSQL := `CREATE TABLE threshold_notifications (
+id SERIAL PRIMARY KEY,
+task_id INTEGER NOT NULL,
+threshold_percentage INTEGER NOT NULL,
+current_percentage DECIMAL(5,2) NOT NULL,
+notified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+last_time_entry_date TEXT NOT NULL,
+FOREIGN KEY (task_id) REFERENCES tasks(task_id),
+UNIQUE(task_id, threshold_percentage)
+);`
+
+	_, err := db.Exec(createTableSQL)
+	if err != nil {
+		return fmt.Errorf("failed to create threshold_notifications table: %w", err)
+	}
+
+	logger.Info("Threshold notifications table created successfully")
 	return nil
 }
