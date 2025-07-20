@@ -507,19 +507,6 @@ func GetMonthlyTaskTimeEntries(db *sql.DB) ([]TaskUpdateInfo, error) {
 	return GetMonthlyTaskTimeEntriesWithProject(db, nil)
 }
 
-// DateRange represents a time period with start and end dates
-type DateRange struct {
-	Start string
-	End   string
-	Label string
-}
-
-// PeriodDateRanges contains current and previous period date ranges
-type PeriodDateRanges struct {
-	Current  DateRange
-	Previous DateRange
-}
-
 // calculateDateRanges calculates date ranges for different period types
 func calculateDateRanges(periodType string, days int) PeriodDateRanges {
 	now := time.Now()

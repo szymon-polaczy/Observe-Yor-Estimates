@@ -80,10 +80,22 @@ func handleCliCommands(args []string, logger *Logger) {
 		}
 		logger.Infof("Running %s update command", period)
 
-		// Fallback to original behavior
-		responseURL := getResponseURL()
-		outputJSON := getOutputJSON()
-		SendSlackUpdate(period, responseURL, outputJSON)
+		// Get database connection
+		db, err := GetDB()
+		if err != nil {
+			logger.Fatalf("Failed to get database connection: %v", err)
+		}
+		
+		// Get task changes
+		taskInfos, err := getTaskChanges(db, period)
+		if err != nil {
+			logger.Fatalf("Failed to get task changes: %v", err)
+		}
+		
+		// Send update
+		if err := SendSlackUpdate(taskInfos, period); err != nil {
+			logger.Fatalf("Failed to send Slack update: %v", err)
+		}
 	case "sync-time-entries":
 		logger.Info("Running time entries sync command")
 		if err := SyncTimeEntriesToDatabase("", ""); err != nil {
@@ -245,7 +257,21 @@ func setupCronJobs(logger *Logger) {
 	})
 
 	addCronJob(cronScheduler, "DAILY_UPDATE_SCHEDULE", "0 6 * * *", "daily Slack update", logger, func() {
-		SendSlackUpdate("daily", "", false)
+		db, err := GetDB()
+		if err != nil {
+			logger.Errorf("Failed to get database connection for daily update: %v", err)
+			return
+		}
+		
+		taskInfos, err := getTaskChanges(db, "daily")
+		if err != nil {
+			logger.Errorf("Failed to get task changes for daily update: %v", err)
+			return
+		}
+		
+		if err := SendSlackUpdate(taskInfos, "daily"); err != nil {
+			logger.Errorf("Failed to send daily Slack update: %v", err)
+		}
 	})
 
 	// Add threshold monitoring cron job (every minute)

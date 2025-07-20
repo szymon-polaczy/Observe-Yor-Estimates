@@ -36,29 +36,6 @@ func StartServer(logger *Logger) {
 	}
 }
 
-// SlackCommandRequest represents a Slack slash command request
-type SlackCommandRequest struct {
-	Token       string `json:"token"`
-	TeamID      string `json:"team_id"`
-	TeamDomain  string `json:"team_domain"`
-	ChannelID   string `json:"channel_id"`
-	ChannelName string `json:"channel_name"`
-	UserID      string `json:"user_id"`
-	UserName    string `json:"user_name"`
-	Command     string `json:"command"`
-	Text        string `json:"text"`
-	ResponseURL string `json:"response_url"`
-	ProjectName string `json:"project_name,omitempty"` // Parsed project name for filtering
-	TriggerID   string `json:"trigger_id"`
-}
-
-// SlackCommandResponse represents a response to a Slack slash command
-type SlackCommandResponse struct {
-	ResponseType string  `json:"response_type"`
-	Text         string  `json:"text"`
-	Blocks       []Block `json:"blocks,omitempty"`
-}
-
 // Global smart router instance
 var globalRouter *SmartRouter
 

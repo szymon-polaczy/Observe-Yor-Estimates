@@ -52,14 +52,6 @@ func CloseWithErrorReturn(closer interface{ Close() error }) error {
 	return closer.Close()
 }
 
-// RetryConfig defines configuration for HTTP retry attempts
-type RetryConfig struct {
-	MaxRetries  int
-	InitialWait time.Duration
-	MaxWait     time.Duration
-	Multiplier  float64
-}
-
 // DefaultRetryConfig returns a sensible default retry configuration
 func DefaultRetryConfig() RetryConfig {
 	return RetryConfig{
