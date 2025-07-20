@@ -297,7 +297,7 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 			Elements: []Element{
 				{
 					Type: "mrkdwn",
-					Text: fmt.Sprintf("_Showing projects %d-%d of %d total_", startIdx+1, endIdx, len(allProjects)),
+					Text: &Text{Type: "mrkdwn", Text: fmt.Sprintf("_Showing projects %d-%d of %d total_", startIdx+1, endIdx, len(allProjects))},
 				},
 			},
 		})
@@ -310,10 +310,7 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 			if currentPage > 0 {
 				navElements = append(navElements, Element{
 					Type: "button",
-					Text: map[string]string{
-						"type": "plain_text",
-						"text": "⬅️ Previous",
-					},
+					Text: &Text{Type: "plain_text", Text: "⬅️ Previous"},
 					ActionID: fmt.Sprintf("page_%d", currentPage-1),
 					Value:    fmt.Sprintf("%d", currentPage-1),
 				})
@@ -322,10 +319,7 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 			// Page indicator
 			navElements = append(navElements, Element{
 				Type: "button",
-				Text: map[string]string{
-					"type": "plain_text",
-					"text": fmt.Sprintf("Page %d/%d", currentPage+1, totalPages),
-				},
+				Text: &Text{Type: "plain_text", Text: fmt.Sprintf("Page %d/%d", currentPage+1, totalPages)},
 				ActionID: "page_info",
 				Value:    "info",
 			})
@@ -334,10 +328,7 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 			if currentPage < totalPages-1 {
 				navElements = append(navElements, Element{
 					Type: "button",
-					Text: map[string]string{
-						"type": "plain_text",
-						"text": "Next ➡️",
-					},
+					Text: &Text{Type: "plain_text", Text: "Next ➡️"},
 					ActionID: fmt.Sprintf("page_%d", currentPage+1),
 					Value:    fmt.Sprintf("%d", currentPage+1),
 				})
@@ -356,7 +347,7 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 		Elements: []Element{
 			{
 				Type: "mrkdwn",
-				Text: "🔄 This page updates automatically when you make changes",
+				Text: &Text{Type: "mrkdwn", Text: "🔄 This page updates automatically when you make changes"},
 			},
 		},
 	})
