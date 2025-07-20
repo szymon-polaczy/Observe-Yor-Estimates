@@ -179,11 +179,10 @@ func ParseTaskEstimationWithUsage(taskName, currentTime, previousTime string) Es
 	estimation.Status = GetTaskStatus(percentage)
 
 	// Enhanced text with usage info
-	estimation.Text = fmt.Sprintf("%s | %s %.1f%% (%s)", 
-		estimation.Text, 
-		estimation.Status.Emoji, 
-		percentage, 
-		estimation.Status.Status)
+	estimation.Text = fmt.Sprintf("%s | %s %.1f%%",
+		estimation.Text,
+		estimation.Status.Emoji,
+		percentage)
 
 	return estimation
 }

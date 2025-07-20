@@ -20,18 +20,18 @@ func SendTaskMessage(tasks []TaskInfo, period string) error {
 
 	// Group by project
 	projectGroups := groupTasksByProject(tasks)
-	
+
 	// Send message for each project
 	for project, projectTasks := range projectGroups {
 		message := formatProjectMessage(project, projectTasks, period)
-		
+
 		if err := validateAndSend(message); err != nil {
 			logger := GetGlobalLogger()
 			logger.Errorf("Failed to send message for project %s: %v", project, err)
 			return err
 		}
 	}
-	
+
 	return nil
 }
 
@@ -41,19 +41,19 @@ func SendThresholdMessage(tasks []TaskInfo, period string, threshold float64) er
 		message := formatNoThresholdMessage(period, threshold)
 		return validateAndSend(message)
 	}
-	
+
 	projectGroups := groupTasksByProject(tasks)
-	
+
 	for project, projectTasks := range projectGroups {
 		message := formatThresholdMessage(project, projectTasks, period, threshold)
-		
+
 		if err := validateAndSend(message); err != nil {
 			logger := GetGlobalLogger()
 			logger.Errorf("Failed to send threshold message for project %s: %v", project, err)
 			return err
 		}
 	}
-	
+
 	return nil
 }
 
@@ -62,7 +62,7 @@ func SendProgressMessage(responseURL, message string) error {
 	if responseURL == "" {
 		return nil
 	}
-	
+
 	slackMsg := SlackMessage{
 		Text: message,
 		Blocks: []Block{{
@@ -70,43 +70,43 @@ func SendProgressMessage(responseURL, message string) error {
 			Text: &Text{Type: "mrkdwn", Text: message},
 		}},
 	}
-	
+
 	return sendSlackResponse(responseURL, slackMsg)
 }
 
 // formatProjectMessage creates message for a project's tasks
 func formatProjectMessage(project string, tasks []TaskInfo, period string) SlackMessage {
 	title := fmt.Sprintf("%s %s Report", EMOJI_CHART, strings.Title(period))
-	
+
 	var text strings.Builder
 	text.WriteString(fmt.Sprintf("*%s*\n", title))
 	text.WriteString(fmt.Sprintf("📅 %s\n\n", time.Now().Format("January 2, 2006")))
-	
+
 	blocks := []Block{
 		{Type: "header", Text: &Text{Type: "plain_text", Text: title}},
 		{Type: "context", Elements: []Element{{Type: "mrkdwn", Text: time.Now().Format("January 2, 2006")}}},
 		{Type: "divider"},
 	}
-	
+
 	// Project header
 	projectTitle := fmt.Sprintf("%s %s", EMOJI_FOLDER, project)
 	if project == "Other" {
 		projectTitle = fmt.Sprintf("%s Other Tasks", EMOJI_CLIPBOARD)
 	}
-	
+
 	text.WriteString(fmt.Sprintf("*%s*\n", projectTitle))
 	blocks = append(blocks, Block{
 		Type: "section",
 		Text: &Text{Type: "mrkdwn", Text: fmt.Sprintf("*%s*", projectTitle)},
 	})
-	
+
 	// Add tasks
 	for _, task := range tasks {
 		taskText, taskBlock := formatTask(task)
 		text.WriteString(taskText)
 		blocks = append(blocks, taskBlock)
 	}
-	
+
 	return SlackMessage{Text: text.String(), Blocks: blocks}
 }
 
@@ -114,31 +114,24 @@ func formatProjectMessage(project string, tasks []TaskInfo, period string) Slack
 func formatThresholdMessage(project string, tasks []TaskInfo, period string, threshold float64) SlackMessage {
 	status := GetThresholdStatus(threshold)
 	title := fmt.Sprintf("%s Tasks Over %.0f%% Threshold", status.Emoji, threshold)
-	
+
 	var text strings.Builder
 	text.WriteString(fmt.Sprintf("*%s*\n", title))
 	text.WriteString(fmt.Sprintf("📅 Period: %s | Project: %s\n\n", period, project))
-	
+
 	blocks := []Block{
 		{Type: "header", Text: &Text{Type: "plain_text", Text: title}},
 		{Type: "context", Elements: []Element{{Type: "mrkdwn", Text: fmt.Sprintf("📅 Period: %s | Project: %s", period, project)}}},
 		{Type: "divider"},
 	}
-	
+
 	// Add tasks
 	for _, task := range tasks {
 		taskText, taskBlock := formatTask(task)
 		text.WriteString(taskText)
 		blocks = append(blocks, taskBlock)
 	}
-	
-	// Add suggestion
-	suggestion := GetSuggestionForThreshold(threshold)
-	blocks = append(blocks, Block{
-		Type: "context",
-		Elements: []Element{{Type: "mrkdwn", Text: suggestion}},
-	})
-	
+
 	return SlackMessage{Text: text.String(), Blocks: blocks}
 }
 
@@ -146,16 +139,16 @@ func formatThresholdMessage(project string, tasks []TaskInfo, period string, thr
 func formatTask(task TaskInfo) (string, Block) {
 	var text strings.Builder
 	var blockText strings.Builder
-	
+
 	// Task name with estimate and percentage
 	taskName := sanitizeText(task.Name)
 	text.WriteString(fmt.Sprintf("├─ %s", taskName))
 	blockText.WriteString(fmt.Sprintf("*%s*", taskName))
-	
+
 	// Add estimation with percentage if available
 	if task.EstimationInfo.Text != "" {
 		estimationText := sanitizeText(task.EstimationInfo.Text)
-		
+
 		// Calculate percentage if we have estimation info
 		var percentageText string
 		if task.EstimationInfo.Percentage > 0 {
@@ -168,24 +161,24 @@ func formatTask(task TaskInfo) (string, Block) {
 			}
 			percentageText = fmt.Sprintf(" - %.0f%% used %s", percentage, emoji)
 		}
-		
+
 		text.WriteString(fmt.Sprintf(" [%s%s]\n", estimationText, percentageText))
 		blockText.WriteString(fmt.Sprintf(" [%s%s]\n", estimationText, percentageText))
 	} else {
 		text.WriteString("\n")
 		blockText.WriteString("\n")
 	}
-	
+
 	// Time information
 	timeInfo := fmt.Sprintf("│  %s: %s | %s: %s",
 		task.CurrentPeriod, task.CurrentTime,
 		task.PreviousPeriod, task.PreviousTime)
-	
+
 	text.WriteString(timeInfo + "\n")
 	blockText.WriteString(fmt.Sprintf("• %s: *%s* | %s: *%s*\n",
 		task.CurrentPeriod, task.CurrentTime,
 		task.PreviousPeriod, task.PreviousTime))
-	
+
 	// Comments (limit to 3 for brevity)
 	if len(task.Comments) > 0 {
 		comments := removeEmptyStrings(task.Comments)
@@ -193,7 +186,7 @@ func formatTask(task TaskInfo) (string, Block) {
 		if len(comments) > limit {
 			comments = comments[:limit]
 		}
-		
+
 		for i, comment := range comments {
 			comment = sanitizeText(comment)
 			if len(comment) > 100 {
@@ -202,16 +195,16 @@ func formatTask(task TaskInfo) (string, Block) {
 			text.WriteString(fmt.Sprintf("│  %d. %s\n", i+1, comment))
 			blockText.WriteString(fmt.Sprintf("  %d. %s\n", i+1, comment))
 		}
-		
+
 		if len(task.Comments) > limit {
 			remaining := len(task.Comments) - limit
 			text.WriteString(fmt.Sprintf("│  ... and %d more\n", remaining))
 			blockText.WriteString(fmt.Sprintf("  ... and %d more\n", remaining))
 		}
 	}
-	
+
 	text.WriteString("└─\n")
-	
+
 	return text.String(), Block{
 		Type: "section",
 		Text: &Text{Type: "mrkdwn", Text: blockText.String()},
@@ -224,12 +217,12 @@ func groupTasksByProject(tasks []TaskInfo) map[string][]TaskInfo {
 	if err != nil {
 		return map[string][]TaskInfo{"Other": tasks}
 	}
-	
+
 	allTasks, err := getAllTasks(db)
 	if err != nil {
 		return map[string][]TaskInfo{"Other": tasks}
 	}
-	
+
 	groups := make(map[string][]TaskInfo)
 	for _, task := range tasks {
 		project := getProjectNameForTask(task.TaskID, allTasks)
@@ -238,7 +231,7 @@ func groupTasksByProject(tasks []TaskInfo) map[string][]TaskInfo {
 		}
 		groups[project] = append(groups[project], task)
 	}
-	
+
 	return groups
 }
 
@@ -246,21 +239,21 @@ func groupTasksByProject(tasks []TaskInfo) map[string][]TaskInfo {
 func getProjectNameForTask(taskID int, allTasks map[int]Task) string {
 	currentID := taskID
 	var previousName string
-	
+
 	for i := 0; i < 10; i++ { // max depth
 		task, ok := allTasks[currentID]
 		if !ok {
 			return previousName
 		}
-		
+
 		if task.ParentID == 0 {
 			return previousName
 		}
-		
+
 		previousName = task.Name
 		currentID = task.ParentID
 	}
-	
+
 	return previousName
 }
 
@@ -271,7 +264,7 @@ func getAllTasks(db *sql.DB) (map[int]Task, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	
+
 	tasks := make(map[int]Task)
 	for rows.Next() {
 		var task Task
@@ -279,7 +272,7 @@ func getAllTasks(db *sql.DB) (map[int]Task, error) {
 			tasks[task.ID] = task
 		}
 	}
-	
+
 	return tasks, nil
 }
 
@@ -287,7 +280,7 @@ func getAllTasks(db *sql.DB) (map[int]Task, error) {
 func sendNoTasksMessage(period string) error {
 	message := fmt.Sprintf("%s No time entries found for %s period %s",
 		EMOJI_CHART, period, EMOJI_CELEBRATION)
-	
+
 	slackMsg := SlackMessage{
 		Text: message,
 		Blocks: []Block{{
@@ -295,7 +288,7 @@ func sendNoTasksMessage(period string) error {
 			Text: &Text{Type: "mrkdwn", Text: message},
 		}},
 	}
-	
+
 	return validateAndSend(slackMsg)
 }
 
@@ -303,7 +296,7 @@ func sendNoTasksMessage(period string) error {
 func formatNoThresholdMessage(period string, threshold float64) SlackMessage {
 	message := fmt.Sprintf("%s No tasks found over %.0f%% threshold for %s period",
 		EMOJI_TARGET, threshold, period)
-	
+
 	return SlackMessage{
 		Text: message,
 		Blocks: []Block{{
@@ -325,24 +318,24 @@ func validateAndSend(message SlackMessage) error {
 		logger := GetGlobalLogger()
 		logger.Warnf("Message may exceed limits: %s", validation.ErrorMessage)
 	}
-	
+
 	return sendSlackWebhook(message)
 }
 
 // validateMessageLimits checks Slack message limits
 func validateMessageLimits(message SlackMessage) MessageValidation {
 	blockCount := len(message.Blocks)
-	
+
 	messageBytes, err := json.Marshal(message)
 	charCount := len(messageBytes)
 	if err != nil {
 		charCount = len(message.Text)
 	}
-	
+
 	exceedsBlocks := blockCount > MAX_SLACK_BLOCKS
 	exceedsChars := charCount > MAX_SLACK_MESSAGE_CHARS
 	isValid := !exceedsBlocks && !exceedsChars
-	
+
 	var errorMsg string
 	if exceedsBlocks && exceedsChars {
 		errorMsg = fmt.Sprintf("Exceeds block limit (%d>%d) and char limit (%d>%d)",
@@ -352,7 +345,7 @@ func validateMessageLimits(message SlackMessage) MessageValidation {
 	} else if exceedsChars {
 		errorMsg = fmt.Sprintf("Exceeds char limit (%d>%d)", charCount, MAX_SLACK_MESSAGE_CHARS)
 	}
-	
+
 	return MessageValidation{
 		IsValid:        isValid,
 		BlockCount:     blockCount,
@@ -366,15 +359,15 @@ func validateMessageLimits(message SlackMessage) MessageValidation {
 // splitAndSendMessage splits large messages and sends them
 func splitAndSendMessage(message SlackMessage) error {
 	maxBlocks := MAX_SLACK_BLOCKS - 2 // reserve for header/footer
-	
+
 	if len(message.Blocks) <= maxBlocks {
 		return sendSlackWebhook(message)
 	}
-	
+
 	// Keep header blocks
 	headerBlocks := []Block{}
 	taskBlocks := []Block{}
-	
+
 	for i, block := range message.Blocks {
 		if i < 3 { // header, context, divider
 			headerBlocks = append(headerBlocks, block)
@@ -382,26 +375,26 @@ func splitAndSendMessage(message SlackMessage) error {
 			taskBlocks = append(taskBlocks, block)
 		}
 	}
-	
+
 	// Send in chunks
 	for i := 0; i < len(taskBlocks); i += maxBlocks {
 		end := i + maxBlocks
 		if end > len(taskBlocks) {
 			end = len(taskBlocks)
 		}
-		
+
 		chunkBlocks := append(headerBlocks, taskBlocks[i:end]...)
-		
+
 		chunkMessage := SlackMessage{
 			Text:   message.Text,
 			Blocks: chunkBlocks,
 		}
-		
+
 		if err := sendSlackWebhook(chunkMessage); err != nil {
 			return err
 		}
 	}
-	
+
 	return nil
 }
 
@@ -411,23 +404,23 @@ func sendSlackWebhook(message SlackMessage) error {
 	if webhookURL == "" {
 		return fmt.Errorf("SLACK_WEBHOOK_URL not configured")
 	}
-	
+
 	jsonData, err := json.Marshal(message)
 	if err != nil {
 		return fmt.Errorf("error marshaling message: %w", err)
 	}
-	
+
 	resp, err := http.Post(webhookURL, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return fmt.Errorf("error sending webhook: %w", err)
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("webhook returned status %d: %s", resp.StatusCode, string(body))
 	}
-	
+
 	return nil
 }
 
@@ -436,32 +429,32 @@ func sendSlackResponse(responseURL string, message SlackMessage) error {
 	if responseURL == "" {
 		return nil
 	}
-	
+
 	response := map[string]interface{}{
 		"response_type": "in_channel",
 		"text":          message.Text,
 	}
-	
+
 	if len(message.Blocks) > 0 {
 		response["blocks"] = message.Blocks
 	}
-	
+
 	jsonData, err := json.Marshal(response)
 	if err != nil {
 		return fmt.Errorf("error marshaling response: %w", err)
 	}
-	
+
 	resp, err := http.Post(responseURL, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return fmt.Errorf("error sending response: %w", err)
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("response URL returned status %d: %s", resp.StatusCode, string(body))
 	}
-	
+
 	return nil
 }
 
@@ -515,7 +508,7 @@ func GroupTasksByProject(tasks []TaskInfo, allTasks map[int]Task) map[string][]T
 // groupTasksByTopParent groups TaskUpdateInfo by project for compatibility
 func groupTasksByTopParent(taskInfos []TaskUpdateInfo, allTasks map[int]Task) map[string][]TaskUpdateInfo {
 	groups := make(map[string][]TaskUpdateInfo)
-	
+
 	for _, taskInfo := range taskInfos {
 		project := getProjectNameForTask(taskInfo.TaskID, allTasks)
 		if project == "" {
@@ -523,7 +516,7 @@ func groupTasksByTopParent(taskInfos []TaskUpdateInfo, allTasks map[int]Task) ma
 		}
 		groups[project] = append(groups[project], taskInfo)
 	}
-	
+
 	return groups
 }
 
@@ -532,17 +525,17 @@ func convertTaskInfoToTaskUpdateInfo(tasks []TaskInfo) []TaskUpdateInfo {
 	var taskUpdates []TaskUpdateInfo
 	for _, task := range tasks {
 		taskUpdate := TaskUpdateInfo{
-			TaskID:           task.TaskID,
-			ParentID:         task.ParentID,
-			Name:             task.Name,
-			EstimationInfo:   task.EstimationInfo.Text,
-			CurrentPeriod:    task.CurrentPeriod,
-			CurrentTime:      task.CurrentTime,
-			PreviousPeriod:   task.PreviousPeriod,
-			PreviousTime:     task.PreviousTime,
-			DaysWorked:       task.DaysWorked,
-			Comments:         task.Comments,
-			UserBreakdown:    task.UserBreakdown,
+			TaskID:         task.TaskID,
+			ParentID:       task.ParentID,
+			Name:           task.Name,
+			EstimationInfo: task.EstimationInfo.Text,
+			CurrentPeriod:  task.CurrentPeriod,
+			CurrentTime:    task.CurrentTime,
+			PreviousPeriod: task.PreviousPeriod,
+			PreviousTime:   task.PreviousTime,
+			DaysWorked:     task.DaysWorked,
+			Comments:       task.Comments,
+			UserBreakdown:  task.UserBreakdown,
 		}
 		taskUpdates = append(taskUpdates, taskUpdate)
 	}
@@ -562,11 +555,11 @@ func sanitizeText(text string) string {
 	text = strings.ReplaceAll(text, "\t", " ")
 	text = strings.ReplaceAll(text, "\"", "'")
 	text = strings.TrimSpace(text)
-	
+
 	if len(text) > 2000 {
 		text = text[:1997] + "..."
 	}
-	
+
 	return text
 }
 

@@ -85,13 +85,13 @@ func handleCliCommands(args []string, logger *Logger) {
 		if err != nil {
 			logger.Fatalf("Failed to get database connection: %v", err)
 		}
-		
+
 		// Get task changes
 		taskInfos, err := getTaskChanges(db, period)
 		if err != nil {
 			logger.Fatalf("Failed to get task changes: %v", err)
 		}
-		
+
 		// Send update
 		if err := SendSlackUpdate(taskInfos, period); err != nil {
 			logger.Fatalf("Failed to send Slack update: %v", err)
@@ -262,13 +262,13 @@ func setupCronJobs(logger *Logger) {
 			logger.Errorf("Failed to get database connection for daily update: %v", err)
 			return
 		}
-		
+
 		taskInfos, err := getTaskChanges(db, "daily")
 		if err != nil {
 			logger.Errorf("Failed to get task changes for daily update: %v", err)
 			return
 		}
-		
+
 		if err := SendSlackUpdate(taskInfos, "daily"); err != nil {
 			logger.Errorf("Failed to send daily Slack update: %v", err)
 		}
@@ -383,127 +383,4 @@ func getOutputJSON() bool {
 		}
 	}
 	return false
-}
-
-func handleDirectSlackUpdate(period string) {
-	logger := GetGlobalLogger()
-	logger.Infof("Handling direct Slack update for period: %s", period)
-
-	// Create Slack API client and context from environment
-	slackClient := NewSlackAPIClientFromEnv()
-	ctx := GetContextFromEnv()
-
-	// Get database connection
-	db, err := GetDB()
-	if err != nil {
-		logger.Errorf("Failed to open database connection: %v", err)
-		slackClient.SendErrorResponse(ctx, "Database connection failed")
-		return
-	}
-
-	// Get task data
-	taskInfos, err := getTaskChanges(db, period)
-	if err != nil {
-		logger.Errorf("Failed to get %s task changes: %v", period, err)
-		slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to get %s changes", period))
-		return
-	}
-
-	// Send direct response to Slack
-	if len(taskInfos) == 0 {
-		slackClient.SendNoChangesMessage(ctx, period)
-	} else {
-		// Default to personal update for now - can be enhanced with user preferences
-		slackClient.SendPersonalUpdate(ctx, taskInfos, period)
-	}
-
-	logger.Infof("Direct Slack update completed for period: %s", period)
-}
-
-// generateTestTasks creates mock TaskUpdateInfo for testing message limits
-func generateTestTasks(count int) []TaskUpdateInfo {
-	tasks := make([]TaskUpdateInfo, count)
-
-	for i := 0; i < count; i++ {
-		tasks[i] = TaskUpdateInfo{
-			TaskID:           1000 + i,
-			ParentID:         100 + (i % 10),
-			Name:             fmt.Sprintf("Test Task %d - This is a sample task name for testing message limits and various formatting scenarios", i+1),
-			EstimationInfo:   fmt.Sprintf("Estimation: %d-%d hours | 🟢 %.1f%% (on track)", (i%5)+1, (i%5)+5, float64((i*7)%100)),
-			EstimationStatus: "",
-			CurrentPeriod:    "This Month",
-			CurrentTime:      fmt.Sprintf("%dh %dm", (i*3)%24, (i*7)%60),
-			PreviousPeriod:   "Previous Month",
-			PreviousTime:     fmt.Sprintf("%dh %dm", (i*2)%15, (i*5)%60),
-			DaysWorked:       (i % 10) + 1,
-			Comments:         generateTestComments(i % 5), // 0-4 comments per task
-			UserBreakdown: map[int]UserTimeContribution{
-				100 + (i % 3): {
-					UserID:       100 + (i % 3),
-					CurrentTime:  fmt.Sprintf("%dh %dm", (i*2)%12, (i*3)%60),
-					PreviousTime: fmt.Sprintf("%dh %dm", (i)%8, (i*2)%60),
-				},
-			},
-		}
-	}
-
-	return tasks
-}
-
-// generateTestTasksWithComments creates mock TaskUpdateInfo with many comments for testing
-func generateTestTasksWithComments(taskCount, commentsPerTask int) []TaskUpdateInfo {
-	tasks := make([]TaskUpdateInfo, taskCount)
-
-	for i := 0; i < taskCount; i++ {
-		tasks[i] = TaskUpdateInfo{
-			TaskID:           2000 + i,
-			ParentID:         200 + (i % 5),
-			Name:             fmt.Sprintf("Comment Heavy Task %d - Testing comment overflow handling", i+1),
-			EstimationInfo:   fmt.Sprintf("Estimation: %d hours | 🟠 %.1f%% (high usage)", (i%3)+3, float64((i*11)%120)),
-			EstimationStatus: "",
-			CurrentPeriod:    "Today",
-			CurrentTime:      fmt.Sprintf("%dh %dm", (i*4)%15, (i*9)%60),
-			PreviousPeriod:   "Before Today",
-			PreviousTime:     fmt.Sprintf("%dh %dm", (i*3)%10, (i*6)%60),
-			DaysWorked:       (i % 7) + 1,
-			Comments:         generateTestComments(commentsPerTask),
-			UserBreakdown: map[int]UserTimeContribution{
-				200 + (i % 2): {
-					UserID:       200 + (i % 2),
-					CurrentTime:  fmt.Sprintf("%dh %dm", (i*3)%8, (i*4)%60),
-					PreviousTime: fmt.Sprintf("%dh %dm", (i*2)%6, (i*3)%60),
-				},
-			},
-		}
-	}
-
-	return tasks
-}
-
-// generateTestComments creates mock comments for testing
-func generateTestComments(count int) []string {
-	if count == 0 {
-		return []string{}
-	}
-
-	comments := make([]string, count)
-	sampleComments := []string{
-		"This is a test comment for validating message formatting and character limits in Slack messages.",
-		"Working on implementing the new feature as discussed in the previous meeting with the team.",
-		"Found an issue with the database connection that needs to be resolved before proceeding further.",
-		"Updated the documentation to reflect the latest changes and improvements made to the system.",
-		"Completed the code review and submitted the pull request for team review and feedback.",
-		"Need to schedule a follow-up meeting to discuss the next steps and project timeline.",
-		"Investigating the performance issues reported by users and working on optimization solutions.",
-		"Added new unit tests to improve code coverage and ensure better quality assurance.",
-		"Refactored the legacy code to use modern patterns and improve maintainability.",
-		"Coordinating with the design team to finalize the user interface specifications.",
-	}
-
-	for i := 0; i < count; i++ {
-		commentIndex := i % len(sampleComments)
-		comments[i] = fmt.Sprintf("%s (Comment #%d)", sampleComments[commentIndex], i+1)
-	}
-
-	return comments
 }
