@@ -300,7 +300,7 @@ func (s *SlackAPIClient) sendChunkedMessage(ctx *ConversationContext, message Sl
 	}
 
 	// Increased delay between project messages for better visual separation
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(150 * time.Millisecond)
 }
 
 // formatSingleProjectMessage creates a message for a single project
