@@ -269,7 +269,7 @@ func (sr *SmartRouter) parsePeriodFromText(text, command string) PeriodInfo {
 		}
 	}
 
-	// Check for specific period keywords
+	// Check for specific period keywords (order matters - check more specific patterns first)
 	switch {
 	case strings.Contains(text, "today"):
 		return PeriodInfo{Type: "today", Days: 0, DisplayName: "Today"}
@@ -282,6 +282,10 @@ func (sr *SmartRouter) parsePeriodFromText(text, command string) PeriodInfo {
 	case strings.Contains(text, "this month"):
 		return PeriodInfo{Type: "this_month", Days: 0, DisplayName: "This Month"}
 	case strings.Contains(text, "last month"):
+		return PeriodInfo{Type: "last_month", Days: 30, DisplayName: "Last Month"}
+	case strings.Contains(text, "weekly"):
+		return PeriodInfo{Type: "last_week", Days: 7, DisplayName: "Last Week"}
+	case strings.Contains(text, "monthly"):
 		return PeriodInfo{Type: "last_month", Days: 30, DisplayName: "Last Month"}
 	}
 
