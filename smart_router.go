@@ -495,13 +495,15 @@ func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, perio
 	// Use unified processor
 	req := &UnifiedUpdateRequest{
 		Command:     "update",
-		Text:        periodInfo.Type, // Use the parsed period type
+		Text:        "", // Empty text to skip re-parsing
 		ProjectName: ctx.ProjectName,
 		UserID:      ctx.UserID,
 		Source:      "slack",
 	}
 
+	// Directly use the already parsed periodInfo
 	result := sr.ProcessUnifiedUpdate(req)
+	result.PeriodInfo = periodInfo // Override with the already parsed period
 	if !result.Success {
 		sr.slackClient.SendErrorResponse(ctx, result.ErrorMsg)
 		return
