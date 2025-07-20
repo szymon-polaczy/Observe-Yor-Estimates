@@ -460,53 +460,22 @@ func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, perio
 		// Try webhook fallback with proper splitting
 		sr.logger.Info("Attempting webhook fallback with message splitting...")
 
-		// Get all tasks for hierarchy mapping (same logic as SendFinalUpdate)
-		db, dbErr := GetDB()
-		if dbErr != nil {
-			sr.logger.Errorf("Webhook fallback failed - database error: %v", dbErr)
-			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send %s report", periodInfo.DisplayName))
-			return
-		}
 
-		allTasks, taskErr := getAllTasks(db)
-		if taskErr != nil {
-			sr.logger.Errorf("Webhook fallback failed - tasks error: %v", taskErr)
-			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send %s report", periodInfo.DisplayName))
-			return
-		}
 
-		// Group tasks by project and send via webhook
-		projectGroups := groupTasksByTopParent(taskInfos, allTasks)
 
 		// Convert TaskUpdateInfo to TaskInfo for new formatting
 		convertedTasks := convertTaskUpdateInfoToTaskInfo(taskInfos)
 		
-		// Test if single message would work
-		testMessage := FormatTaskMessage(convertedTasks, periodInfo.DisplayName, FormatOptions{ShowHeader: true})
-		validation := ValidateMessage(testMessage)
-
-		if validation.IsValid && len(projectGroups) <= 15 && len(taskInfos) <= 25 {
-			// Single message fits, send it
-			if webhookErr := sendSlackMessage(testMessage); webhookErr != nil {
-				sr.logger.Errorf("Webhook fallback failed: %v", webhookErr)
-				sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send %s report", periodInfo.DisplayName))
-				return
-			}
-		} else {
-			// Message too large, split by project
-			sr.logger.Warnf("Webhook fallback: Message too large, splitting by project")
-
-			// Send simple message via webhook
-			message := formatProjectMessageWithComments("All Tasks", taskInfos, periodInfo.DisplayName, 1, 1)
-
-			if webhookErr := sendSlackMessage(message); webhookErr != nil {
-				sr.logger.Errorf("Webhook fallback failed: %v", webhookErr)
-				sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send %s report", periodInfo.DisplayName))
-				return
-			}
+		// Test if single message would work (use new simplified messaging)
+		err = SendTaskMessage(convertedTasks, periodInfo.DisplayName)
+		if err == nil {
+			return // Successfully sent
 		}
-
-		sr.logger.Info("Successfully sent report via webhook fallback")
+		
+		// Fallback error handling
+		sr.logger.Errorf("Task message failed: %v", err)
+		sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send %s report", periodInfo.DisplayName))
+		return
 	}
 
 	sr.logger.Infof("Completed %s update for user %s", periodInfo.DisplayName, ctx.UserID)
@@ -813,55 +782,22 @@ func (sr *SmartRouter) processThresholdWithProgress(ctx *ConversationContext, th
 		sr.logger.Info("Attempting webhook fallback with message splitting...")
 
 		// Get all tasks for hierarchy mapping (same logic as SendThresholdResults)
-		db, dbErr := GetDB()
-		if dbErr != nil {
-			sr.logger.Errorf("Webhook fallback failed - database error: %v", dbErr)
-			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send threshold report"))
-			return
-		}
 
-		allTasks, taskErr := getAllTasks(db)
-		if taskErr != nil {
-			sr.logger.Errorf("Webhook fallback failed - tasks error: %v", taskErr)
-			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send threshold report"))
-			return
-		}
 
-		// Group tasks by project and send via webhook
-		projectGroups := groupTasksByTopParent(taskInfos, allTasks)
 
 		// Convert TaskUpdateInfo to TaskInfo for new formatting
 		convertedTasks := convertTaskUpdateInfoToTaskInfo(taskInfos)
 		
-		// Test if single message would work
-		testMessage := FormatTaskMessage(convertedTasks, periodInfo.DisplayName, FormatOptions{
-			ShowHeader: true,
-			Threshold: &threshold,
-		})
-		validation := ValidateMessage(testMessage)
-
-		if validation.IsValid && len(projectGroups) <= 15 && len(taskInfos) <= 25 {
-			// Single message fits, send it
-			if webhookErr := sendSlackMessage(testMessage); webhookErr != nil {
-				sr.logger.Errorf("Webhook fallback failed: %v", webhookErr)
-				sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send threshold report"))
-				return
-			}
-		} else {
-			// Message too large, split by project
-			sr.logger.Warnf("Webhook fallback: Message too large, splitting by project")
-
-			// Send simple message via webhook
-			message := formatProjectMessageWithComments("Threshold Results", taskInfos, periodInfo.DisplayName, 1, 1)
-
-			if webhookErr := sendSlackMessage(message); webhookErr != nil {
-				sr.logger.Errorf("Webhook fallback failed: %v", webhookErr)
-				sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send threshold report"))
-				return
-			}
+		// Send threshold message using new simplified messaging
+		err = SendThresholdMessage(convertedTasks, periodInfo.DisplayName, threshold)
+		if err == nil {
+			return // Successfully sent
 		}
-
-		sr.logger.Info("Successfully sent threshold report via webhook fallback")
+		
+		// Fallback error handling
+		sr.logger.Errorf("Threshold message failed: %v", err)
+		sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send threshold report"))
+		return
 	}
 
 	sr.logger.Infof("Completed threshold check for user %s: %.0f%% threshold, %s period, %d tasks found",

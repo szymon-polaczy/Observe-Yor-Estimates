@@ -48,10 +48,8 @@ func SendSlackUpdate(taskInfos []TaskUpdateInfo, period string) error {
 	// Convert to TaskInfo for new formatting
 	convertedTasks := convertTaskUpdateInfoToTaskInfo(taskInfos)
 	
-	// Format message using new unified system
-	message := FormatTaskMessage(convertedTasks, period, FormatOptions{ShowHeader: true})
-	
-	return sendSlackMessage(message)
+	// Send using new simplified messaging system
+	return SendTaskMessage(convertedTasks, period)
 }
 
 func (s *SlackAPIClient) sendSlackAPIRequest(endpoint string, payload map[string]interface{}) error {
@@ -152,11 +150,8 @@ func (s *SlackAPIClient) SendPersonalUpdate(ctx *ConversationContext, taskInfos 
 	// Convert to TaskInfo
 	convertedTasks := convertTaskUpdateInfoToTaskInfo(taskInfos)
 	
-	// Format as personal message
-	message := FormatTaskMessage(convertedTasks, period, FormatOptions{
-		IsPersonal: true,
-		ShowHeader: true,
-	})
+	// Format as personal message using simplified system
+	message := formatProjectMessage("Personal Report", convertedTasks, period)
 	
 	payload := map[string]interface{}{
 		"channel": ctx.ChannelID,
@@ -214,9 +209,9 @@ func (s *SlackAPIClient) SendFinalUpdate(ctx *ConversationContext, taskInfos []T
 		return s.SendNoChangesMessage(ctx, period)
 	}
 
-	// Convert to TaskInfo and format
+	// Convert to TaskInfo and format using simplified system
 	convertedTasks := convertTaskUpdateInfoToTaskInfo(taskInfos)
-	message := FormatTaskMessage(convertedTasks, period, FormatOptions{ShowHeader: true})
+	message := formatProjectMessage("Update", convertedTasks, period)
 
 	payload := map[string]interface{}{
 		"channel": ctx.ChannelID,
@@ -253,12 +248,9 @@ func (s *SlackAPIClient) SendThresholdResults(ctx *ConversationContext, taskInfo
 		return s.SendThresholdNoResultsMessage(ctx, threshold, period)
 	}
 
-	// Convert to TaskInfo and format
+	// Convert to TaskInfo and format using simplified system
 	convertedTasks := convertTaskUpdateInfoToTaskInfo(taskInfos)
-	message := FormatTaskMessage(convertedTasks, period, FormatOptions{
-		ShowHeader: true,
-		Threshold: &threshold,
-	})
+	message := formatThresholdMessage("Threshold Alert", convertedTasks, period, threshold)
 
 	payload := map[string]interface{}{
 		"channel": ctx.ChannelID,

@@ -353,18 +353,12 @@ func sendThresholdAlertsForGroup(thresholdAlerts []ThresholdAlert, threshold int
 
 // formatThresholdAlertMessage formats a threshold crossing alert message
 func formatThresholdAlertMessage(project string, tasks []TaskInfo, threshold int, isNewCrossing bool) SlackMessage {
-	options := FormatOptions{
-		ShowHeader: true,
-		ShowFooter: true,
-		Threshold:  func() *float64 { f := float64(threshold); return &f }(),
-	}
-
 	period := "threshold alert"
 	if isNewCrossing {
 		period = "threshold crossing"
 	}
 
-	return FormatTaskMessage(tasks, period, options)
+	return formatThresholdMessage(project, tasks, period, float64(threshold))
 }
 
 // hasNotificationBeenSent checks if we've already sent a notification for this task/threshold
