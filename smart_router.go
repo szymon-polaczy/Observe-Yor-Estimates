@@ -628,92 +628,35 @@ func (sr *SmartRouter) processFullSyncWithProgress(ctx *ConversationContext) {
 func (sr *SmartRouter) parsePeriodFromText(text, command string) PeriodInfo {
 	text = strings.ToLower(strings.TrimSpace(text))
 
-	// Remove project names from text for period parsing
-	// This handles cases like "filestage last 7 days"
+	// Look for "last X days" pattern first
 	words := strings.Fields(text)
-	var periodWords []string
-
-	// Look for period-related keywords and numbers
 	for i, word := range words {
-		// Check for "last X days" pattern
-		if word == "last" && i+2 < len(words) && words[i+2] == "days" {
-			if days, err := strconv.Atoi(words[i+1]); err == nil && days >= 1 && days <= 60 {
-				return PeriodInfo{
-					Type:        "last_x_days",
-					Days:        days,
-					DisplayName: fmt.Sprintf("Last %d Days", days),
+		if word == "last" && i+2 < len(words) {
+			if words[i+2] == "days" || words[i+2] == "day" {
+				if days, err := strconv.Atoi(words[i+1]); err == nil && days >= 1 && days <= 60 {
+					return PeriodInfo{
+						Type:        "last_x_days",
+						Days:        days,
+						DisplayName: fmt.Sprintf("Last %d Days", days),
+					}
 				}
 			}
-		}
-
-		// Check for "last X day" (singular)
-		if word == "last" && i+2 < len(words) && words[i+2] == "day" {
-			if days, err := strconv.Atoi(words[i+1]); err == nil && days == 1 {
-				return PeriodInfo{
-					Type:        "yesterday",
-					Days:        1,
-					DisplayName: "Yesterday",
-				}
-			}
-		}
-
-		// Collect words that might be period-related
-		if word == "today" || word == "yesterday" || word == "this" || word == "last" ||
-			word == "week" || word == "month" || word == "daily" || word == "weekly" || word == "monthly" ||
-			word == "days" || word == "day" {
-			periodWords = append(periodWords, word)
 		}
 	}
 
-	// Join period words to check for multi-word patterns
-	periodText := strings.Join(periodWords, " ")
-
-	// Check for specific patterns
+	// Check for specific period keywords
 	switch {
-	case strings.Contains(periodText, "today"):
+	case strings.Contains(text, "today"):
 		return PeriodInfo{Type: "today", Days: 0, DisplayName: "Today"}
-	case strings.Contains(periodText, "yesterday"):
+	case strings.Contains(text, "yesterday"):
 		return PeriodInfo{Type: "yesterday", Days: 1, DisplayName: "Yesterday"}
-	case strings.Contains(periodText, "this week"):
+	case strings.Contains(text, "this week"):
 		return PeriodInfo{Type: "this_week", Days: 0, DisplayName: "This Week"}
-	case strings.Contains(periodText, "last week"):
+	case strings.Contains(text, "last week"):
 		return PeriodInfo{Type: "last_week", Days: 7, DisplayName: "Last Week"}
-	case strings.Contains(periodText, "this month"):
+	case strings.Contains(text, "this month"):
 		return PeriodInfo{Type: "this_month", Days: 0, DisplayName: "This Month"}
-	case strings.Contains(periodText, "last month"):
-		return PeriodInfo{Type: "last_month", Days: 30, DisplayName: "Last Month"}
-	}
-
-	// Check for backwards compatibility with old period names
-	// Be more specific to avoid false matches
-	if strings.Contains(text, "weekly") {
-		return PeriodInfo{Type: "last_week", Days: 7, DisplayName: "Last Week"}
-	}
-	if strings.Contains(text, "monthly") {
-		return PeriodInfo{Type: "last_month", Days: 30, DisplayName: "Last Month"}
-	}
-	if strings.Contains(text, "daily") {
-		return PeriodInfo{Type: "yesterday", Days: 1, DisplayName: "Yesterday"}
-	}
-
-	// Only match generic "week" or "month" if they're not part of other patterns
-	if !strings.Contains(text, "this") && !strings.Contains(text, "last") {
-		if strings.Contains(periodText, "week") {
-			return PeriodInfo{Type: "last_week", Days: 7, DisplayName: "Last Week"}
-		}
-		if strings.Contains(periodText, "month") {
-			return PeriodInfo{Type: "last_month", Days: 30, DisplayName: "Last Month"}
-		}
-	}
-
-	// Check command name for backwards compatibility
-	if strings.Contains(command, "daily") {
-		return PeriodInfo{Type: "yesterday", Days: 1, DisplayName: "Yesterday"}
-	}
-	if strings.Contains(command, "weekly") {
-		return PeriodInfo{Type: "last_week", Days: 7, DisplayName: "Last Week"}
-	}
-	if strings.Contains(command, "monthly") {
+	case strings.Contains(text, "last month"):
 		return PeriodInfo{Type: "last_month", Days: 30, DisplayName: "Last Month"}
 	}
 

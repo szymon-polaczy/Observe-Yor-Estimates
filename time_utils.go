@@ -1,34 +1,9 @@
 package main
 
 import (
-	"regexp"
 	"strconv"
-	"strings"
 	"time"
 )
-
-// ParseTimeToSeconds converts time strings like "2h 30m" to seconds
-func ParseTimeToSeconds(timeStr string) int {
-	if timeStr == "0h 0m" || timeStr == "" {
-		return 0
-	}
-
-	var hours, minutes int
-	hRegex := regexp.MustCompile(`(\d+)h`)
-	mRegex := regexp.MustCompile(`(\d+)m`)
-
-	hMatch := hRegex.FindStringSubmatch(timeStr)
-	if len(hMatch) > 1 {
-		hours, _ = strconv.Atoi(hMatch[1])
-	}
-
-	mMatch := mRegex.FindStringSubmatch(timeStr)
-	if len(mMatch) > 1 {
-		minutes, _ = strconv.Atoi(mMatch[1])
-	}
-
-	return hours*3600 + minutes*60
-}
 
 // FormatDuration converts seconds to readable time format
 func FormatDuration(seconds int) string {
@@ -60,7 +35,7 @@ func formatHoursMinutes(hours, minutes int) string {
 // CalcDateRanges calculates date ranges for different period types
 func CalcDateRanges(periodType string, days int) PeriodDateRanges {
 	now := time.Now()
-	
+
 	switch periodType {
 	case "today":
 		return PeriodDateRanges{
@@ -73,7 +48,7 @@ func CalcDateRanges(periodType string, days int) PeriodDateRanges {
 				End:   now.AddDate(0, 0, -1).Format("2006-01-02"),
 			},
 		}
-		
+
 	case "yesterday":
 		yesterday := now.AddDate(0, 0, -1)
 		return PeriodDateRanges{
@@ -86,7 +61,7 @@ func CalcDateRanges(periodType string, days int) PeriodDateRanges {
 				End:   now.AddDate(0, 0, -2).Format("2006-01-02"),
 			},
 		}
-		
+
 	case "this_week":
 		weekday := int(now.Weekday())
 		if weekday == 0 { // Sunday
@@ -94,7 +69,7 @@ func CalcDateRanges(periodType string, days int) PeriodDateRanges {
 		}
 		startOfWeek := now.AddDate(0, 0, -weekday+1)
 		endOfWeek := startOfWeek.AddDate(0, 0, 6)
-		
+
 		return PeriodDateRanges{
 			Current: DateRange{
 				Start: startOfWeek.Format("2006-01-02"),
@@ -105,7 +80,7 @@ func CalcDateRanges(periodType string, days int) PeriodDateRanges {
 				End:   startOfWeek.AddDate(0, 0, -1).Format("2006-01-02"),
 			},
 		}
-		
+
 	case "last_week":
 		weekday := int(now.Weekday())
 		if weekday == 0 {
@@ -114,7 +89,7 @@ func CalcDateRanges(periodType string, days int) PeriodDateRanges {
 		startOfThisWeek := now.AddDate(0, 0, -weekday+1)
 		startOfLastWeek := startOfThisWeek.AddDate(0, 0, -7)
 		endOfLastWeek := startOfLastWeek.AddDate(0, 0, 6)
-		
+
 		return PeriodDateRanges{
 			Current: DateRange{
 				Start: startOfLastWeek.Format("2006-01-02"),
@@ -125,11 +100,11 @@ func CalcDateRanges(periodType string, days int) PeriodDateRanges {
 				End:   startOfLastWeek.AddDate(0, 0, -1).Format("2006-01-02"),
 			},
 		}
-		
+
 	case "this_month":
 		startOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 		endOfMonth := startOfMonth.AddDate(0, 1, -1)
-		
+
 		return PeriodDateRanges{
 			Current: DateRange{
 				Start: startOfMonth.Format("2006-01-02"),
@@ -140,12 +115,12 @@ func CalcDateRanges(periodType string, days int) PeriodDateRanges {
 				End:   startOfMonth.AddDate(0, 0, -1).Format("2006-01-02"),
 			},
 		}
-		
+
 	case "last_month":
 		startOfThisMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 		startOfLastMonth := startOfThisMonth.AddDate(0, -1, 0)
 		endOfLastMonth := startOfThisMonth.AddDate(0, 0, -1)
-		
+
 		return PeriodDateRanges{
 			Current: DateRange{
 				Start: startOfLastMonth.Format("2006-01-02"),
@@ -156,11 +131,11 @@ func CalcDateRanges(periodType string, days int) PeriodDateRanges {
 				End:   startOfLastMonth.AddDate(0, 0, -1).Format("2006-01-02"),
 			},
 		}
-		
+
 	case "last_x_days":
 		endDate := now.AddDate(0, 0, -1) // Yesterday
 		startDate := endDate.AddDate(0, 0, -days+1)
-		
+
 		return PeriodDateRanges{
 			Current: DateRange{
 				Start: startDate.Format("2006-01-02"),
@@ -171,7 +146,7 @@ func CalcDateRanges(periodType string, days int) PeriodDateRanges {
 				End:   startDate.AddDate(0, 0, -1).Format("2006-01-02"),
 			},
 		}
-		
+
 	default:
 		// Default to yesterday
 		return CalcDateRanges("yesterday", 1)
@@ -201,100 +176,4 @@ func GetPeriodDisplayName(periodType string, days int) string {
 	default:
 		return "Unknown Period"
 	}
-}
-
-// ParsePeriodFromText extracts period information from natural language
-func ParsePeriodFromText(text string) PeriodInfo {
-	text = strings.ToLower(strings.TrimSpace(text))
-	words := strings.Fields(text)
-
-	// Look for "last X days" pattern
-	for i, word := range words {
-		if word == "last" && i+2 < len(words) && words[i+2] == "days" {
-			if days, err := strconv.Atoi(words[i+1]); err == nil && days >= 1 && days <= 60 {
-				return PeriodInfo{
-					Type:        "last_x_days",
-					Days:        days,
-					DisplayName: GetPeriodDisplayName("last_x_days", days),
-				}
-			}
-		}
-	}
-
-	// Check for specific patterns
-	switch {
-	case contains(text, "today"):
-		return PeriodInfo{Type: "today", Days: 0, DisplayName: "Today"}
-	case contains(text, "yesterday"):
-		return PeriodInfo{Type: "yesterday", Days: 1, DisplayName: "Yesterday"}
-	case contains(text, "this week"):
-		return PeriodInfo{Type: "this_week", Days: 0, DisplayName: "This Week"}
-	case contains(text, "last week"):
-		return PeriodInfo{Type: "last_week", Days: 7, DisplayName: "Last Week"}
-	case contains(text, "this month"):
-		return PeriodInfo{Type: "this_month", Days: 0, DisplayName: "This Month"}
-	case contains(text, "last month"):
-		return PeriodInfo{Type: "last_month", Days: 30, DisplayName: "Last Month"}
-	case contains(text, "weekly"):
-		return PeriodInfo{Type: "last_week", Days: 7, DisplayName: "Last Week"}
-	case contains(text, "monthly"):
-		return PeriodInfo{Type: "last_month", Days: 30, DisplayName: "Last Month"}
-	case contains(text, "daily"):
-		return PeriodInfo{Type: "yesterday", Days: 1, DisplayName: "Yesterday"}
-	// Only match generic "week" or "month" if they're not part of other patterns
-	case !contains(text, "this") && !contains(text, "last") && contains(text, "week"):
-		return PeriodInfo{Type: "last_week", Days: 7, DisplayName: "Last Week"}
-	case !contains(text, "this") && !contains(text, "last") && contains(text, "month"):
-		return PeriodInfo{Type: "last_month", Days: 30, DisplayName: "Last Month"}
-	default:
-		return PeriodInfo{Type: "yesterday", Days: 1, DisplayName: "Yesterday"}
-	}
-}
-
-// AddTimeStrings adds two time strings together
-func AddTimeStrings(time1, time2 string) string {
-	seconds1 := ParseTimeToSeconds(time1)
-	seconds2 := ParseTimeToSeconds(time2)
-	return FormatDuration(seconds1 + seconds2)
-}
-
-// SubtractTimeStrings subtracts second time from first time
-func SubtractTimeStrings(time1, time2 string) string {
-	seconds1 := ParseTimeToSeconds(time1)
-	seconds2 := ParseTimeToSeconds(time2)
-	result := seconds1 - seconds2
-	if result < 0 {
-		result = 0
-	}
-	return FormatDuration(result)
-}
-
-// CompareTimeStrings returns -1, 0, or 1 if time1 is less, equal, or greater than time2
-func CompareTimeStrings(time1, time2 string) int {
-	seconds1 := ParseTimeToSeconds(time1)
-	seconds2 := ParseTimeToSeconds(time2)
-	
-	if seconds1 < seconds2 {
-		return -1
-	} else if seconds1 > seconds2 {
-		return 1
-	}
-	return 0
-}
-
-// IsValidTimeString checks if a string is a valid time format
-func IsValidTimeString(timeStr string) bool {
-	if timeStr == "" || timeStr == "0h 0m" {
-		return true
-	}
-	
-	// Check if it matches expected pattern
-	matched, _ := regexp.MatchString(`^\d+h \d+m$|^\d+h$|^\d+m$`, timeStr)
-	return matched
-}
-
-// Helper functions
-
-func contains(text, substr string) bool {
-	return strings.Contains(text, substr)
 }
