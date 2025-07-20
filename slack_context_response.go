@@ -68,7 +68,7 @@ func GetContextFromEnv() *ConversationContext {
 
 // Send message directly to the channel where user asked
 func (s *SlackAPIClient) SendContextualUpdate(ctx *ConversationContext, taskInfos []TaskUpdateInfo, period string) error {
-	message := s.formatContextualMessage(taskInfos, period, ctx.UserID)
+	message := s.formatContextualMessage(taskInfos, period)
 
 	payload := map[string]interface{}{
 		"channel": ctx.ChannelID,
@@ -85,7 +85,7 @@ func (s *SlackAPIClient) SendContextualUpdate(ctx *ConversationContext, taskInfo
 
 // Send ephemeral message only visible to the requesting user
 func (s *SlackAPIClient) SendPersonalUpdate(ctx *ConversationContext, taskInfos []TaskUpdateInfo, period string) error {
-	message := s.formatPersonalMessage(taskInfos, period, ctx.UserID)
+	message := s.formatPersonalMessage(taskInfos, period)
 
 	payload := map[string]interface{}{
 		"channel": ctx.ChannelID,
@@ -100,7 +100,7 @@ func (s *SlackAPIClient) SendPersonalUpdate(ctx *ConversationContext, taskInfos 
 // SendPersonalUpdateInThread sends a personal update in thread since ephemeral messages don't support threading
 func (s *SlackAPIClient) SendPersonalUpdateInThread(ctx *ConversationContext, taskInfos []TaskUpdateInfo, period string) error {
 	// Create a message that's addressed to the specific user but sent as a regular message in thread
-	message := s.formatPersonalThreadMessage(taskInfos, period, ctx.UserID)
+	message := s.formatPersonalThreadMessage(taskInfos, period)
 
 	payload := map[string]interface{}{
 		"channel": ctx.ChannelID,
@@ -182,7 +182,7 @@ func (s *SlackAPIClient) SendFinalUpdate(ctx *ConversationContext, taskInfos []T
 	projectGroups := groupTasksByTopParent(taskInfos, allTasks)
 
 	// Always test the message size first before deciding whether to split
-	testMessage := s.formatContextualMessage(taskInfos, period, ctx.UserID)
+	testMessage := s.formatContextualMessage(taskInfos, period)
 	validation := validateSlackMessage(testMessage)
 
 	// If message exceeds limits OR we have many projects/tasks, split by project
@@ -210,7 +210,7 @@ func (s *SlackAPIClient) SendFinalUpdate(ctx *ConversationContext, taskInfos []T
 // sendProjectSplitMessages sends separate messages for each project to avoid limits
 func (s *SlackAPIClient) sendProjectSplitMessages(ctx *ConversationContext, projectGroups map[string][]TaskUpdateInfo, period string, allTasks []TaskUpdateInfo) error {
 	// Send header message first
-	headerMessage := s.formatReportHeaderMessage(period, ctx.UserID, len(allTasks), len(projectGroups))
+	headerMessage := s.formatReportHeaderMessage(period, len(allTasks), len(projectGroups))
 
 	payload := map[string]interface{}{
 		"channel": ctx.ChannelID,
@@ -322,8 +322,8 @@ func (s *SlackAPIClient) sendChunkedMessage(ctx *ConversationContext, message Sl
 }
 
 // formatReportHeaderMessage creates the header message for split reports
-func (s *SlackAPIClient) formatReportHeaderMessage(period, userID string, totalTasks, totalProjects int) SlackMessage {
-	headerText := fmt.Sprintf("📊 %s Task Update for <@%s>", strings.Title(period), userID)
+func (s *SlackAPIClient) formatReportHeaderMessage(period string, totalTasks, totalProjects int) SlackMessage {
+	headerText := fmt.Sprintf("📊 %s Task Update", strings.Title(period))
 
 	blocks := []Block{
 		{
@@ -396,7 +396,7 @@ func (s *SlackAPIClient) formatSingleProjectMessage(project string, tasks []Task
 }
 
 func (s *SlackAPIClient) SendNoChangesMessage(ctx *ConversationContext, period string) error {
-	message := fmt.Sprintf("📊 No task changes to report for your %s update, <@%s>! 🎉", period, ctx.UserID)
+	message := fmt.Sprintf("📊 No task changes to report for your %s update! 🎉", period)
 
 	payload := map[string]interface{}{
 		"channel": ctx.ChannelID,
@@ -434,8 +434,8 @@ func (s *SlackAPIClient) SendErrorResponse(ctx *ConversationContext, errorMsg st
 	return s.sendSlackAPIRequest("chat.postEphemeral", payload)
 }
 
-func (s *SlackAPIClient) formatContextualMessage(taskInfos []TaskUpdateInfo, period string, userID string) SlackMessage {
-	headerText := fmt.Sprintf("📊 %s Task Update for <@%s>", strings.Title(period), userID)
+func (s *SlackAPIClient) formatContextualMessage(taskInfos []TaskUpdateInfo, period string) SlackMessage {
+	headerText := fmt.Sprintf("📊 %s Task Update", strings.Title(period))
 
 	var messageText strings.Builder
 	messageText.WriteString(fmt.Sprintf("*%s*\n\n", headerText))
@@ -444,12 +444,6 @@ func (s *SlackAPIClient) formatContextualMessage(taskInfos []TaskUpdateInfo, per
 		{
 			Type: "header",
 			Text: &Text{Type: "plain_text", Text: fmt.Sprintf("%s Task Update", strings.Title(period))},
-		},
-		{
-			Type: "context",
-			Elements: []Element{
-				{Type: "mrkdwn", Text: fmt.Sprintf("Requested by <@%s> at %s", userID, time.Now().Format("3:04 PM"))},
-			},
 		},
 		{Type: "divider"},
 	}
@@ -469,7 +463,7 @@ func (s *SlackAPIClient) formatContextualMessage(taskInfos []TaskUpdateInfo, per
 	}
 }
 
-func (s *SlackAPIClient) formatPersonalMessage(taskInfos []TaskUpdateInfo, period string, userID string) SlackMessage {
+func (s *SlackAPIClient) formatPersonalMessage(taskInfos []TaskUpdateInfo, period string) SlackMessage {
 	headerText := fmt.Sprintf("📊 Your %s task update", period)
 
 	// Simplified blocks for ephemeral messages - avoid unsupported block types
@@ -511,45 +505,6 @@ func (s *SlackAPIClient) formatSimpleTaskBlock(task TaskUpdateInfo) []Block {
 
 	// Time information with user breakdown if multiple users
 	timeInfo := fmt.Sprintf("• %s: %s\n• %s: %s\n", task.CurrentPeriod, task.CurrentTime, task.PreviousPeriod, task.PreviousTime)
-
-	// Add user breakdown if there are multiple users
-	if len(task.UserBreakdown) > 1 {
-		var userContribs []string
-		var sortedUserIDs []int
-
-		// Collect and sort user IDs for consistent ordering
-		for userID := range task.UserBreakdown {
-			sortedUserIDs = append(sortedUserIDs, userID)
-		}
-		sort.Ints(sortedUserIDs)
-
-		// Get database connection for user name lookups
-		db, err := GetDB()
-		var userDisplayNames map[int]string
-		if err == nil {
-			userDisplayNames = GetAllUserDisplayNames(db, sortedUserIDs)
-		}
-
-		for _, userID := range sortedUserIDs {
-			contrib := task.UserBreakdown[userID]
-			// Only show users who contributed time in the current period
-			if contrib.CurrentTime != "0h 0m" {
-				userName := fmt.Sprintf("user%d", userID) // fallback
-				if userDisplayNames != nil {
-					if displayName, exists := userDisplayNames[userID]; exists {
-						userName = displayName
-					}
-				}
-				userContribs = append(userContribs, fmt.Sprintf("%s: %s", userName, contrib.CurrentTime))
-			}
-		}
-
-		if len(userContribs) > 0 {
-			timeInfo = fmt.Sprintf("• %s: %s [%s]\n• %s: %s\n",
-				task.CurrentPeriod, task.CurrentTime, strings.Join(userContribs, ", "),
-				task.PreviousPeriod, task.PreviousTime)
-		}
-	}
 	taskInfo.WriteString(timeInfo)
 
 	if task.DaysWorked > 0 {
@@ -589,8 +544,8 @@ func (s *SlackAPIClient) formatSimpleTaskBlock(task TaskUpdateInfo) []Block {
 }
 
 // formatPersonalThreadMessage creates a message for personal updates that can be sent in thread
-func (s *SlackAPIClient) formatPersonalThreadMessage(taskInfos []TaskUpdateInfo, period string, userID string) SlackMessage {
-	headerText := fmt.Sprintf("📊 %s Task Update for <@%s> (Personal Report)", strings.Title(period), userID)
+func (s *SlackAPIClient) formatPersonalThreadMessage(taskInfos []TaskUpdateInfo, period string) SlackMessage {
+	headerText := fmt.Sprintf("📊 %s Task Update (Personal Report)", strings.Title(period))
 
 	var messageText strings.Builder
 	messageText.WriteString(fmt.Sprintf("*%s*\n\n", headerText))
@@ -598,7 +553,7 @@ func (s *SlackAPIClient) formatPersonalThreadMessage(taskInfos []TaskUpdateInfo,
 	blocks := []Block{
 		{
 			Type: "section",
-			Text: &Text{Type: "mrkdwn", Text: fmt.Sprintf("*%s*\n_This is <@%s>'s personal update_", headerText, userID)},
+			Text: &Text{Type: "mrkdwn", Text: fmt.Sprintf("*%s*\n_This is a personal update_", headerText)},
 		},
 		{Type: "divider"},
 	}

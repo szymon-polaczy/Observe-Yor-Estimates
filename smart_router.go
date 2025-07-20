@@ -508,7 +508,7 @@ func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, perio
 		projectGroups := groupTasksByTopParent(taskInfos, allTasks)
 
 		// Test if single message would work
-		testMessage := sr.slackClient.formatContextualMessage(taskInfos, periodInfo.DisplayName, ctx.UserID)
+		testMessage := sr.slackClient.formatContextualMessage(taskInfos, periodInfo.DisplayName)
 		validation := validateSlackMessage(testMessage)
 
 		if validation.IsValid && len(projectGroups) <= 15 && len(taskInfos) <= 25 {

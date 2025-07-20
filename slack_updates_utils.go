@@ -581,51 +581,10 @@ func formatSingleTaskBlock(task TaskUpdateInfo) Block {
 	var taskInfo strings.Builder
 	taskInfo.WriteString(fmt.Sprintf("*%s*\n", taskName))
 
-	// Time information with user breakdown if multiple users
-	timeInfo := fmt.Sprintf("• %s: %s | %s: %s",
+	// Time information
+	timeInfo := fmt.Sprintf("• %s: *%s* | %s: *%s*",
 		task.CurrentPeriod, task.CurrentTime,
 		task.PreviousPeriod, task.PreviousTime)
-
-	// Add user breakdown if there are multiple users
-	if len(task.UserBreakdown) > 1 {
-		timeInfo += " ["
-		var userContribs []string
-		var sortedUserIDs []int
-
-		// Collect and sort user IDs for consistent ordering
-		for userID := range task.UserBreakdown {
-			sortedUserIDs = append(sortedUserIDs, userID)
-		}
-		sort.Ints(sortedUserIDs)
-
-		// Get database connection for user name lookups
-		db, err := GetDB()
-		var userDisplayNames map[int]string
-		if err == nil {
-			userDisplayNames = GetAllUserDisplayNames(db, sortedUserIDs)
-		}
-
-		for _, userID := range sortedUserIDs {
-			contrib := task.UserBreakdown[userID]
-			// Only show users who contributed time in the current period
-			if contrib.CurrentTime != "0h 0m" {
-				userName := fmt.Sprintf("user%d", userID) // fallback
-				if userDisplayNames != nil {
-					if displayName, exists := userDisplayNames[userID]; exists {
-						userName = displayName
-					}
-				}
-				userContribs = append(userContribs, fmt.Sprintf("%s: %s", userName, contrib.CurrentTime))
-			}
-		}
-
-		if len(userContribs) > 0 {
-			timeInfo += strings.Join(userContribs, ", ") + "]"
-		} else {
-			// Remove the opening bracket if no users contributed
-			timeInfo = strings.TrimSuffix(timeInfo, " [")
-		}
-	}
 	taskInfo.WriteString(timeInfo)
 	taskInfo.WriteString("\n")
 
@@ -776,47 +735,6 @@ func appendTaskTextMessage(builder *strings.Builder, task TaskUpdateInfo) {
 	}
 
 	timeText := fmt.Sprintf("\nTime worked: %s: %s, %s: %s", task.CurrentPeriod, task.CurrentTime, task.PreviousPeriod, task.PreviousTime)
-
-	// Add user breakdown if there are multiple users
-	if len(task.UserBreakdown) > 1 {
-		timeText += " ["
-		var userContribs []string
-		var sortedUserIDs []int
-
-		// Collect and sort user IDs for consistent ordering
-		for userID := range task.UserBreakdown {
-			sortedUserIDs = append(sortedUserIDs, userID)
-		}
-		sort.Ints(sortedUserIDs)
-
-		// Get database connection for user name lookups
-		db, err := GetDB()
-		var userDisplayNames map[int]string
-		if err == nil {
-			userDisplayNames = GetAllUserDisplayNames(db, sortedUserIDs)
-		}
-
-		for _, userID := range sortedUserIDs {
-			contrib := task.UserBreakdown[userID]
-			// Only show users who contributed time in the current period
-			if contrib.CurrentTime != "0h 0m" {
-				userName := fmt.Sprintf("user%d", userID) // fallback
-				if userDisplayNames != nil {
-					if displayName, exists := userDisplayNames[userID]; exists {
-						userName = displayName
-					}
-				}
-				userContribs = append(userContribs, fmt.Sprintf("%s: %s", userName, contrib.CurrentTime))
-			}
-		}
-
-		if len(userContribs) > 0 {
-			timeText += strings.Join(userContribs, ", ") + "]"
-		} else {
-			// Remove the opening bracket if no users contributed
-			timeText = strings.TrimSuffix(timeText, " [")
-		}
-	}
 
 	builder.WriteString(timeText)
 	builder.WriteString("\n\n")
