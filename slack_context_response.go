@@ -208,25 +208,7 @@ func (s *SlackAPIClient) SendFinalUpdate(ctx *ConversationContext, taskInfos []T
 }
 
 // sendProjectSplitMessages sends separate messages for each project to avoid limits
-func (s *SlackAPIClient) sendProjectSplitMessages(ctx *ConversationContext, projectGroups map[string][]TaskUpdateInfo, period string, allTasks []TaskUpdateInfo) error {
-	// Send header message first
-	headerMessage := s.formatReportHeaderMessage(period, len(allTasks), len(projectGroups))
-
-	payload := map[string]interface{}{
-		"channel": ctx.ChannelID,
-		"text":    headerMessage.Text,
-		"blocks":  headerMessage.Blocks,
-	}
-
-	if ctx.ThreadTS != "" {
-		payload["thread_ts"] = ctx.ThreadTS
-	}
-
-	err := s.sendSlackAPIRequest("chat.postMessage", payload)
-	if err != nil {
-		return fmt.Errorf("failed to send header message: %w", err)
-	}
-
+func (s *SlackAPIClient) sendProjectSplitMessages(ctx *ConversationContext, projectGroups map[string][]TaskUpdateInfo, period string) error {
 	// Sort project names for consistent output
 	var projectNames []string
 	for project := range projectGroups {
@@ -319,28 +301,6 @@ func (s *SlackAPIClient) sendChunkedMessage(ctx *ConversationContext, message Sl
 
 	// Increased delay between project messages for better visual separation
 	time.Sleep(100 * time.Millisecond)
-}
-
-// formatReportHeaderMessage creates the header message for split reports
-func (s *SlackAPIClient) formatReportHeaderMessage(period string, totalTasks, totalProjects int) SlackMessage {
-	headerText := fmt.Sprintf("📊 %s Task Update", strings.Title(period))
-
-	blocks := []Block{
-		{
-			Type: "header",
-			Text: &Text{Type: "plain_text", Text: fmt.Sprintf("%s Task Update", strings.Title(period))},
-		},
-		{
-			Type: "section",
-			Text: &Text{Type: "mrkdwn", Text: fmt.Sprintf("*%s*\n📋 **%d tasks**\n_Report split by project for better readability_", headerText, totalTasks)},
-		},
-		{Type: "divider"},
-	}
-
-	return SlackMessage{
-		Text:   fmt.Sprintf("%s - %d tasks", headerText, totalTasks),
-		Blocks: blocks,
-	}
 }
 
 // formatSingleProjectMessage creates a message for a single project
