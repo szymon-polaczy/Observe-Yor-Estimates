@@ -484,9 +484,9 @@ func checkMissingTasksAndSuggestRemediation(db *sql.DB, missingTaskCount int, lo
 	}
 
 	if taskCount == 0 {
-		logger.Warnf("REMEDIATION SUGGESTION: No tasks found in database. Run a full tasks sync first: `./bin/observe-yor-estimates sync-tasks` or `./bin/observe-yor-estimates full-sync`")
+		logger.Warnf("REMEDIATION SUGGESTION: No tasks found in database. Run a full tasks sync first: `./observe-yor-estimates sync-tasks` or `./observe-yor-estimates full-sync`")
 	} else if missingTaskCount > 10 {
-		logger.Warnf("REMEDIATION SUGGESTION: High number of missing task references (%d). Consider running a full tasks sync to ensure all tasks are up to date: `./bin/observe-yor-estimates sync-tasks`", missingTaskCount)
+		logger.Warnf("REMEDIATION SUGGESTION: High number of missing task references (%d). Consider running a full tasks sync to ensure all tasks are up to date: `./observe-yor-estimates sync-tasks`", missingTaskCount)
 	} else {
 		logger.Warnf("REMEDIATION SUGGESTION: Some time entries reference missing tasks (%d). This may be normal if tasks were deleted/archived in TimeCamp but still have historical time entries.", missingTaskCount)
 	}
@@ -523,7 +523,7 @@ type PeriodDateRanges struct {
 // calculateDateRanges calculates date ranges for different period types
 func calculateDateRanges(periodType string, days int) PeriodDateRanges {
 	now := time.Now()
-	
+
 	switch periodType {
 	case "today":
 		today := now.Format("2006-01-02")
@@ -532,7 +532,7 @@ func calculateDateRanges(periodType string, days int) PeriodDateRanges {
 			Current:  DateRange{Start: today, End: today, Label: "Today"},
 			Previous: DateRange{Start: yesterday, End: yesterday, Label: "Yesterday"},
 		}
-		
+
 	case "yesterday":
 		yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
 		dayBefore := now.AddDate(0, 0, -2).Format("2006-01-02")
@@ -540,7 +540,7 @@ func calculateDateRanges(periodType string, days int) PeriodDateRanges {
 			Current:  DateRange{Start: yesterday, End: yesterday, Label: "Yesterday"},
 			Previous: DateRange{Start: dayBefore, End: dayBefore, Label: "Day Before"},
 		}
-		
+
 	case "this_week":
 		// Current week: Monday to today
 		weekStart := now.AddDate(0, 0, -int(now.Weekday()-time.Monday))
@@ -548,16 +548,16 @@ func calculateDateRanges(periodType string, days int) PeriodDateRanges {
 			weekStart = weekStart.AddDate(0, 0, -6) // Go back to Monday
 		}
 		currentWeekEnd := now.Format("2006-01-02")
-		
-		// Last week: Monday to Sunday of previous week  
+
+		// Last week: Monday to Sunday of previous week
 		lastWeekStart := weekStart.AddDate(0, 0, -7).Format("2006-01-02")
 		lastWeekEnd := weekStart.AddDate(0, 0, -1).Format("2006-01-02")
-		
+
 		return PeriodDateRanges{
 			Current:  DateRange{Start: weekStart.Format("2006-01-02"), End: currentWeekEnd, Label: "This Week"},
 			Previous: DateRange{Start: lastWeekStart, End: lastWeekEnd, Label: "Last Week"},
 		}
-		
+
 	case "last_week":
 		// Last week: Monday to Sunday of previous week
 		weekStart := now.AddDate(0, 0, -int(now.Weekday()-time.Monday))
@@ -566,62 +566,62 @@ func calculateDateRanges(periodType string, days int) PeriodDateRanges {
 		}
 		lastWeekStart := weekStart.AddDate(0, 0, -7).Format("2006-01-02")
 		lastWeekEnd := weekStart.AddDate(0, 0, -1).Format("2006-01-02")
-		
+
 		// Previous week: Monday to Sunday before last week
 		prevWeekStart := weekStart.AddDate(0, 0, -14).Format("2006-01-02")
 		prevWeekEnd := weekStart.AddDate(0, 0, -8).Format("2006-01-02")
-		
+
 		return PeriodDateRanges{
 			Current:  DateRange{Start: lastWeekStart, End: lastWeekEnd, Label: "Last Week"},
 			Previous: DateRange{Start: prevWeekStart, End: prevWeekEnd, Label: "Previous Week"},
 		}
-		
+
 	case "this_month":
 		// Current month: 1st to today
 		monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 		currentMonthEnd := now.Format("2006-01-02")
-		
+
 		// Last month: 1st to last day of previous month
 		lastMonthStart := monthStart.AddDate(0, -1, 0).Format("2006-01-02")
 		lastMonthEnd := monthStart.AddDate(0, 0, -1).Format("2006-01-02")
-		
+
 		return PeriodDateRanges{
 			Current:  DateRange{Start: monthStart.Format("2006-01-02"), End: currentMonthEnd, Label: "This Month"},
 			Previous: DateRange{Start: lastMonthStart, End: lastMonthEnd, Label: "Last Month"},
 		}
-		
+
 	case "last_month":
 		// Last month: 1st to last day of previous month
 		monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 		lastMonthStart := monthStart.AddDate(0, -1, 0).Format("2006-01-02")
 		lastMonthEnd := monthStart.AddDate(0, 0, -1).Format("2006-01-02")
-		
+
 		// Previous month: 1st to last day before last month
 		prevMonthStart := monthStart.AddDate(0, -2, 0).Format("2006-01-02")
 		prevMonthEnd := monthStart.AddDate(-1, 0, 0).Format("2006-01-02")
-		
+
 		return PeriodDateRanges{
 			Current:  DateRange{Start: lastMonthStart, End: lastMonthEnd, Label: "Last Month"},
 			Previous: DateRange{Start: prevMonthStart, End: prevMonthEnd, Label: "Previous Month"},
 		}
-		
+
 	case "last_x_days":
 		// Last X days: X days ago to today
 		currentStart := now.AddDate(0, 0, -days).Format("2006-01-02")
 		currentEnd := now.Format("2006-01-02")
-		
+
 		// Previous X days: 2X days ago to X days ago
 		previousStart := now.AddDate(0, 0, -days*2).Format("2006-01-02")
 		previousEnd := now.AddDate(0, 0, -days).Format("2006-01-02")
-		
+
 		currentLabel := fmt.Sprintf("Last %d Days", days)
 		previousLabel := fmt.Sprintf("Previous %d Days", days)
-		
+
 		return PeriodDateRanges{
 			Current:  DateRange{Start: currentStart, End: currentEnd, Label: currentLabel},
 			Previous: DateRange{Start: previousStart, End: previousEnd, Label: previousLabel},
 		}
-		
+
 	default:
 		// Fallback to yesterday
 		yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
@@ -986,7 +986,7 @@ func GetTaskTimeEntriesWithProject(db *sql.DB, projectTaskID *int) ([]TaskUpdate
 	// Build project filtering clause and args - apply only at the end
 	var projectFilterClause string
 	var args []interface{}
-	
+
 	if len(projectTaskIDs) > 0 {
 		placeholders := make([]string, len(projectTaskIDs))
 		for i, taskID := range projectTaskIDs {
@@ -1152,7 +1152,7 @@ func GetWeeklyTaskTimeEntriesWithProject(db *sql.DB, projectTaskID *int) ([]Task
 	// Build project filtering clause and args - apply only at the end
 	var projectFilterClause string
 	var args []interface{}
-	
+
 	if len(projectTaskIDs) > 0 {
 		placeholders := make([]string, len(projectTaskIDs))
 		for i, taskID := range projectTaskIDs {
@@ -1322,7 +1322,7 @@ func GetMonthlyTaskTimeEntriesWithProject(db *sql.DB, projectTaskID *int) ([]Tas
 	// Build project filtering clause and args - apply only at the end
 	var projectFilterClause string
 	var args []interface{}
-	
+
 	if len(projectTaskIDs) > 0 {
 		placeholders := make([]string, len(projectTaskIDs))
 		for i, taskID := range projectTaskIDs {
@@ -1496,7 +1496,7 @@ func GetDynamicTaskTimeEntriesWithProject(db *sql.DB, periodType string, days in
 	var projectCTE string
 	var timeEntriesFilter string
 	var args []interface{}
-	
+
 	if projectTaskID != nil {
 		// Create a CTE that gets all task IDs for the project once
 		projectCTE = `
@@ -1530,11 +1530,11 @@ SELECT
     COALESCE(tp.total_duration, 0) AS previous_duration
 FROM current_period tc
 FULL OUTER JOIN previous_period tp ON tc.task_id = tp.task_id AND tc.user_id = tp.user_id
-WHERE COALESCE(tc.total_duration, 0) > 0;`, 
+WHERE COALESCE(tc.total_duration, 0) > 0;`,
 		projectCTE,
 		dateRanges.Current.Start, dateRanges.Current.End, timeEntriesFilter,
 		dateRanges.Previous.Start, dateRanges.Previous.End, timeEntriesFilter)
-	
+
 	userRows, err := db.Query(userBreakdownQuery, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query user breakdown: %w", err)
@@ -1595,13 +1595,12 @@ LEFT JOIN days_worked dw ON COALESCE(tc.task_id, tp.task_id) = dw.task_id
 LEFT JOIN tasks t ON COALESCE(tc.task_id, tp.task_id) = t.task_id
 WHERE COALESCE(tc.total_duration, 0) > 0
   AND t.task_id IS NOT NULL
-ORDER BY COALESCE(tc.total_duration, 0) DESC;`, 
+ORDER BY COALESCE(tc.total_duration, 0) DESC;`,
 		projectCTE,
 		dateRanges.Current.Start, dateRanges.Current.End, timeEntriesFilter,
 		dateRanges.Previous.Start, dateRanges.Previous.End, timeEntriesFilter,
 		dateRanges.Current.Start, dateRanges.Current.End, timeEntriesFilter)
 
-	
 	rows, err := db.Query(mainQuery, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query dynamic task time entries: %w", err)

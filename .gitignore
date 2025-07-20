@@ -47,3 +47,7 @@ test_*
 
 # Build artifacts
 /tmp/
+
+# AIs
+.claude/
+.opencode/
