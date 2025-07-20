@@ -28,6 +28,7 @@ func SendTaskMessage(tasks []TaskInfo, period string) error {
 		if err := validateAndSend(message); err != nil {
 			logger := GetGlobalLogger()
 			logger.Errorf("Failed to send message for project %s: %v", project, err)
+			logger.Errorf("Message: %v", message)
 			return err
 		}
 	}
@@ -62,6 +63,7 @@ func SendTaskMessageToResponseURL(tasks []TaskInfo, period string, responseURL s
 		if err := sendSlackResponse(responseURL, message); err != nil {
 			logger := GetGlobalLogger()
 			logger.Errorf("Failed to send message for project %s via response URL: %v", project, err)
+			logger.Errorf("Message: %v", message)
 			return err
 		}
 	}
