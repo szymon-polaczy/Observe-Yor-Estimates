@@ -277,6 +277,69 @@ func handleCliCommands(args []string, logger *Logger) {
 		for _, project := range projects {
 			fmt.Printf("- %s (TimeCamp Task ID: %d)\n", project.Name, project.TimeCampTaskID)
 		}
+	case "test-command":
+		if len(args) < 2 {
+			logger.Error("Error: test-command requires a command to test (e.g., test-command \"/oye daily\")")
+			return
+		}
+		
+		// Join remaining args as the command to test
+		testCommand := strings.Join(args[1:], " ")
+		logger.Infof("Testing command: %s", testCommand)
+		
+		// Parse the command similar to how Slack would
+		if !strings.HasPrefix(testCommand, "/oye ") {
+			logger.Error("Error: test command must start with /oye")
+			return
+		}
+		
+		// Extract the text after /oye
+		commandText := strings.TrimPrefix(testCommand, "/oye ")
+		commandText = strings.TrimSpace(commandText)
+		
+		// Create a smart router to test parsing
+		router := NewSmartRouter()
+		
+		// Parse the period from the command
+		periodInfo := router.parsePeriodFromText(commandText, "")
+		
+		// Display parsing results
+		fmt.Printf("\nCommand parsing results:\n")
+		fmt.Printf("Input: %s\n", testCommand)
+		fmt.Printf("Parsed text: %s\n", commandText)
+		fmt.Printf("Period Type: %s\n", periodInfo.Type)
+		fmt.Printf("Display Name: %s\n", periodInfo.DisplayName)
+		fmt.Printf("Days: %d\n", periodInfo.Days)
+		
+		// Test actual processing (without sending to Slack)
+		req := &UnifiedUpdateRequest{
+			Command:     "update",
+			Text:        commandText,
+			ProjectName: "",
+			UserID:      "test-user",
+			Source:      "cli",
+		}
+		
+		result := router.ProcessUnifiedUpdate(req)
+		if !result.Success {
+			logger.Errorf("Processing failed: %s", result.ErrorMsg)
+			return
+		}
+		
+		fmt.Printf("\nProcessing results:\n")
+		fmt.Printf("Success: %v\n", result.Success)
+		fmt.Printf("Period: %s\n", result.PeriodInfo.DisplayName)
+		fmt.Printf("Tasks found: %d\n", len(result.TaskInfos))
+		
+		if len(result.TaskInfos) > 0 {
+			fmt.Printf("\nFirst few tasks:\n")
+			for i, task := range result.TaskInfos {
+				if i >= 3 {
+					break
+				}
+				fmt.Printf("- %s (%s)\n", task.Name, task.EstimationInfo)
+			}
+		}
 	default:
 		logger.Warnf("Unknown command line argument: %s", command)
 		showHelp()
