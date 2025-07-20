@@ -303,11 +303,6 @@ func (sr *SmartRouter) handleAvailableProjects(ctx *ConversationContext) error {
 		if err := sr.slackClient.sendSlackAPIRequest("chat.postEphemeral", payload); err != nil {
 			return err
 		}
-
-		// Small delay between messages to avoid rate limiting
-		if i < len(projectChunks)-1 {
-			time.Sleep(500 * time.Millisecond)
-		}
 	}
 
 	return nil
@@ -373,14 +368,6 @@ func (sr *SmartRouter) HandleLongRunningUpdate(ctx *ConversationContext, periodI
 }
 
 func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, periodInfo PeriodInfo) {
-	// Show progress updates
-	if ctx.ProjectName != "" {
-		sr.slackClient.UpdateProgress(ctx, fmt.Sprintf("📊 Querying database for project '%s'...", ctx.ProjectName))
-	} else {
-		sr.slackClient.UpdateProgress(ctx, "📊 Querying database...")
-	}
-	time.Sleep(500 * time.Millisecond)
-
 	// Get database connection
 	db, err := GetDB()
 	if err != nil {
@@ -391,10 +378,6 @@ func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, perio
 	var taskInfos []TaskUpdateInfo
 
 	if ctx.ProjectName != "" && ctx.ProjectName != "all" {
-		// Project-specific query
-		sr.slackClient.UpdateProgress(ctx, fmt.Sprintf("🔍 Finding project '%s'...", ctx.ProjectName))
-		time.Sleep(500 * time.Millisecond)
-
 		// Find the project
 		projects, err := FindProjectsByName(db, ctx.ProjectName)
 		if err != nil {
@@ -418,8 +401,6 @@ func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, perio
 		}
 
 		project := projects[0]
-		sr.slackClient.UpdateProgress(ctx, fmt.Sprintf("📈 Analyzing time entries for '%s'...", project.Name))
-		time.Sleep(1 * time.Second)
 
 		// Get project-specific task data
 		taskInfos, err = getTaskChangesWithProject(db, periodInfo.Type, &project.TimeCampTaskID)
@@ -429,10 +410,6 @@ func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, perio
 			return
 		}
 	} else {
-		// All projects query - check if user has project assignments
-		sr.slackClient.UpdateProgress(ctx, "📈 Analyzing time entries...")
-		time.Sleep(1 * time.Second)
-
 		// Check if user has specific project assignments
 		userProjects, err := GetUserProjects(db, ctx.UserID)
 		if err != nil {
@@ -442,9 +419,6 @@ func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, perio
 
 		// If user has specific project assignments, filter to only those projects
 		if len(userProjects) > 0 {
-			sr.slackClient.UpdateProgress(ctx, fmt.Sprintf("📊 Filtering to your %d assigned projects...", len(userProjects)))
-			time.Sleep(500 * time.Millisecond)
-
 			// Get combined task data for all assigned projects
 			var allProjectTasks []TaskUpdateInfo
 			for _, project := range userProjects {
@@ -466,9 +440,6 @@ func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, perio
 			}
 		}
 	}
-
-	sr.slackClient.UpdateProgress(ctx, "✍️ Formatting report...")
-	time.Sleep(500 * time.Millisecond)
 
 	// Handle the case where there are no tasks
 	if len(taskInfos) == 0 {
@@ -531,10 +502,6 @@ func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, perio
 					sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send %s report (partial)", periodInfo.DisplayName))
 					return
 				}
-				// Add delay between messages to prevent rate limiting
-				if i < len(messages)-1 {
-					time.Sleep(500 * time.Millisecond)
-				}
 			}
 		}
 
@@ -577,11 +544,7 @@ func (sr *SmartRouter) processFullSyncWithProgress(ctx *ConversationContext) {
 	startTime := time.Now()
 
 	// Show detailed progress
-	sr.slackClient.UpdateProgress(ctx, "📊 Syncing tasks from TimeCamp...")
-	time.Sleep(1 * time.Second)
-
-	sr.slackClient.UpdateProgress(ctx, "⏱️ Syncing time entries...")
-	time.Sleep(2 * time.Second)
+	sr.slackClient.UpdateProgress(ctx, "📊 Syncing started...")
 
 	// Perform the actual sync
 	if err := FullSyncAll(); err != nil {
@@ -758,14 +721,6 @@ func (sr *SmartRouter) HandleThresholdRequest(req *SlackCommandRequest) error {
 }
 
 func (sr *SmartRouter) processThresholdWithProgress(ctx *ConversationContext, threshold float64, periodInfo PeriodInfo) {
-	// Show progress updates
-	if ctx.ProjectName != "" && ctx.ProjectName != "all" {
-		sr.slackClient.UpdateProgress(ctx, fmt.Sprintf("📊 Querying database for project '%s' tasks with estimations...", ctx.ProjectName))
-	} else {
-		sr.slackClient.UpdateProgress(ctx, "📊 Querying database for tasks with estimations...")
-	}
-	time.Sleep(500 * time.Millisecond)
-
 	// Get database connection
 	db, err := GetDB()
 	if err != nil {
@@ -776,10 +731,6 @@ func (sr *SmartRouter) processThresholdWithProgress(ctx *ConversationContext, th
 	var taskInfos []TaskUpdateInfo
 
 	if ctx.ProjectName != "" && ctx.ProjectName != "all" {
-		// Project-specific threshold query
-		sr.slackClient.UpdateProgress(ctx, fmt.Sprintf("🔍 Finding project '%s'...", ctx.ProjectName))
-		time.Sleep(500 * time.Millisecond)
-
 		// Find the project
 		projects, err := FindProjectsByName(db, ctx.ProjectName)
 		if err != nil {
@@ -802,15 +753,12 @@ func (sr *SmartRouter) processThresholdWithProgress(ctx *ConversationContext, th
 		}
 
 		project := projects[0]
-		sr.slackClient.UpdateProgress(ctx, fmt.Sprintf("📈 Analyzing %s project tasks over %.0f%% threshold...", project.Name, threshold))
-		time.Sleep(1 * time.Second)
 
 		// Get project-specific tasks over threshold
 		taskInfos, err = GetTasksOverThresholdWithProject(db, threshold, periodInfo.Type, periodInfo.Days, &project.TimeCampTaskID)
 	} else {
 		// All projects threshold query - check if user has project assignments
 		sr.slackClient.UpdateProgress(ctx, fmt.Sprintf("📈 Analyzing tasks over %.0f%% threshold...", threshold))
-		time.Sleep(1 * time.Second)
 
 		// Check if user has specific project assignments
 		userProjects, err := GetUserProjects(db, ctx.UserID)
@@ -821,9 +769,6 @@ func (sr *SmartRouter) processThresholdWithProgress(ctx *ConversationContext, th
 
 		// If user has specific project assignments, filter to only those projects
 		if len(userProjects) > 0 {
-			sr.slackClient.UpdateProgress(ctx, fmt.Sprintf("🔍 Checking your %d assigned projects for %.0f%% threshold crossings...", len(userProjects), threshold))
-			time.Sleep(500 * time.Millisecond)
-
 			// Get combined threshold data for all assigned projects
 			var allProjectTasks []TaskUpdateInfo
 			for _, project := range userProjects {
@@ -845,9 +790,6 @@ func (sr *SmartRouter) processThresholdWithProgress(ctx *ConversationContext, th
 		sr.slackClient.SendErrorResponse(ctx, errorMessage)
 		return
 	}
-
-	sr.slackClient.UpdateProgress(ctx, "✍️ Formatting threshold report...")
-	time.Sleep(500 * time.Millisecond)
 
 	// Handle the case where there are no tasks
 	if len(taskInfos) == 0 {
@@ -908,10 +850,6 @@ func (sr *SmartRouter) processThresholdWithProgress(ctx *ConversationContext, th
 					sr.logger.Errorf("Webhook fallback failed for message %d: %v", i+1, webhookErr)
 					sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send threshold report (partial)"))
 					return
-				}
-				// Add delay between messages to prevent rate limiting
-				if i < len(messages)-1 {
-					time.Sleep(500 * time.Millisecond)
 				}
 			}
 		}

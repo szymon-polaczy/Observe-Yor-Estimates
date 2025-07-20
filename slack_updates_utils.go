@@ -376,7 +376,6 @@ func SendSlackUpdate(period string, responseURL string, asJSON bool) {
 			if err := sendDelayedResponseShared(responseURL, message); err != nil {
 				logger.Errorf("Failed to send delayed response: %v", err)
 			}
-			time.Sleep(1 * time.Second) // Increased spacing between project messages
 		}
 		return
 	}
@@ -398,7 +397,6 @@ func SendSlackUpdate(period string, responseURL string, asJSON bool) {
 			logger.Errorf("Failed to send Slack message: %v", err)
 			// Continue sending other messages
 		}
-		time.Sleep(1500 * time.Millisecond) // Increased delay for better visual separation between projects
 	}
 
 	logger.Infof("%s Slack update sent successfully", period)
@@ -2078,9 +2076,6 @@ func sendThresholdAlertsForGroup(thresholdAlerts []ThresholdAlert, threshold int
 				}
 			}
 		}
-
-		// Increased delay for better visual separation between projects
-		time.Sleep(1500 * time.Millisecond)
 	}
 
 	return nil

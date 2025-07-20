@@ -316,9 +316,6 @@ func (s *SlackAPIClient) sendChunkedMessage(ctx *ConversationContext, message Sl
 	if err != nil {
 		s.logger.Errorf("Failed to send project message chunk: %v", err)
 	}
-
-	// Increased delay between project messages for better visual separation
-	time.Sleep(500 * time.Millisecond)
 }
 
 // formatReportHeaderMessage creates the header message for split reports
@@ -660,12 +657,6 @@ func (s *SlackAPIClient) SendThresholdNoResultsMessage(ctx *ConversationContext,
 	payload := map[string]interface{}{
 		"channel": ctx.ChannelID,
 		"text":    message,
-		"blocks": []Block{
-			{
-				Type: "section",
-				Text: &Text{Type: "mrkdwn", Text: fmt.Sprintf("🎯 *Good news!* No tasks found over %.0f%% threshold for %s period.\n\nAll your estimated tasks are within budget! 🎉", threshold, period)},
-			},
-		},
 	}
 
 	if ctx.ThreadTS != "" {
