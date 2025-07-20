@@ -685,14 +685,25 @@ func (sr *SmartRouter) parsePeriodFromText(text, command string) PeriodInfo {
 	}
 
 	// Check for backwards compatibility with old period names
-	if strings.Contains(periodText, "weekly") || strings.Contains(periodText, "week") {
+	// Be more specific to avoid false matches
+	if strings.Contains(text, "weekly") {
 		return PeriodInfo{Type: "last_week", Days: 7, DisplayName: "Last Week"}
 	}
-	if strings.Contains(periodText, "monthly") || strings.Contains(periodText, "month") {
+	if strings.Contains(text, "monthly") {
 		return PeriodInfo{Type: "last_month", Days: 30, DisplayName: "Last Month"}
 	}
-	if strings.Contains(periodText, "daily") || strings.Contains(periodText, "day") {
+	if strings.Contains(text, "daily") {
 		return PeriodInfo{Type: "yesterday", Days: 1, DisplayName: "Yesterday"}
+	}
+
+	// Only match generic "week" or "month" if they're not part of other patterns
+	if !strings.Contains(text, "this") && !strings.Contains(text, "last") {
+		if strings.Contains(periodText, "week") {
+			return PeriodInfo{Type: "last_week", Days: 7, DisplayName: "Last Week"}
+		}
+		if strings.Contains(periodText, "month") {
+			return PeriodInfo{Type: "last_month", Days: 30, DisplayName: "Last Month"}
+		}
 	}
 
 	// Check command name for backwards compatibility

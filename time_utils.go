@@ -235,12 +235,17 @@ func ParsePeriodFromText(text string) PeriodInfo {
 		return PeriodInfo{Type: "this_month", Days: 0, DisplayName: "This Month"}
 	case contains(text, "last month"):
 		return PeriodInfo{Type: "last_month", Days: 30, DisplayName: "Last Month"}
-	case contains(text, "week"):
+	case contains(text, "weekly"):
 		return PeriodInfo{Type: "last_week", Days: 7, DisplayName: "Last Week"}
-	case contains(text, "month"):
+	case contains(text, "monthly"):
 		return PeriodInfo{Type: "last_month", Days: 30, DisplayName: "Last Month"}
-	case contains(text, "day"):
+	case contains(text, "daily"):
 		return PeriodInfo{Type: "yesterday", Days: 1, DisplayName: "Yesterday"}
+	// Only match generic "week" or "month" if they're not part of other patterns
+	case !contains(text, "this") && !contains(text, "last") && contains(text, "week"):
+		return PeriodInfo{Type: "last_week", Days: 7, DisplayName: "Last Week"}
+	case !contains(text, "this") && !contains(text, "last") && contains(text, "month"):
+		return PeriodInfo{Type: "last_month", Days: 30, DisplayName: "Last Month"}
 	default:
 		return PeriodInfo{Type: "yesterday", Days: 1, DisplayName: "Yesterday"}
 	}
