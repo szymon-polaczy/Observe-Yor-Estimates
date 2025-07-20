@@ -477,7 +477,7 @@ func getTaskChanges(db *sql.DB, period string, days int) ([]TaskUpdateInfo, erro
 	return GetDynamicTaskTimeEntriesWithProject(db, period, days, nil)
 }
 
-// getTaskChangesWithProject unified dynamic function  
+// getTaskChangesWithProject unified dynamic function
 func getTaskChangesWithProject(db *sql.DB, period string, days int, projectTaskID *int) ([]TaskUpdateInfo, error) {
 	return GetDynamicTaskTimeEntriesWithProject(db, period, days, projectTaskID)
 }
@@ -485,21 +485,6 @@ func getTaskChangesWithProject(db *sql.DB, period string, days int, projectTaskI
 // GroupTasksByProject groups tasks by project for compatibility
 func GroupTasksByProject(tasks []TaskInfo, allTasks map[int]Task) map[string][]TaskInfo {
 	return groupTasksByProject(tasks)
-}
-
-// groupTasksByTopParent groups TaskUpdateInfo by project for compatibility
-func groupTasksByTopParent(taskInfos []TaskUpdateInfo, allTasks map[int]Task) map[string][]TaskUpdateInfo {
-	groups := make(map[string][]TaskUpdateInfo)
-
-	for _, taskInfo := range taskInfos {
-		project := getProjectNameForTask(taskInfo.TaskID, allTasks)
-		if project == "" {
-			project = "Other"
-		}
-		groups[project] = append(groups[project], taskInfo)
-	}
-
-	return groups
 }
 
 // convertTaskInfoToTaskUpdateInfo converts TaskInfo back to TaskUpdateInfo for compatibility

@@ -492,7 +492,6 @@ func checkMissingTasksAndSuggestRemediation(db *sql.DB, missingTaskCount int, lo
 	}
 }
 
-
 // calculateDateRanges calculates date ranges for different period types
 func calculateDateRanges(periodType string, days int) PeriodDateRanges {
 	now := time.Now()
@@ -616,105 +615,6 @@ func formatDuration(seconds int) string {
 	minutes := (seconds % 3600) / 60
 
 	return fmt.Sprintf("%dh %dm", hours, minutes)
-}
-
-// getTaskComments retrieves unique comments for a task within a specific date range
-func getTaskComments(db *sql.DB, taskID int, fromDate, toDate string) ([]string, error) {
-	logger := GetGlobalLogger()
-
-	query := `
-		SELECT description
-		FROM time_entries
-		WHERE task_id = $1
-		AND date BETWEEN $2 AND $3
-		AND description IS NOT NULL
-		AND TRIM(description) != ''
-		ORDER BY description
-	`
-
-	rows, err := db.Query(query, taskID, fromDate, toDate)
-	if err != nil {
-		return nil, fmt.Errorf("error querying task comments: %w", err)
-	}
-	defer CloseWithErrorLog(rows, "database rows")
-
-	var comments []string
-	for rows.Next() {
-		var comment string
-		err := rows.Scan(&comment)
-		if err != nil {
-			logger.Errorf("Error scanning comment row: %v", err)
-			continue
-		}
-
-		// Only add non-empty comments
-		if strings.TrimSpace(comment) != "" {
-			comments = append(comments, strings.TrimSpace(comment))
-		}
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error during comment rows iteration: %w", err)
-	}
-
-	logger.Debugf("Retrieved %d comments for task %d between %s and %s", len(comments), taskID, fromDate, toDate)
-	return comments, nil
-}
-
-func getTaskCommentsBulk(db *sql.DB, taskIDs []int, fromDate, toDate string) (map[int][]string, error) {
-	logger := GetGlobalLogger()
-
-	if len(taskIDs) == 0 {
-		return map[int][]string{}, nil
-	}
-
-	// Build query using ANY($1) to leverage Postgres array parameter
-	query := `SELECT task_id, ARRAY_AGG(DISTINCT TRIM(description) ORDER BY TRIM(description))
-	          FROM time_entries
-	          WHERE task_id = ANY($1) AND date BETWEEN $2 AND $3 AND description IS NOT NULL AND TRIM(description) != ''
-	          GROUP BY task_id`
-
-	rows, err := db.Query(query, pq.Array(taskIDs), fromDate, toDate)
-	if err != nil {
-		return nil, fmt.Errorf("error querying bulk task comments: %w", err)
-	}
-	defer CloseWithErrorLog(rows, "bulk comments rows")
-
-	commentsMap := make(map[int][]string)
-	for rows.Next() {
-		var taskID int
-		var comments pq.StringArray
-		if err := rows.Scan(&taskID, &comments); err != nil {
-			logger.Errorf("error scanning bulk comments row: %v", err)
-			continue
-		}
-		// Convert pq.StringArray to []string
-		strComments := make([]string, len(comments))
-		for i, c := range comments {
-			strComments[i] = strings.TrimSpace(c)
-		}
-		commentsMap[taskID] = strComments
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating bulk comments rows: %w", err)
-	}
-
-	return commentsMap, nil
-}
-
-func parseEstimationStatus(currentSeconds, previousSeconds int) string {
-	// Simple status based on whether time was logged
-	if currentSeconds > 0 && previousSeconds == 0 {
-		return "new"
-	}
-	if currentSeconds > 0 {
-		return "active"
-	}
-	if currentSeconds == 0 && previousSeconds > 0 {
-		return "stalled"
-	}
-	return "idle"
 }
 
 // ensureOrphanedTimeEntriesTable creates the orphaned_time_entries table if it doesn't exist
@@ -912,33 +812,6 @@ func GetOrphanedTimeEntriesCount(db *sql.DB) (int, error) {
 	}
 	return count, nil
 }
-
-// CleanupOldOrphanedEntries removes orphaned time entries older than the specified days
-func CleanupOldOrphanedEntries(db *sql.DB, olderThanDays int) error {
-	logger := GetGlobalLogger()
-
-	query := `DELETE FROM orphaned_time_entries WHERE sync_date < $1`
-	cutoffDate := time.Now().AddDate(0, 0, -olderThanDays).Format("2006-01-02")
-
-	result, err := db.Exec(query, cutoffDate)
-	if err != nil {
-		// If table doesn't exist, that's fine
-		if strings.Contains(err.Error(), "no such table") || strings.Contains(err.Error(), "does not exist") {
-			return nil
-		}
-		return fmt.Errorf("failed to cleanup old orphaned entries: %w", err)
-	}
-
-	rowsAffected, _ := result.RowsAffected()
-	if rowsAffected > 0 {
-		logger.Infof("Cleaned up %d orphaned time entries older than %d days", rowsAffected, olderThanDays)
-	}
-
-	return nil
-}
-
-
-
 
 // GetDynamicTaskTimeEntriesWithProject fetches task time entries for any dynamic time period
 func GetDynamicTaskTimeEntriesWithProject(db *sql.DB, periodType string, days int, projectTaskID *int) ([]TaskUpdateInfo, error) {

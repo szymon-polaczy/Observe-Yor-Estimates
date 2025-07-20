@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 )
 
 type SmartRouter struct {
@@ -21,11 +20,11 @@ func NewSmartRouter() *SmartRouter {
 
 // UnifiedUpdateRequest represents a unified update request from any source
 type UnifiedUpdateRequest struct {
-	Command     string     // "update", "threshold", etc.
-	Text        string     // Raw command text for parsing
-	ProjectName string     // Optional project name
-	UserID      string     // Optional user ID for filtering
-	Source      string     // "cli" or "slack"
+	Command     string      // "update", "threshold", etc.
+	Text        string      // Raw command text for parsing
+	ProjectName string      // Optional project name
+	UserID      string      // Optional user ID for filtering
+	Source      string      // "cli" or "slack"
 	PeriodInfo  *PeriodInfo // Optional pre-parsed period info
 }
 
@@ -56,10 +55,10 @@ func (sr *SmartRouter) ProcessUnifiedUpdate(req *UnifiedUpdateRequest) *UnifiedU
 
 	// Log the request
 	if req.ProjectName != "" {
-		sr.logger.Infof("Processing %s update request for project '%s' from %s", 
+		sr.logger.Infof("Processing %s update request for project '%s' from %s",
 			periodInfo.DisplayName, req.ProjectName, req.Source)
 	} else {
-		sr.logger.Infof("Processing %s update request from %s", 
+		sr.logger.Infof("Processing %s update request from %s",
 			periodInfo.DisplayName, req.Source)
 	}
 
@@ -90,7 +89,7 @@ func (sr *SmartRouter) ProcessUnifiedUpdate(req *UnifiedUpdateRequest) *UnifiedU
 			for i, p := range projects {
 				projectNames[i] = p.Name
 			}
-			result.ErrorMsg = fmt.Sprintf("Multiple projects found matching '%s': %s. Please be more specific.", 
+			result.ErrorMsg = fmt.Sprintf("Multiple projects found matching '%s': %s. Please be more specific.",
 				req.ProjectName, strings.Join(projectNames, ", "))
 			return result
 		}
@@ -101,7 +100,7 @@ func (sr *SmartRouter) ProcessUnifiedUpdate(req *UnifiedUpdateRequest) *UnifiedU
 		// Get project-specific task data
 		taskInfos, err = getTaskChangesWithProject(db, periodInfo.Type, periodInfo.Days, &project.TimeCampTaskID)
 		if err != nil {
-			result.ErrorMsg = fmt.Sprintf("Failed to get %s changes for project '%s': %v", 
+			result.ErrorMsg = fmt.Sprintf("Failed to get %s changes for project '%s': %v",
 				periodInfo.DisplayName, project.Name, err)
 			return result
 		}
@@ -172,309 +171,6 @@ func (sr *SmartRouter) HandleUpdateRequest(req *SlackCommandRequest) error {
 	return sr.HandleLongRunningUpdate(ctx, periodInfo)
 }
 
-// HandleProjectAssignmentRequest processes project assignment commands
-func (sr *SmartRouter) HandleProjectAssignmentRequest(req *SlackCommandRequest) error {
-	ctx := &ConversationContext{
-		ChannelID: req.ChannelID,
-		UserID:    req.UserID,
-	}
-
-	parts := strings.Fields(req.Text)
-	if len(parts) == 0 {
-		return sr.slackClient.SendErrorResponse(ctx, "Please specify a command. Use `/oye help` for available commands.")
-	}
-
-	command := strings.ToLower(parts[0])
-
-	switch command {
-	case "assign":
-		return sr.handleAssignProject(ctx, parts[1:], req.UserID)
-	case "unassign":
-		return sr.handleUnassignProject(ctx, parts[1:], req.UserID)
-	case "my-projects":
-		return sr.handleMyProjects(ctx, req.UserID)
-	case "available-projects":
-		return sr.handleAvailableProjects(ctx)
-	default:
-		return sr.slackClient.SendErrorResponse(ctx, "Unknown command. Use `/oye help` for available commands.")
-	}
-}
-
-func (sr *SmartRouter) handleAssignProject(ctx *ConversationContext, args []string, userID string) error {
-	if len(args) == 0 {
-		return sr.slackClient.SendErrorResponse(ctx, "Please specify a project name. Usage: `/oye assign \"Project Name\"`")
-	}
-
-	projectName := strings.Join(args, " ")
-	projectName = strings.Trim(projectName, "\"'")
-
-	db, err := GetDB()
-	if err != nil {
-		return sr.slackClient.SendErrorResponse(ctx, "Database connection failed")
-	}
-
-	// Find the project
-	projects, err := FindProjectsByName(db, projectName)
-	if err != nil {
-		return sr.slackClient.SendErrorResponse(ctx, "Failed to find project")
-	}
-
-	if len(projects) == 0 {
-		return sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Project '%s' not found", projectName))
-	}
-
-	if len(projects) > 1 {
-		projectNames := make([]string, len(projects))
-		for i, p := range projects {
-			projectNames[i] = p.Name
-		}
-		return sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Multiple projects found: %s. Please be more specific.", strings.Join(projectNames, ", ")))
-	}
-
-	project := projects[0]
-	err = AssignUserToProject(db, userID, project.ID)
-	if err != nil {
-		return sr.slackClient.SendErrorResponse(ctx, "Failed to assign project")
-	}
-
-	message := fmt.Sprintf("✅ Successfully assigned you to project: **%s**", project.Name)
-
-	// Refresh App Home view if possible
-	go PublishAppHomeView(userID)
-
-	payload := map[string]interface{}{
-		"channel": ctx.ChannelID,
-		"user":    ctx.UserID,
-		"text":    message,
-		"blocks": []Block{
-			{
-				Type: "section",
-				Text: &Text{Type: "mrkdwn", Text: message},
-			},
-		},
-	}
-
-	return sr.slackClient.sendSlackAPIRequest("chat.postEphemeral", payload)
-}
-
-func (sr *SmartRouter) handleUnassignProject(ctx *ConversationContext, args []string, userID string) error {
-	if len(args) == 0 {
-		return sr.slackClient.SendErrorResponse(ctx, "Please specify a project name. Usage: `/oye unassign \"Project Name\"`")
-	}
-
-	projectName := strings.Join(args, " ")
-	projectName = strings.Trim(projectName, "\"'")
-
-	db, err := GetDB()
-	if err != nil {
-		return sr.slackClient.SendErrorResponse(ctx, "Database connection failed")
-	}
-
-	// Find the project
-	projects, err := FindProjectsByName(db, projectName)
-	if err != nil {
-		return sr.slackClient.SendErrorResponse(ctx, "Failed to find project")
-	}
-
-	if len(projects) == 0 {
-		return sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Project '%s' not found", projectName))
-	}
-
-	if len(projects) > 1 {
-		projectNames := make([]string, len(projects))
-		for i, p := range projects {
-			projectNames[i] = p.Name
-		}
-		return sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Multiple projects found: %s. Please be more specific.", strings.Join(projectNames, ", ")))
-	}
-
-	project := projects[0]
-	err = UnassignUserFromProject(db, userID, project.ID)
-	if err != nil {
-		return sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to unassign project: %v", err))
-	}
-
-	message := fmt.Sprintf("✅ Successfully removed you from project: **%s**", project.Name)
-
-	// Refresh App Home view if possible
-	go PublishAppHomeView(userID)
-
-	payload := map[string]interface{}{
-		"channel": ctx.ChannelID,
-		"user":    ctx.UserID,
-		"text":    message,
-		"blocks": []Block{
-			{
-				Type: "section",
-				Text: &Text{Type: "mrkdwn", Text: message},
-			},
-		},
-	}
-
-	return sr.slackClient.sendSlackAPIRequest("chat.postEphemeral", payload)
-}
-
-func (sr *SmartRouter) handleMyProjects(ctx *ConversationContext, userID string) error {
-	db, err := GetDB()
-	if err != nil {
-		return sr.slackClient.SendErrorResponse(ctx, "Database connection failed")
-	}
-
-	projects, err := GetUserProjects(db, userID)
-	if err != nil {
-		return sr.slackClient.SendErrorResponse(ctx, "Failed to retrieve your projects")
-	}
-
-	var message string
-	if len(projects) == 0 {
-		message = "📋 **Your Assigned Projects:**\n\nYou are not assigned to any projects. You will see all projects in automatic updates.\n\nUse `/oye available-projects` to see all projects, then `/oye assign \"Project Name\"` to assign yourself."
-	} else {
-		message = "📋 **Your Assigned Projects:**\n\n"
-		for _, project := range projects {
-			message += fmt.Sprintf("• %s\n", project.Name)
-		}
-		message += "\nUse `/oye unassign \"Project Name\"` to remove assignments."
-	}
-
-	payload := map[string]interface{}{
-		"channel": ctx.ChannelID,
-		"user":    ctx.UserID,
-		"text":    message,
-		"blocks": []Block{
-			{
-				Type: "section",
-				Text: &Text{Type: "mrkdwn", Text: message},
-			},
-		},
-	}
-
-	return sr.slackClient.sendSlackAPIRequest("chat.postEphemeral", payload)
-}
-
-func (sr *SmartRouter) handleAvailableProjects(ctx *ConversationContext) error {
-	db, err := GetDB()
-	if err != nil {
-		return sr.slackClient.SendErrorResponse(ctx, "Database connection failed")
-	}
-
-	projects, err := GetAllProjects(db)
-	if err != nil {
-		return sr.slackClient.SendErrorResponse(ctx, "Failed to retrieve projects")
-	}
-
-	if len(projects) == 0 {
-		message := "📁 **Available Projects:**\n\nNo projects found in the database."
-		payload := map[string]interface{}{
-			"channel": ctx.ChannelID,
-			"user":    ctx.UserID,
-			"text":    message,
-			"blocks": []Block{
-				{
-					Type: "section",
-					Text: &Text{Type: "mrkdwn", Text: message},
-				},
-			},
-		}
-		return sr.slackClient.sendSlackAPIRequest("chat.postEphemeral", payload)
-	}
-
-	// Split projects into chunks to respect Slack's message limits
-	projectChunks := sr.splitProjectsIntoChunks(projects)
-
-	for i, chunk := range projectChunks {
-		var message string
-		var blocks []Block
-
-		if i == 0 {
-			// First message - include header
-			message = fmt.Sprintf("📁 **Available Projects** (%d total):\n\n", len(projects))
-		} else {
-			// Subsequent messages - continuation
-			message = fmt.Sprintf("📁 **Available Projects** (continued - part %d of %d):\n\n", i+1, len(projectChunks))
-		}
-
-		// Add projects in this chunk
-		for _, project := range chunk {
-			message += fmt.Sprintf("• %s\n", project.Name)
-		}
-
-		// Add footer to last message
-		if i == len(projectChunks)-1 {
-			message += "\n💡 Use `/oye assign \"Project Name\"` to assign yourself to a project."
-		}
-
-		blocks = []Block{
-			{
-				Type: "section",
-				Text: &Text{Type: "mrkdwn", Text: message},
-			},
-		}
-
-		// Add part indicator for multiple parts
-		if len(projectChunks) > 1 {
-			blocks = append(blocks, Block{
-				Type: "context",
-				Elements: []Element{
-					{
-						Type: "mrkdwn",
-						Text: fmt.Sprintf("Part %d of %d", i+1, len(projectChunks)),
-					},
-				},
-			})
-		}
-
-		payload := map[string]interface{}{
-			"channel": ctx.ChannelID,
-			"user":    ctx.UserID,
-			"text":    message,
-			"blocks":  blocks,
-		}
-
-		if err := sr.slackClient.sendSlackAPIRequest("chat.postEphemeral", payload); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// splitProjectsIntoChunks splits projects into chunks that fit within Slack's message limits
-func (sr *SmartRouter) splitProjectsIntoChunks(projects []Project) [][]Project {
-	const maxMessageSize = 1000 // Conservative size to account for JSON overhead
-	var chunks [][]Project
-	var currentChunk []Project
-	var currentSize int
-
-	for _, project := range projects {
-		// Estimate the size this project would add (project name + bullet + newline)
-		projectSize := len(project.Name) + 3 // "• " + "\n"
-
-		// Check if adding this project would exceed the size limit
-		if currentSize+projectSize > maxMessageSize && len(currentChunk) > 0 {
-			// Start a new chunk
-			chunks = append(chunks, currentChunk)
-			currentChunk = []Project{project}
-			currentSize = projectSize + 150 // Add buffer for headers
-		} else {
-			// Add to current chunk
-			currentChunk = append(currentChunk, project)
-			currentSize += projectSize
-		}
-	}
-
-	// Add the last chunk if it has projects
-	if len(currentChunk) > 0 {
-		chunks = append(chunks, currentChunk)
-	}
-
-	// If no chunks were created (empty project list), return empty slice
-	if len(chunks) == 0 {
-		chunks = append(chunks, []Project{})
-	}
-
-	return chunks
-}
-
 // HandleLongRunningUpdate shows progress and delivers final result
 func (sr *SmartRouter) HandleLongRunningUpdate(ctx *ConversationContext, periodInfo PeriodInfo) error {
 	// Send initial progress message
@@ -535,18 +231,15 @@ func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, perio
 		// Try webhook fallback with proper splitting
 		sr.logger.Info("Attempting webhook fallback with message splitting...")
 
-
-
-
 		// Convert TaskUpdateInfo to TaskInfo for new formatting
 		convertedTasks := convertTaskUpdateInfoToTaskInfo(taskInfos)
-		
+
 		// Test if single message would work (use new simplified messaging)
 		err = SendTaskMessage(convertedTasks, result.PeriodInfo.DisplayName)
 		if err == nil {
 			return // Successfully sent
 		}
-		
+
 		// Fallback error handling
 		sr.logger.Errorf("Task message failed: %v", err)
 		sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send %s report", result.PeriodInfo.DisplayName))
@@ -555,81 +248,6 @@ func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, perio
 
 	sr.logger.Infof("Completed %s update for user %s", result.PeriodInfo.DisplayName, ctx.UserID)
 }
-
-// HandleFullSyncRequest processes full sync requests
-func (sr *SmartRouter) HandleFullSyncRequest(req *SlackCommandRequest) error {
-	ctx := &ConversationContext{
-		ChannelID:   req.ChannelID,
-		UserID:      req.UserID,
-		CommandType: req.Command,
-	}
-
-	sr.logger.Infof("Processing full sync request from user %s", req.UserName)
-
-	// Send initial progress message
-	progressResp, err := sr.slackClient.SendProgressMessage(ctx, "🚀 Starting full data synchronization...")
-	if err != nil {
-		return sr.slackClient.SendErrorResponse(ctx, "Failed to start sync process")
-	}
-
-	// Update context for threading
-	if progressResp != nil {
-		ctx.ThreadTS = progressResp.Timestamp
-	}
-
-	// Process in background
-	go func() {
-		sr.processFullSyncWithProgress(ctx)
-	}()
-
-	return nil
-}
-
-func (sr *SmartRouter) processFullSyncWithProgress(ctx *ConversationContext) {
-	startTime := time.Now()
-
-	// Show detailed progress
-	sr.slackClient.UpdateProgress(ctx, "📊 Syncing started...")
-
-	// Perform the actual sync
-	if err := FullSyncAll(); err != nil {
-		sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Full sync failed: %v", err))
-		return
-	}
-
-	// Send completion message
-	duration := time.Since(startTime)
-	message := fmt.Sprintf("✅ Full data synchronization completed successfully! (took %v)", duration.Round(time.Second))
-
-	payload := map[string]interface{}{
-		"channel": ctx.ChannelID,
-		"text":    message,
-		"blocks": []Block{
-			{
-				Type: "header",
-				Text: &Text{Type: "plain_text", Text: "✅ Full Sync Complete"},
-			},
-			{
-				Type: "section",
-				Text: &Text{
-					Type: "mrkdwn",
-					Text: fmt.Sprintf("*Full synchronization completed successfully*\n\n• All tasks synced from TimeCamp\n• Time entries synced (last 6 months)\n• Database is now up to date\n\n*Duration:* %v\n*Completed at:* %s",
-						duration.Round(time.Second),
-						time.Now().Format("2006-01-02 15:04:05")),
-				},
-			},
-		},
-	}
-
-	if ctx.ThreadTS != "" {
-		payload["thread_ts"] = ctx.ThreadTS
-	}
-
-	sr.slackClient.sendSlackAPIRequest("chat.postMessage", payload)
-	sr.logger.Infof("Completed full sync for user %s in %v", ctx.UserID, duration)
-}
-
-// PeriodInfo already defined in types.go
 
 // parsePeriodFromText parses natural language time periods
 func (sr *SmartRouter) parsePeriodFromText(text, command string) PeriodInfo {
@@ -812,17 +430,15 @@ func (sr *SmartRouter) processThresholdWithProgress(ctx *ConversationContext, th
 
 		// Get all tasks for hierarchy mapping (same logic as SendThresholdResults)
 
-
-
 		// Convert TaskUpdateInfo to TaskInfo for new formatting
 		convertedTasks := convertTaskUpdateInfoToTaskInfo(taskInfos)
-		
+
 		// Send threshold message using new simplified messaging
 		err = SendThresholdMessage(convertedTasks, periodInfo.DisplayName, threshold)
 		if err == nil {
 			return // Successfully sent
 		}
-		
+
 		// Fallback error handling
 		sr.logger.Errorf("Threshold message failed: %v", err)
 		sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send threshold report"))
@@ -871,5 +487,3 @@ func (sr *SmartRouter) parseThresholdCommand(text string) (float64, PeriodInfo, 
 	// Default period
 	return threshold, PeriodInfo{Type: "yesterday", Days: 1, DisplayName: "Yesterday"}, nil
 }
-
-// convertTaskUpdateInfoToTaskInfo defined in slack_client.go

@@ -59,17 +59,17 @@ type TaskUpdateInfo struct {
 
 // Simplified task information (consolidates TaskUpdateInfo variations)
 type TaskInfo struct {
-	TaskID           int
-	ParentID         int
-	Name             string
-	EstimationInfo   EstimationInfo
-	CurrentPeriod    string
-	CurrentTime      string
-	PreviousPeriod   string
-	PreviousTime     string
-	DaysWorked       int
-	Comments         []string
-	UserBreakdown    map[int]UserTimeContribution
+	TaskID         int
+	ParentID       int
+	Name           string
+	EstimationInfo EstimationInfo
+	CurrentPeriod  string
+	CurrentTime    string
+	PreviousPeriod string
+	PreviousTime   string
+	DaysWorked     int
+	Comments       []string
+	UserBreakdown  map[int]UserTimeContribution
 }
 
 // Threshold alert information
@@ -87,7 +87,7 @@ type ThresholdAlert struct {
 
 // Slack message structures (consolidated)
 type SlackMessage struct {
-	Text   string `json:"text"`
+	Text   string  `json:"text"`
 	Blocks []Block `json:"blocks"`
 }
 
@@ -215,14 +215,4 @@ type RetryConfig struct {
 	InitialWait time.Duration
 	MaxWait     time.Duration
 	Multiplier  float64
-}
-
-// Format options for messages
-type FormatOptions struct {
-	IsPersonal    bool
-	InThread      bool
-	ShowHeader    bool
-	ShowFooter    bool
-	MaxTasks      int
-	Threshold     *float64 // nil for normal updates, value for threshold reports
 }

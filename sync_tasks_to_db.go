@@ -223,19 +223,6 @@ func taskNeedsUpdate(existing, fetched JsonTask) bool {
 		existing.Archived != fetched.Archived
 }
 
-// TrackTaskChange records a task change in the history table
-func TrackTaskChange(db *sql.DB, taskID int, taskName, changeType, previousValue, currentValue string) error {
-	query := `INSERT INTO task_history (task_id, name, change_type, previous_value, current_value) 
-			  VALUES ($1, $2, $3, $4, $5)`
-
-	_, err := db.Exec(query, taskID, taskName, changeType, previousValue, currentValue)
-	if err != nil {
-		return fmt.Errorf("failed to track task change: %w", err)
-	}
-
-	return nil
-}
-
 func getTimecampTasks() ([]JsonTask, error) {
 	logger := GetGlobalLogger()
 
@@ -333,10 +320,4 @@ func getTimecampTasks() ([]JsonTask, error) {
 // This only processes tasks that have changed, making it efficient for regular updates
 func SyncTasksToDatabaseIncremental() error {
 	return SyncTasksToDatabase(false)
-}
-
-// SyncTasksToDatabaseFull is a wrapper that performs full sync
-// This processes all tasks and is used for manual syncs and full-sync operations
-func SyncTasksToDatabaseFull() error {
-	return SyncTasksToDatabase(true)
 }

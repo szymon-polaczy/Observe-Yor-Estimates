@@ -18,25 +18,6 @@ func NewSlackAPIClient() *SlackAPIClient {
 	}
 }
 
-// NewSlackAPIClientFromEnv creates a client using CLI environment variables
-func NewSlackAPIClientFromEnv() *SlackAPIClient {
-	client := NewSlackAPIClient()
-	if channelID := os.Getenv("CHANNEL_ID"); channelID != "" {
-		client.logger.Debugf("CLI mode: Using channel %s", channelID)
-	}
-	return client
-}
-
-// GetContextFromEnv creates conversation context from environment variables (for CLI usage)
-func GetContextFromEnv() *ConversationContext {
-	return &ConversationContext{
-		ChannelID:   os.Getenv("CHANNEL_ID"),
-		UserID:      os.Getenv("USER_ID"),
-		ThreadTS:    os.Getenv("THREAD_TS"),
-		CommandType: os.Getenv("COMMAND_TYPE"),
-	}
-}
-
 // SendSlackUpdate sends task updates via webhook
 func SendSlackUpdate(taskInfos []TaskUpdateInfo, period string) error {
 	logger := GetGlobalLogger()
@@ -47,7 +28,7 @@ func SendSlackUpdate(taskInfos []TaskUpdateInfo, period string) error {
 
 	// Convert to TaskInfo for new formatting
 	convertedTasks := convertTaskUpdateInfoToTaskInfo(taskInfos)
-	
+
 	// Send using new simplified messaging system
 	return SendTaskMessage(convertedTasks, period)
 }
@@ -64,7 +45,7 @@ func (s *SlackAPIClient) sendSlackAPIRequestWithResponse(endpoint string, payloa
 	}
 
 	url := fmt.Sprintf("https://slack.com/api/%s", endpoint)
-	
+
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling payload: %w", err)
@@ -107,7 +88,7 @@ func (s *SlackAPIClient) sendSlackAPIRequestWithResponse(endpoint string, payloa
 // SendErrorResponse sends an error message to the user
 func (s *SlackAPIClient) SendErrorResponse(ctx *ConversationContext, errorMsg string) error {
 	message := fmt.Sprintf("❌ %s", errorMsg)
-	
+
 	payload := map[string]interface{}{
 		"channel": ctx.ChannelID,
 		"user":    ctx.UserID,
@@ -119,14 +100,14 @@ func (s *SlackAPIClient) SendErrorResponse(ctx *ConversationContext, errorMsg st
 			},
 		},
 	}
-	
+
 	return s.sendSlackAPIRequest("chat.postEphemeral", payload)
 }
 
 // SendNoChangesMessage sends a message when there are no changes
 func (s *SlackAPIClient) SendNoChangesMessage(ctx *ConversationContext, period string) error {
 	message := fmt.Sprintf("📊 No task changes to report for your %s update! 🎉", period)
-	
+
 	payload := map[string]interface{}{
 		"channel": ctx.ChannelID,
 		"text":    message,
@@ -137,30 +118,12 @@ func (s *SlackAPIClient) SendNoChangesMessage(ctx *ConversationContext, period s
 			},
 		},
 	}
-	
+
 	if ctx.ThreadTS != "" {
 		payload["thread_ts"] = ctx.ThreadTS
 	}
-	
-	return s.sendSlackAPIRequest("chat.postMessage", payload)
-}
 
-// SendPersonalUpdate sends a personal update to the user
-func (s *SlackAPIClient) SendPersonalUpdate(ctx *ConversationContext, taskInfos []TaskUpdateInfo, period string) error {
-	// Convert to TaskInfo
-	convertedTasks := convertTaskUpdateInfoToTaskInfo(taskInfos)
-	
-	// Format as personal message using simplified system
-	message := formatProjectMessage("Personal Report", convertedTasks, period)
-	
-	payload := map[string]interface{}{
-		"channel": ctx.ChannelID,
-		"user":    ctx.UserID,
-		"text":    message.Text,
-		"blocks":  message.Blocks,
-	}
-	
-	return s.sendSlackAPIRequest("chat.postEphemeral", payload)
+	return s.sendSlackAPIRequest("chat.postMessage", payload)
 }
 
 // SendProgressMessage sends a progress message and returns response for threading

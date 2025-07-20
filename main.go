@@ -63,12 +63,6 @@ func handleCliCommands(args []string, logger *Logger) {
 	switch command {
 	case "--help", "-h", "help":
 		showHelp()
-	case "--init-db", "init-db":
-		_, err := GetDB()
-		if err != nil {
-			logger.Fatalf("Failed to initialize database: %v", err)
-		}
-		logger.Info("Database initialized successfully")
 	case "update":
 		if len(args) < 2 {
 			logger.Error("Error: update command requires a period (daily, weekly, or monthly)")
@@ -138,20 +132,6 @@ func handleCliCommands(args []string, logger *Logger) {
 		}
 
 		logger.Infof("Successfully sent %s update with %d tasks", result.PeriodInfo.DisplayName, len(result.TaskInfos))
-	case "sync-time-entries":
-		logger.Info("Running time entries sync command")
-		if err := SyncTimeEntriesToDatabase("", ""); err != nil {
-			logger.Errorf("Time entries sync failed: %v", err)
-			os.Exit(1)
-		}
-		logger.Info("Time entries sync completed successfully")
-	case "sync-tasks":
-		logger.Info("Running tasks sync command")
-		if err := SyncTasksToDatabaseFull(); err != nil {
-			logger.Errorf("Tasks sync failed: %v", err)
-			os.Exit(1)
-		}
-		logger.Info("Tasks sync completed successfully")
 	case "full-sync":
 		logger.Info("Running full synchronization command")
 		responseURL := getResponseURL()
@@ -166,179 +146,6 @@ func handleCliCommands(args []string, logger *Logger) {
 				os.Exit(1)
 			}
 			logger.Info("Full synchronization completed successfully")
-		}
-	case "full-sync-tasks-only":
-		logger.Info("Running full tasks synchronization only")
-		if err := SyncTasksToDatabaseFull(); err != nil {
-			logger.Errorf("Full tasks sync failed: %v", err)
-			os.Exit(1)
-		}
-		logger.Info("Full tasks synchronization completed successfully")
-	case "full-sync-entries-only":
-		logger.Info("Running full time entries synchronization only")
-		if err := FullSyncTimeEntriesToDatabase(); err != nil {
-			logger.Errorf("Full time entries sync failed: %v", err)
-			os.Exit(1)
-		}
-		logger.Info("Full time entries synchronization completed successfully")
-	case "threshold-check":
-		logger.Info("Running threshold monitoring check")
-		if err := RunThresholdMonitoring(); err != nil {
-			logger.Errorf("Threshold monitoring failed: %v", err)
-			os.Exit(1)
-		}
-		logger.Info("Threshold monitoring completed successfully")
-	case "process-orphaned":
-		logger.Info("Processing orphaned time entries")
-		db, err := GetDB()
-		if err != nil {
-			logger.Errorf("Failed to get database connection: %v", err)
-			os.Exit(1)
-		}
-
-		// Show current count before processing
-		if count, err := GetOrphanedTimeEntriesCount(db); err != nil {
-			logger.Errorf("Failed to get orphaned entries count: %v", err)
-			os.Exit(1)
-		} else {
-			logger.Infof("Found %d orphaned time entries to process", count)
-			if count == 0 {
-				logger.Info("No orphaned time entries to process")
-				return
-			}
-		}
-
-		if err := ProcessOrphanedTimeEntries(db); err != nil {
-			logger.Errorf("Failed to process orphaned time entries: %v", err)
-			os.Exit(1)
-		}
-
-		// Show remaining count after processing
-		if count, err := GetOrphanedTimeEntriesCount(db); err != nil {
-			logger.Warnf("Failed to get remaining orphaned entries count: %v", err)
-		} else {
-			logger.Infof("Remaining orphaned time entries: %d", count)
-		}
-		logger.Info("Orphaned time entries processing completed successfully")
-	case "cleanup-orphaned":
-		if len(args) < 2 {
-			logger.Error("Error: cleanup-orphaned command requires number of days (e.g., cleanup-orphaned 30)")
-			return
-		}
-
-		var days int
-		if _, err := fmt.Sscanf(args[1], "%d", &days); err != nil {
-			logger.Errorf("Error: invalid number of days '%s'", args[1])
-			return
-		}
-
-		if days < 1 {
-			logger.Error("Error: number of days must be at least 1")
-			return
-		}
-
-		logger.Infof("Cleaning up orphaned time entries older than %d days", days)
-		db, err := GetDB()
-		if err != nil {
-			logger.Errorf("Failed to get database connection: %v", err)
-			os.Exit(1)
-		}
-
-		if err := CleanupOldOrphanedEntries(db, days); err != nil {
-			logger.Errorf("Failed to cleanup orphaned entries: %v", err)
-			os.Exit(1)
-		}
-		logger.Info("Orphaned entries cleanup completed successfully")
-	case "sync-projects":
-		logger.Info("Syncing projects table from task hierarchy")
-		db, err := GetDB()
-		if err != nil {
-			logger.Errorf("Failed to get database connection: %v", err)
-			os.Exit(1)
-		}
-		if err := SyncProjectsFromTasks(db); err != nil {
-			logger.Errorf("Error syncing projects: %v", err)
-			os.Exit(1)
-		}
-		logger.Info("Projects synced successfully")
-	case "list-projects":
-		logger.Info("Listing all projects from database")
-		db, err := GetDB()
-		if err != nil {
-			logger.Errorf("Failed to get database connection: %v", err)
-			os.Exit(1)
-		}
-		projects, err := GetAllProjects(db)
-		if err != nil {
-			logger.Errorf("Error listing projects: %v", err)
-			os.Exit(1)
-		}
-		fmt.Printf("Found %d projects:\n", len(projects))
-		for _, project := range projects {
-			fmt.Printf("- %s (TimeCamp Task ID: %d)\n", project.Name, project.TimeCampTaskID)
-		}
-	case "test-command":
-		if len(args) < 2 {
-			logger.Error("Error: test-command requires a command to test (e.g., test-command \"/oye daily\")")
-			return
-		}
-		
-		// Join remaining args as the command to test
-		testCommand := strings.Join(args[1:], " ")
-		logger.Infof("Testing command: %s", testCommand)
-		
-		// Parse the command similar to how Slack would
-		if !strings.HasPrefix(testCommand, "/oye ") {
-			logger.Error("Error: test command must start with /oye")
-			return
-		}
-		
-		// Extract the text after /oye
-		commandText := strings.TrimPrefix(testCommand, "/oye ")
-		commandText = strings.TrimSpace(commandText)
-		
-		// Create a smart router to test parsing
-		router := NewSmartRouter()
-		
-		// Parse the period from the command
-		periodInfo := router.parsePeriodFromText(commandText, "")
-		
-		// Display parsing results
-		fmt.Printf("\nCommand parsing results:\n")
-		fmt.Printf("Input: %s\n", testCommand)
-		fmt.Printf("Parsed text: %s\n", commandText)
-		fmt.Printf("Period Type: %s\n", periodInfo.Type)
-		fmt.Printf("Display Name: %s\n", periodInfo.DisplayName)
-		fmt.Printf("Days: %d\n", periodInfo.Days)
-		
-		// Test actual processing (without sending to Slack)
-		req := &UnifiedUpdateRequest{
-			Command:     "update",
-			Text:        commandText,
-			ProjectName: "",
-			UserID:      "test-user",
-			Source:      "cli",
-		}
-		
-		result := router.ProcessUnifiedUpdate(req)
-		if !result.Success {
-			logger.Errorf("Processing failed: %s", result.ErrorMsg)
-			return
-		}
-		
-		fmt.Printf("\nProcessing results:\n")
-		fmt.Printf("Success: %v\n", result.Success)
-		fmt.Printf("Period: %s\n", result.PeriodInfo.DisplayName)
-		fmt.Printf("Tasks found: %d\n", len(result.TaskInfos))
-		
-		if len(result.TaskInfos) > 0 {
-			fmt.Printf("\nFirst few tasks:\n")
-			for i, task := range result.TaskInfos {
-				if i >= 3 {
-					break
-				}
-				fmt.Printf("- %s (%s)\n", task.Name, task.EstimationInfo)
-			}
 		}
 	default:
 		logger.Warnf("Unknown command line argument: %s", command)
@@ -433,27 +240,8 @@ func showHelp() {
 	fmt.Println("Usage: observe-yor-estimates [command]")
 	fmt.Println("\nAvailable commands:")
 	fmt.Println("  update <period>          - Send Slack update for a period (daily, weekly, monthly)")
-	fmt.Println("  sync-time-entries        - Sync recent time entries (last day)")
-	fmt.Println("  sync-tasks               - Full sync of all tasks (manual operation)")
 	fmt.Println("  full-sync                - Full sync of all tasks and time entries")
-	fmt.Println("  full-sync-tasks-only     - Full sync of tasks only")
-	fmt.Println("  full-sync-entries-only   - Full sync of time entries only")
 	fmt.Println("  threshold-check          - Manual threshold monitoring check")
-	fmt.Println("  process-orphaned         - Process orphaned time entries")
-	fmt.Println("  cleanup-orphaned <days>   - Clean up orphaned time entries older than specified days")
-	fmt.Println("")
-	fmt.Println("User management commands:")
-	fmt.Println("  sync-users               - Sync users from TimeCamp to the database")
-	fmt.Println("  list-users               - Show all users in the database")
-	fmt.Println("  active-users             - Show user IDs that have time entries")
-	fmt.Println("  add-user <id> <user> <name> - Add a specific user to the database")
-	fmt.Println("")
-	fmt.Println("Project management commands:")
-	fmt.Println("  sync-projects            - Sync projects table from task hierarchy")
-	fmt.Println("  list-projects            - Show all projects in the database")
-	fmt.Println("")
-	fmt.Println("Testing commands:")
-	fmt.Println("  test-command <command>   - Test OYE commands locally (e.g., test-command \"/oye Filestage.io this month\")")
 	fmt.Println("")
 	fmt.Println("  --version, version         - Show application version")
 	fmt.Println("  --help, -h, help         - Show help message")

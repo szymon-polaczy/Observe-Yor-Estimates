@@ -46,7 +46,6 @@ func setupSlackRoutes() {
 
 	// Unified handler for all OYE commands
 	http.HandleFunc("/slack/oye", handleUnifiedOYECommand)
-	http.HandleFunc("/health", handleHealthCheck)
 
 	// New App Home routes
 	http.HandleFunc("/slack/events", HandleAppHome)
@@ -79,18 +78,6 @@ func handleUnifiedOYECommand(w http.ResponseWriter, r *http.Request) {
 
 	text := strings.ToLower(strings.TrimSpace(req.Text))
 
-	// Check for project assignment commands FIRST (before project parsing)
-	if strings.HasPrefix(text, "assign ") || strings.HasPrefix(text, "unassign ") ||
-		text == "my-projects" || text == "available-projects" {
-		if err := globalRouter.HandleProjectAssignmentRequest(req); err != nil {
-			logger.Errorf("Failed to handle project assignment request: %v", err)
-			sendImmediateResponse(w, "❌ Failed to process project assignment request", "ephemeral")
-		} else {
-			sendImmediateResponse(w, "✅ Processing your project assignment...", "ephemeral")
-		}
-		return
-	}
-
 	// Parse project name from command if present (only after checking for management commands)
 	projectName, remainingText := ParseProjectFromCommand(req.Text)
 
@@ -116,17 +103,6 @@ func handleUnifiedOYECommand(w http.ResponseWriter, r *http.Request) {
 		}
 
 		sendUnifiedHelp(w, req)
-		return
-	}
-
-	if strings.Contains(text, "sync") || text == "full-sync" {
-		// Handle full sync request
-		if err := globalRouter.HandleFullSyncRequest(req); err != nil {
-			logger.Errorf("Failed to handle full sync request: %v", err)
-			sendImmediateResponse(w, "❌ Failed to process sync request", "ephemeral")
-		} else {
-			sendImmediateResponse(w, "⏳ Full sync started! I'll update you with progress...", "ephemeral")
-		}
 		return
 	}
 
@@ -161,11 +137,6 @@ func sendUnifiedHelp(w http.ResponseWriter, req *SlackCommandRequest) {
 		"• `/oye monthly` or `/oye last month` - Last month's tasks\n" +
 		"• `/oye this month` - Current month's tasks\n" +
 		"• `/oye last 7 days` - Custom range (1-60 days)\n\n" +
-		"*Project Management:*\n" +
-		"• `/oye assign \"Project Name\"` - Assign yourself to a project\n" +
-		"• `/oye unassign \"Project Name\"` - Remove yourself from a project\n" +
-		"• `/oye my-projects` - View your assigned projects\n" +
-		"• `/oye available-projects` - View all available projects\n\n" +
 		"*Project Filtering:*\n" +
 		"• `/oye \"project name\" daily` - Daily update for specific project\n" +
 		"• `/oye marketing last week` - Weekly update for project (fuzzy match)\n" +
@@ -175,8 +146,6 @@ func sendUnifiedHelp(w http.ResponseWriter, req *SlackCommandRequest) {
 		"• `/oye over 50 today` - Tasks over 50% of estimation\n" +
 		"• `/oye over 80 this week` - Tasks over 80% of estimation\n" +
 		"• `/oye over 100 last month` - Tasks over budget\n\n" +
-		"*Data Management:*\n" +
-		"• `/oye sync` - Full data synchronization\n\n" +
 		"*Tips:*\n" +
 		"• Updates are private by default (only you see them)\n" +
 		"• Use \"public\" in any command to share with channel\n" +
@@ -245,21 +214,4 @@ func sendImmediateResponse(w http.ResponseWriter, message string, responseType s
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
-}
-
-// handleHealthCheck handles a simple health check endpoint
-func handleHealthCheck(w http.ResponseWriter, r *http.Request) {
-	logger := GetGlobalLogger()
-
-	// Quick health check without blocking on database
-	_, err := GetDB()
-	if err != nil {
-		logger.Warnf("Health check - Database not yet ready: %v", err)
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK - Initializing (database connecting...)"))
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK - Database connected"))
 }
