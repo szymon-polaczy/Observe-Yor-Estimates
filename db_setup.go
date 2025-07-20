@@ -61,13 +61,7 @@ func getDBConnectionString() string {
 		host, port, user, password, dbname, sslmode)
 }
 
-// isNetlifyRuntime checks if we're running in a Netlify serverless function (runtime)
-func isNetlifyRuntime() bool {
-	// Netlify runtime sets these environment variables
-	return os.Getenv("LAMBDA_TASK_ROOT") != "" ||
-		os.Getenv("AWS_LAMBDA_FUNCTION_NAME") != "" ||
-		os.Getenv("NETLIFY_DEV") != ""
-}
+
 
 // validateDatabaseWriteAccess tests if the database is writable
 func validateDatabaseWriteAccess() error {

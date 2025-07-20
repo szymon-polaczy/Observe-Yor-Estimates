@@ -21,11 +21,7 @@ func main() {
 
 	err := godotenv.Load()
 	if err != nil {
-		if isNetlifyBuild() {
-			logger.Info("No .env file found (normal for Netlify builds)")
-		} else {
 			logger.Warnf("Warning: Failed to load .env file: %v", err)
-		}
 	}
 
 	if err := validateRequiredEnvVars(); err != nil {
@@ -90,16 +86,10 @@ func handleCliCommands(args []string, logger *Logger) {
 		}
 		logger.Infof("Running %s update command", period)
 
-		// Check if we have Slack API context (from Netlify function)
-		if os.Getenv("SLACK_BOT_TOKEN") != "" && os.Getenv("CHANNEL_ID") != "" {
-			logger.Info("Using direct Slack API for context-aware response")
-			handleDirectSlackUpdate(period)
-		} else {
-			// Fallback to original behavior
-			responseURL := getResponseURL()
-			outputJSON := getOutputJSON()
-			SendSlackUpdate(period, responseURL, outputJSON)
-		}
+		// Fallback to original behavior
+		responseURL := getResponseURL()
+		outputJSON := getOutputJSON()
+		SendSlackUpdate(period, responseURL, outputJSON)
 	case "sync-time-entries":
 		logger.Info("Running time entries sync command")
 		if err := SyncTimeEntriesToDatabase("", ""); err != nil {
@@ -701,8 +691,7 @@ func getResponseURL() string {
 			return os.Args[i+1]
 		}
 	}
-	// If not found in args, check environment variable (set by Netlify functions)
-	return os.Getenv("RESPONSE_URL")
+	return ""
 }
 
 func getOutputJSON() bool {
@@ -712,8 +701,7 @@ func getOutputJSON() bool {
 			return true
 		}
 	}
-	// If not found in args, check environment variable (set by Netlify functions)
-	return os.Getenv("OUTPUT_JSON") == "true"
+	return false
 }
 
 func handleDirectSlackUpdate(period string) {

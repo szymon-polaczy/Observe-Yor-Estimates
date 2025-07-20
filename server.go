@@ -331,7 +331,7 @@ func queueJob(jobType string, parameters map[string]string, responseURL string, 
 	// Get the job processor URL - could be same domain or external service
 	processorURL := os.Getenv("JOB_PROCESSOR_URL")
 	if processorURL == "" {
-		// For local testing, use localhost; in production this would be the full Netlify URL
+		// For local testing, use localhost
 		processorURL = "http://localhost:8080/slack/process-job"
 	}
 
@@ -394,7 +394,7 @@ func handleUpdateCommand(w http.ResponseWriter, r *http.Request) {
 
 	logger.Infof("Received %s update command from user %s in channel %s", period, req.UserName, req.ChannelName)
 
-	// Send immediate response - this is CRUCIAL for Netlify timeouts
+	// Send immediate response
 	sendImmediateResponse(w, fmt.Sprintf("⏳ Your %s update is being prepared... I'll send the results here in a moment!", period), "ephemeral")
 
 	// Queue the job for processing
@@ -561,7 +561,6 @@ func handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 	logger := GetGlobalLogger()
 
 	// Quick health check without blocking on database
-	// This prevents Netlify function timeout during initialization
 	_, err := GetDB()
 	if err != nil {
 		logger.Warnf("Health check - Database not yet ready: %v", err)
