@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// SendTaskMessage sends task updates grouped by project
+// SendTaskMessage sends task updates grouped by project via webhook
 func SendTaskMessage(tasks []TaskInfo, period string) error {
 	if len(tasks) == 0 {
 		return sendNoTasksMessage(period)
@@ -28,6 +28,40 @@ func SendTaskMessage(tasks []TaskInfo, period string) error {
 		if err := validateAndSend(message); err != nil {
 			logger := GetGlobalLogger()
 			logger.Errorf("Failed to send message for project %s: %v", project, err)
+			return err
+		}
+	}
+
+	return nil
+}
+
+// SendTaskMessageToResponseURL sends task updates grouped by project via response URL
+func SendTaskMessageToResponseURL(tasks []TaskInfo, period string, responseURL string) error {
+	if responseURL == "" {
+		return fmt.Errorf("response URL is required")
+	}
+
+	if len(tasks) == 0 {
+		message := formatNoTasksMessage(period)
+		return sendSlackResponse(responseURL, message)
+	}
+
+	// Group by project
+	projectGroups := groupTasksByProject(tasks)
+
+	// Send message for each project
+	for project, projectTasks := range projectGroups {
+		message := formatProjectMessage(project, projectTasks, period)
+
+		// Check message limits and split if needed
+		validation := validateMessageLimits(message)
+		if !validation.IsValid {
+			return splitAndSendToResponseURL(message, responseURL)
+		}
+
+		if err := sendSlackResponse(responseURL, message); err != nil {
+			logger := GetGlobalLogger()
+			logger.Errorf("Failed to send message for project %s via response URL: %v", project, err)
 			return err
 		}
 	}
@@ -276,19 +310,23 @@ func getAllTasks(db *sql.DB) (map[int]Task, error) {
 	return tasks, nil
 }
 
-// sendNoTasksMessage sends message when no tasks found
-func sendNoTasksMessage(period string) error {
+// formatNoTasksMessage creates message when no tasks found
+func formatNoTasksMessage(period string) SlackMessage {
 	message := fmt.Sprintf("%s No time entries found for %s period %s",
 		EMOJI_CHART, period, EMOJI_CELEBRATION)
 
-	slackMsg := SlackMessage{
+	return SlackMessage{
 		Text: message,
 		Blocks: []Block{{
 			Type: "section",
 			Text: &Text{Type: "mrkdwn", Text: message},
 		}},
 	}
+}
 
+// sendNoTasksMessage sends message when no tasks found
+func sendNoTasksMessage(period string) error {
+	slackMsg := formatNoTasksMessage(period)
 	return validateAndSend(slackMsg)
 }
 
@@ -391,6 +429,48 @@ func splitAndSendMessage(message SlackMessage) error {
 		}
 
 		if err := sendSlackWebhook(chunkMessage); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// splitAndSendToResponseURL splits large messages and sends them via response URL
+func splitAndSendToResponseURL(message SlackMessage, responseURL string) error {
+	maxBlocks := MAX_SLACK_BLOCKS - 2 // reserve for header/footer
+
+	if len(message.Blocks) <= maxBlocks {
+		return sendSlackResponse(responseURL, message)
+	}
+
+	// Keep header blocks
+	headerBlocks := []Block{}
+	taskBlocks := []Block{}
+
+	for i, block := range message.Blocks {
+		if i < 3 { // header, context, divider
+			headerBlocks = append(headerBlocks, block)
+		} else {
+			taskBlocks = append(taskBlocks, block)
+		}
+	}
+
+	// Send in chunks
+	for i := 0; i < len(taskBlocks); i += maxBlocks {
+		end := i + maxBlocks
+		if end > len(taskBlocks) {
+			end = len(taskBlocks)
+		}
+
+		chunkBlocks := append(headerBlocks, taskBlocks[i:end]...)
+
+		chunkMessage := SlackMessage{
+			Text:   message.Text,
+			Blocks: chunkBlocks,
+		}
+
+		if err := sendSlackResponse(responseURL, chunkMessage); err != nil {
 			return err
 		}
 	}

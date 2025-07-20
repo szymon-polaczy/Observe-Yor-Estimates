@@ -168,11 +168,11 @@ func (sr *SmartRouter) HandleUpdateRequest(req *SlackCommandRequest) error {
 	}
 
 	// Handle long-running updates with progress tracking
-	return sr.HandleLongRunningUpdate(ctx, periodInfo)
+	return sr.HandleLongRunningUpdate(ctx, periodInfo, req.ResponseURL)
 }
 
 // HandleLongRunningUpdate shows progress and delivers final result
-func (sr *SmartRouter) HandleLongRunningUpdate(ctx *ConversationContext, periodInfo PeriodInfo) error {
+func (sr *SmartRouter) HandleLongRunningUpdate(ctx *ConversationContext, periodInfo PeriodInfo, responseURL string) error {
 	// Send initial progress message
 	progressResp, err := sr.slackClient.SendProgressMessage(ctx,
 		fmt.Sprintf("🔄 Generating your %s update...", periodInfo.DisplayName))
@@ -187,13 +187,13 @@ func (sr *SmartRouter) HandleLongRunningUpdate(ctx *ConversationContext, periodI
 
 	// Process in background
 	go func() {
-		sr.processUpdateWithProgress(ctx, periodInfo)
+		sr.processUpdateWithProgress(ctx, periodInfo, responseURL)
 	}()
 
 	return nil
 }
 
-func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, periodInfo PeriodInfo) {
+func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, periodInfo PeriodInfo, responseURL string) {
 	// Use unified processor
 	req := &UnifiedUpdateRequest{
 		Command:     "update",
@@ -228,20 +228,20 @@ func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, perio
 	if err != nil {
 		sr.logger.Errorf("Failed to send final %s report via Slack API: %v", result.PeriodInfo.DisplayName, err)
 
-		// Try webhook fallback with proper splitting
-		sr.logger.Info("Attempting webhook fallback with message splitting...")
+		// Try response URL fallback instead of webhook
+		sr.logger.Info("Attempting response URL fallback with message splitting...")
 
 		// Convert TaskUpdateInfo to TaskInfo for new formatting
 		convertedTasks := convertTaskUpdateInfoToTaskInfo(taskInfos)
 
-		// Test if single message would work (use new simplified messaging)
-		err = SendTaskMessage(convertedTasks, result.PeriodInfo.DisplayName)
+		// Send via response URL to reply to original command
+		err = SendTaskMessageToResponseURL(convertedTasks, result.PeriodInfo.DisplayName, responseURL)
 		if err == nil {
 			return // Successfully sent
 		}
 
 		// Fallback error handling
-		sr.logger.Errorf("Task message failed: %v", err)
+		sr.logger.Errorf("Response URL fallback failed: %v", err)
 		sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send %s report", result.PeriodInfo.DisplayName))
 		return
 	}
