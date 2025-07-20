@@ -19,6 +19,130 @@ func NewSmartRouter() *SmartRouter {
 	}
 }
 
+// UnifiedUpdateRequest represents a unified update request from any source
+type UnifiedUpdateRequest struct {
+	Command     string // "update", "threshold", etc.
+	Text        string // Raw command text for parsing
+	ProjectName string // Optional project name
+	UserID      string // Optional user ID for filtering
+	Source      string // "cli" or "slack"
+}
+
+// UnifiedUpdateResult contains the results of processing an update
+type UnifiedUpdateResult struct {
+	TaskInfos   []TaskUpdateInfo
+	PeriodInfo  PeriodInfo
+	ProjectName string
+	Source      string
+	Success     bool
+	ErrorMsg    string
+}
+
+// ProcessUnifiedUpdate processes update commands from any source (CLI or Slack)
+func (sr *SmartRouter) ProcessUnifiedUpdate(req *UnifiedUpdateRequest) *UnifiedUpdateResult {
+	result := &UnifiedUpdateResult{
+		Source: req.Source,
+	}
+
+	// Parse period from command text
+	periodInfo := sr.parsePeriodFromText(req.Text, req.Command)
+	result.PeriodInfo = periodInfo
+
+	// Log the request
+	if req.ProjectName != "" {
+		sr.logger.Infof("Processing %s update request for project '%s' from %s", 
+			periodInfo.DisplayName, req.ProjectName, req.Source)
+	} else {
+		sr.logger.Infof("Processing %s update request from %s", 
+			periodInfo.DisplayName, req.Source)
+	}
+
+	// Get database connection
+	db, err := GetDB()
+	if err != nil {
+		result.ErrorMsg = fmt.Sprintf("Database connection failed: %v", err)
+		return result
+	}
+
+	var taskInfos []TaskUpdateInfo
+
+	if req.ProjectName != "" && req.ProjectName != "all" {
+		// Find the project
+		projects, err := FindProjectsByName(db, req.ProjectName)
+		if err != nil {
+			result.ErrorMsg = fmt.Sprintf("Failed to find project: %v", err)
+			return result
+		}
+
+		if len(projects) == 0 {
+			result.ErrorMsg = fmt.Sprintf("Project '%s' not found", req.ProjectName)
+			return result
+		}
+
+		if len(projects) > 1 {
+			projectNames := make([]string, len(projects))
+			for i, p := range projects {
+				projectNames[i] = p.Name
+			}
+			result.ErrorMsg = fmt.Sprintf("Multiple projects found matching '%s': %s. Please be more specific.", 
+				req.ProjectName, strings.Join(projectNames, ", "))
+			return result
+		}
+
+		project := projects[0]
+		result.ProjectName = project.Name
+
+		// Get project-specific task data
+		taskInfos, err = getTaskChangesWithProject(db, periodInfo.Type, periodInfo.Days, &project.TimeCampTaskID)
+		if err != nil {
+			result.ErrorMsg = fmt.Sprintf("Failed to get %s changes for project '%s': %v", 
+				periodInfo.DisplayName, project.Name, err)
+			return result
+		}
+	} else {
+		// Check if user has specific project assignments (only for Slack)
+		if req.Source == "slack" && req.UserID != "" {
+			userProjects, err := GetUserProjects(db, req.UserID)
+			if err != nil {
+				sr.logger.Errorf("Failed to get user projects: %v", err)
+				// Continue with all projects if we can't get user assignments
+			}
+
+			// If user has specific project assignments, filter to only those projects
+			if len(userProjects) > 0 {
+				var allProjectTasks []TaskUpdateInfo
+				for _, project := range userProjects {
+					projectTasks, err := getTaskChangesWithProject(db, periodInfo.Type, periodInfo.Days, &project.TimeCampTaskID)
+					if err != nil {
+						sr.logger.Errorf("Failed to get tasks for project %s: %v", project.Name, err)
+						continue
+					}
+					allProjectTasks = append(allProjectTasks, projectTasks...)
+				}
+				taskInfos = allProjectTasks
+			} else {
+				// Get task data for all projects (user has no specific assignments)
+				taskInfos, err = getTaskChanges(db, periodInfo.Type, periodInfo.Days)
+				if err != nil {
+					result.ErrorMsg = fmt.Sprintf("Failed to get %s changes: %v", periodInfo.DisplayName, err)
+					return result
+				}
+			}
+		} else {
+			// CLI or no user filtering - get all tasks
+			taskInfos, err = getTaskChanges(db, periodInfo.Type, periodInfo.Days)
+			if err != nil {
+				result.ErrorMsg = fmt.Sprintf("Failed to get %s changes: %v", periodInfo.DisplayName, err)
+				return result
+			}
+		}
+	}
+
+	result.TaskInfos = taskInfos
+	result.Success = true
+	return result
+}
+
 // HandleUpdateRequest processes update requests with intelligent routing
 func (sr *SmartRouter) HandleUpdateRequest(req *SlackCommandRequest) error {
 	ctx := &ConversationContext{
@@ -368,94 +492,38 @@ func (sr *SmartRouter) HandleLongRunningUpdate(ctx *ConversationContext, periodI
 }
 
 func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, periodInfo PeriodInfo) {
-	// Get database connection
-	db, err := GetDB()
-	if err != nil {
-		sr.slackClient.SendErrorResponse(ctx, "Database connection failed")
+	// Use unified processor
+	req := &UnifiedUpdateRequest{
+		Command:     "update",
+		Text:        periodInfo.Type, // Use the parsed period type
+		ProjectName: ctx.ProjectName,
+		UserID:      ctx.UserID,
+		Source:      "slack",
+	}
+
+	result := sr.ProcessUnifiedUpdate(req)
+	if !result.Success {
+		sr.slackClient.SendErrorResponse(ctx, result.ErrorMsg)
 		return
 	}
 
-	var taskInfos []TaskUpdateInfo
-
-	if ctx.ProjectName != "" && ctx.ProjectName != "all" {
-		// Find the project
-		projects, err := FindProjectsByName(db, ctx.ProjectName)
-		if err != nil {
-			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to find project: %v", err))
-			return
-		}
-
-		if len(projects) == 0 {
-			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Project '%s' not found. Use `/oye help` to see available commands.", ctx.ProjectName))
-			return
-		}
-
-		if len(projects) > 1 {
-			// Multiple matches found, suggest more specific search
-			projectNames := make([]string, len(projects))
-			for i, p := range projects {
-				projectNames[i] = p.Name
-			}
-			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Multiple projects found matching '%s': %s. Please be more specific.", ctx.ProjectName, strings.Join(projectNames, ", ")))
-			return
-		}
-
-		project := projects[0]
-
-		// Get project-specific task data
-		taskInfos, err = getTaskChangesWithProject(db, periodInfo.Type, &project.TimeCampTaskID)
-		if err != nil {
-			errorMessage := fmt.Sprintf("Failed to get %s changes for project '%s': ```%v```", periodInfo.DisplayName, project.Name, err)
-			sr.slackClient.SendErrorResponse(ctx, errorMessage)
-			return
-		}
-	} else {
-		// Check if user has specific project assignments
-		userProjects, err := GetUserProjects(db, ctx.UserID)
-		if err != nil {
-			sr.logger.Errorf("Failed to get user projects: %v", err)
-			// Continue with all projects if we can't get user assignments
-		}
-
-		// If user has specific project assignments, filter to only those projects
-		if len(userProjects) > 0 {
-			// Get combined task data for all assigned projects
-			var allProjectTasks []TaskUpdateInfo
-			for _, project := range userProjects {
-				projectTasks, err := getTaskChangesWithProject(db, periodInfo.Type, &project.TimeCampTaskID)
-				if err != nil {
-					sr.logger.Errorf("Failed to get tasks for project %s: %v", project.Name, err)
-					continue
-				}
-				allProjectTasks = append(allProjectTasks, projectTasks...)
-			}
-			taskInfos = allProjectTasks
-		} else {
-			// Get task data for all projects (user has no specific assignments)
-			taskInfos, err = getTaskChanges(db, periodInfo.Type)
-			if err != nil {
-				errorMessage := fmt.Sprintf("Failed to get %s changes: ```%v```", periodInfo.DisplayName, err)
-				sr.slackClient.SendErrorResponse(ctx, errorMessage)
-				return
-			}
-		}
-	}
+	taskInfos := result.TaskInfos
 
 	// Handle the case where there are no tasks
 	if len(taskInfos) == 0 {
-		err = sr.slackClient.SendNoChangesMessage(ctx, periodInfo.DisplayName)
+		err := sr.slackClient.SendNoChangesMessage(ctx, result.PeriodInfo.DisplayName)
 		if err != nil {
 			sr.logger.Errorf("Failed to send 'no changes' message: %v", err)
-			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send %s report", periodInfo.DisplayName))
+			sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send %s report", result.PeriodInfo.DisplayName))
 		}
 		return
 	}
 
 	// Send final result as public message in thread
-	err = sr.slackClient.SendFinalUpdate(ctx, taskInfos, periodInfo.DisplayName)
+	err := sr.slackClient.SendFinalUpdate(ctx, taskInfos, result.PeriodInfo.DisplayName)
 
 	if err != nil {
-		sr.logger.Errorf("Failed to send final %s report via Slack API: %v", periodInfo.DisplayName, err)
+		sr.logger.Errorf("Failed to send final %s report via Slack API: %v", result.PeriodInfo.DisplayName, err)
 
 		// Try webhook fallback with proper splitting
 		sr.logger.Info("Attempting webhook fallback with message splitting...")
@@ -467,18 +535,18 @@ func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, perio
 		convertedTasks := convertTaskUpdateInfoToTaskInfo(taskInfos)
 		
 		// Test if single message would work (use new simplified messaging)
-		err = SendTaskMessage(convertedTasks, periodInfo.DisplayName)
+		err = SendTaskMessage(convertedTasks, result.PeriodInfo.DisplayName)
 		if err == nil {
 			return // Successfully sent
 		}
 		
 		// Fallback error handling
 		sr.logger.Errorf("Task message failed: %v", err)
-		sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send %s report", periodInfo.DisplayName))
+		sr.slackClient.SendErrorResponse(ctx, fmt.Sprintf("Failed to send %s report", result.PeriodInfo.DisplayName))
 		return
 	}
 
-	sr.logger.Infof("Completed %s update for user %s", periodInfo.DisplayName, ctx.UserID)
+	sr.logger.Infof("Completed %s update for user %s", result.PeriodInfo.DisplayName, ctx.UserID)
 }
 
 // HandleFullSyncRequest processes full sync requests

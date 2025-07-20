@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/joho/godotenv"
 	"github.com/robfig/cron/v3"
@@ -73,29 +74,70 @@ func handleCliCommands(args []string, logger *Logger) {
 			logger.Error("Error: update command requires a period (daily, weekly, or monthly)")
 			return
 		}
-		period := args[1]
-		if period != "daily" && period != "weekly" && period != "monthly" {
-			logger.Errorf("Error: invalid period '%s'. Must be one of daily, weekly, or monthly.", period)
-			return
-		}
-		logger.Infof("Running %s update command", period)
 
-		// Get database connection
-		db, err := GetDB()
-		if err != nil {
-			logger.Fatalf("Failed to get database connection: %v", err)
+		// Join all remaining args to support multi-word periods like "last 7 days"
+		fullText := strings.Join(args[1:], " ")
+		logger.Infof("Running update command for: %s", fullText)
+
+		// Parse project and period (similar to how Slack does it)
+		var projectName string
+		var periodText string
+
+		// Check if this looks like a project-specific command
+		// Format: update "project name" period OR update projectname period
+		parts := strings.Fields(fullText)
+		if len(parts) >= 2 {
+			// Try to parse project name in quotes
+			if strings.HasPrefix(fullText, "\"") {
+				endQuote := strings.Index(fullText[1:], "\"")
+				if endQuote > 0 {
+					projectName = fullText[1 : endQuote+1]
+					periodText = strings.TrimSpace(fullText[endQuote+2:])
+				}
+			} else {
+				// Check if first word could be a project name (contains no period keywords)
+				firstWord := parts[0]
+				periodKeywords := []string{"daily", "weekly", "monthly", "today", "yesterday", "this", "last"}
+				isProjectName := true
+				for _, keyword := range periodKeywords {
+					if strings.Contains(strings.ToLower(firstWord), keyword) {
+						isProjectName = false
+						break
+					}
+				}
+				if isProjectName && len(parts) > 1 {
+					projectName = firstWord
+					periodText = strings.Join(parts[1:], " ")
+				}
+			}
 		}
 
-		// Get task changes
-		taskInfos, err := getTaskChanges(db, period)
-		if err != nil {
-			logger.Fatalf("Failed to get task changes: %v", err)
+		// If no project detected, treat entire text as period
+		if projectName == "" {
+			periodText = fullText
 		}
 
-		// Send update
-		if err := SendSlackUpdate(taskInfos, period); err != nil {
-			logger.Fatalf("Failed to send Slack update: %v", err)
+		// Use unified processor
+		router := NewSmartRouter()
+		req := &UnifiedUpdateRequest{
+			Command:     "update",
+			Text:        periodText,
+			ProjectName: projectName,
+			Source:      "cli",
 		}
+
+		result := router.ProcessUnifiedUpdate(req)
+		if !result.Success {
+			logger.Fatalf("Failed to process update: %s", result.ErrorMsg)
+		}
+
+		// Send update using the same function as Slack
+		convertedTasks := convertTaskUpdateInfoToTaskInfo(result.TaskInfos)
+		if err := SendTaskMessage(convertedTasks, result.PeriodInfo.DisplayName); err != nil {
+			logger.Fatalf("Failed to send update: %v", err)
+		}
+
+		logger.Infof("Successfully sent %s update with %d tasks", result.PeriodInfo.DisplayName, len(result.TaskInfos))
 	case "sync-time-entries":
 		logger.Info("Running time entries sync command")
 		if err := SyncTimeEntriesToDatabase("", ""); err != nil {
@@ -263,7 +305,7 @@ func setupCronJobs(logger *Logger) {
 			return
 		}
 
-		taskInfos, err := getTaskChanges(db, "daily")
+		taskInfos, err := getTaskChanges(db, "daily", 1)
 		if err != nil {
 			logger.Errorf("Failed to get task changes for daily update: %v", err)
 			return

@@ -472,32 +472,14 @@ func outputJSON(messages []SlackMessage) {
 
 // Legacy compatibility functions
 
-// getTaskChanges wrapper for compatibility
-func getTaskChanges(db *sql.DB, period string) ([]TaskUpdateInfo, error) {
-	switch period {
-	case "daily":
-		return GetTaskTimeEntries(db)
-	case "weekly":
-		return GetWeeklyTaskTimeEntries(db)
-	case "monthly":
-		return GetMonthlyTaskTimeEntries(db)
-	default:
-		return GetTaskTimeEntries(db)
-	}
+// getTaskChanges unified dynamic function
+func getTaskChanges(db *sql.DB, period string, days int) ([]TaskUpdateInfo, error) {
+	return GetDynamicTaskTimeEntriesWithProject(db, period, days, nil)
 }
 
-// getTaskChangesWithProject wrapper for compatibility
-func getTaskChangesWithProject(db *sql.DB, period string, projectTaskID *int) ([]TaskUpdateInfo, error) {
-	switch period {
-	case "daily":
-		return GetTaskTimeEntriesWithProject(db, projectTaskID)
-	case "weekly":
-		return GetWeeklyTaskTimeEntriesWithProject(db, projectTaskID)
-	case "monthly":
-		return GetMonthlyTaskTimeEntriesWithProject(db, projectTaskID)
-	default:
-		return GetTaskTimeEntriesWithProject(db, projectTaskID)
-	}
+// getTaskChangesWithProject unified dynamic function  
+func getTaskChangesWithProject(db *sql.DB, period string, days int, projectTaskID *int) ([]TaskUpdateInfo, error) {
+	return GetDynamicTaskTimeEntriesWithProject(db, period, days, projectTaskID)
 }
 
 // GroupTasksByProject groups tasks by project for compatibility
