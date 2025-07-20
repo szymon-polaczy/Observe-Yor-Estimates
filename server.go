@@ -11,7 +11,6 @@ import (
 	"time"
 )
 
-
 func StartServer(logger *Logger) {
 	// Setup handlers in this file
 	setupSlackRoutes()
@@ -269,36 +268,6 @@ func sendImmediateResponse(w http.ResponseWriter, message string, responseType s
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
-}
-
-// sendDelayedResponse sends a delayed response to Slack using the response URL
-func sendDelayedResponse(responseURL string, message SlackMessage) error {
-	logger := GetGlobalLogger()
-
-	// Convert SlackMessage to SlackCommandResponse format
-	response := SlackCommandResponse{
-		ResponseType: "in_channel", // Visible to everyone in the channel
-		Text:         message.Text,
-		Blocks:       message.Blocks,
-	}
-
-	jsonData, err := json.Marshal(response)
-	if err != nil {
-		return fmt.Errorf("error marshaling response: %w", err)
-	}
-
-	resp, err := http.Post(responseURL, "application/json", strings.NewReader(string(jsonData)))
-	if err != nil {
-		return fmt.Errorf("error sending delayed response: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("slack API returned status %d", resp.StatusCode)
-	}
-
-	logger.Debug("Successfully sent delayed response to Slack")
-	return nil
 }
 
 // handleHealthCheck handles a simple health check endpoint
