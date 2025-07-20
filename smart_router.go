@@ -21,11 +21,12 @@ func NewSmartRouter() *SmartRouter {
 
 // UnifiedUpdateRequest represents a unified update request from any source
 type UnifiedUpdateRequest struct {
-	Command     string // "update", "threshold", etc.
-	Text        string // Raw command text for parsing
-	ProjectName string // Optional project name
-	UserID      string // Optional user ID for filtering
-	Source      string // "cli" or "slack"
+	Command     string     // "update", "threshold", etc.
+	Text        string     // Raw command text for parsing
+	ProjectName string     // Optional project name
+	UserID      string     // Optional user ID for filtering
+	Source      string     // "cli" or "slack"
+	PeriodInfo  *PeriodInfo // Optional pre-parsed period info
 }
 
 // UnifiedUpdateResult contains the results of processing an update
@@ -44,8 +45,13 @@ func (sr *SmartRouter) ProcessUnifiedUpdate(req *UnifiedUpdateRequest) *UnifiedU
 		Source: req.Source,
 	}
 
-	// Parse period from command text
-	periodInfo := sr.parsePeriodFromText(req.Text, req.Command)
+	// Use pre-parsed period if available, otherwise parse from text
+	var periodInfo PeriodInfo
+	if req.PeriodInfo != nil {
+		periodInfo = *req.PeriodInfo
+	} else {
+		periodInfo = sr.parsePeriodFromText(req.Text, req.Command)
+	}
 	result.PeriodInfo = periodInfo
 
 	// Log the request
@@ -495,15 +501,14 @@ func (sr *SmartRouter) processUpdateWithProgress(ctx *ConversationContext, perio
 	// Use unified processor
 	req := &UnifiedUpdateRequest{
 		Command:     "update",
-		Text:        "", // Empty text to skip re-parsing
+		Text:        "", // Not needed since we're passing PeriodInfo
 		ProjectName: ctx.ProjectName,
 		UserID:      ctx.UserID,
 		Source:      "slack",
+		PeriodInfo:  &periodInfo, // Pass the already parsed period
 	}
 
-	// Directly use the already parsed periodInfo
 	result := sr.ProcessUnifiedUpdate(req)
-	result.PeriodInfo = periodInfo // Override with the already parsed period
 	if !result.Success {
 		sr.slackClient.SendErrorResponse(ctx, result.ErrorMsg)
 		return
