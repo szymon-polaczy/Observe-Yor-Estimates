@@ -190,7 +190,7 @@ func (s *SlackAPIClient) SendFinalUpdate(ctx *ConversationContext, taskInfos []T
 		if !validation.IsValid {
 			s.logger.Warnf("Message too large (%d chars, %d blocks) - splitting by project", validation.CharacterCount, validation.BlockCount)
 		}
-		return s.sendProjectSplitMessages(ctx, projectGroups, period, taskInfos)
+		return s.sendProjectSplitMessages(ctx, projectGroups, period)
 	}
 
 	// Otherwise, send as single message (we already validated it fits)
