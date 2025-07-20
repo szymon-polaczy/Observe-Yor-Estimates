@@ -316,6 +316,9 @@ func (s *SlackAPIClient) sendChunkedMessage(ctx *ConversationContext, message Sl
 	if err != nil {
 		s.logger.Errorf("Failed to send project message chunk: %v", err)
 	}
+
+	// Increased delay between project messages for better visual separation
+	time.Sleep(100 * time.Millisecond)
 }
 
 // formatReportHeaderMessage creates the header message for split reports
