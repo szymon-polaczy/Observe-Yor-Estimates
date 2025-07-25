@@ -8,59 +8,42 @@ import (
 	"github.com/joho/godotenv"
 )
 
-// FullSyncTasksToDatabase fetches ALL tasks from TimeCamp and stores them in the database
-// This is intended for initial setup or full re-sync operations
 func FullSyncTasksToDatabase() error {
 	logger := GetGlobalLogger()
 
-	// Load environment variables
-	err := godotenv.Load()
-	if err != nil {
+	if err := godotenv.Load(); err != nil {
 		logger.Warnf("Could not reload .env file (continuing with existing env vars): %v", err)
 	}
 
 	logger.Debug("Starting FULL task synchronization with TimeCamp")
 
-	// Validate database write access before proceeding
 	if err := validateDatabaseWriteAccess(); err != nil {
 		return fmt.Errorf("database write validation failed: %w", err)
 	}
 
-	// Validate required environment variables before proceeding
-	apiKey := os.Getenv("TIMECAMP_API_KEY")
-	if apiKey == "" {
+	if apiKey := os.Getenv("TIMECAMP_API_KEY"); apiKey == "" {
 		return fmt.Errorf("TIMECAMP_API_KEY environment variable not set - cannot proceed with sync")
 	}
-	logger.Debug("TimeCamp API key is configured")
 
-	// Use the updated SyncTasksToDatabase with fullSync=true
+	logger.Debug("TimeCamp API key is configured")
 	return SyncTasksToDatabase(true)
 }
 
-// FullSyncTimeEntriesToDatabase fetches ALL time entries from TimeCamp and stores them in the database
-// This is intended for initial setup or full re-sync operations
 func FullSyncTimeEntriesToDatabase() error {
 	logger := GetGlobalLogger()
-
 	logger.Debug("Starting FULL time entries synchronization with TimeCamp")
 
-	// For full sync, get entries from a much longer period (e.g., last 6 months)
-	// You can adjust this timeframe based on your needs
-	fromDate := time.Now().AddDate(0, -6, 0).Format("2006-01-02") // 6 months ago
+	fromDate := time.Now().AddDate(0, -6, 0).Format("2006-01-02")
 	toDate := time.Now().Format("2006-01-02")
 
 	logger.Infof("Full sync: retrieving time entries from %s to %s", fromDate, toDate)
-
 	return SyncTimeEntriesToDatabaseWithOptions(fromDate, toDate, true)
 }
 
-// FullSyncAll performs both full tasks sync and full time entries sync with optimizations
 func FullSyncAll() error {
 	logger := GetGlobalLogger()
-
 	logger.Info("Starting optimized full synchronization of all data from TimeCamp")
 
-	// Validate database write access before attempting sync operations
 	logger.Debug("Validating database write access...")
 	if err := validateDatabaseWriteAccess(); err != nil {
 		return fmt.Errorf("database write validation failed: %w", err)
@@ -69,21 +52,18 @@ func FullSyncAll() error {
 
 	startTime := time.Now()
 
-	// Sync tasks first (time entries depend on tasks)
 	logger.Info("Starting optimized full tasks sync...")
 	if err := FullSyncTasksToDatabase(); err != nil {
 		return fmt.Errorf("full tasks sync failed: %w", err)
 	}
 	logger.Info("Full tasks sync completed successfully")
 
-	// Then sync time entries (including orphaned ones)
 	logger.Info("Starting optimized full time entries sync...")
 	if err := FullSyncTimeEntriesToDatabase(); err != nil {
 		return fmt.Errorf("full time entries sync failed: %w", err)
 	}
 	logger.Info("Full time entries sync completed successfully")
 
-	// Process any orphaned time entries that can now be matched with tasks
 	logger.Info("Processing orphaned time entries...")
 	db, err := GetDB()
 	if err != nil {
@@ -91,9 +71,7 @@ func FullSyncAll() error {
 	} else {
 		if err := ProcessOrphanedTimeEntries(db); err != nil {
 			logger.Errorf("Failed to process orphaned time entries: %v", err)
-			// Don't fail the entire sync for orphaned processing
 		} else {
-			// Report on remaining orphaned entries
 			if count, err := GetOrphanedTimeEntriesCount(db); err != nil {
 				logger.Warnf("Failed to count remaining orphaned entries: %v", err)
 			} else if count > 0 {
@@ -109,7 +87,6 @@ func FullSyncAll() error {
 	return nil
 }
 
-// SendFullSyncWithResponseURL performs a full sync and sends the result to a Slack response URL
 func SendFullSyncWithResponseURL(responseURL string) {
 	logger := GetGlobalLogger()
 	logger.Info("Starting full sync with response URL")
@@ -132,7 +109,6 @@ func SendFullSyncWithResponseURL(responseURL string) {
 		return
 	}
 
-	// Send success message
 	message := SlackMessage{
 		Text: "✅ Full synchronization completed successfully",
 		Blocks: []Block{

@@ -5,21 +5,14 @@ import (
 	"time"
 )
 
-// FormatDuration converts seconds to readable time format
 func FormatDuration(seconds int) string {
 	if seconds <= 0 {
 		return "0h 0m"
 	}
 
 	hours := seconds / 3600
-	remainingSeconds := seconds % 3600
-	minutes := remainingSeconds / 60
+	minutes := (seconds % 3600) / 60
 
-	return formatHoursMinutes(hours, minutes)
-}
-
-// formatHoursMinutes creates standardized hour/minute strings
-func formatHoursMinutes(hours, minutes int) string {
 	if hours == 0 && minutes == 0 {
 		return "0h 0m"
 	}
@@ -32,53 +25,37 @@ func formatHoursMinutes(hours, minutes int) string {
 	return strconv.Itoa(hours) + "h " + strconv.Itoa(minutes) + "m"
 }
 
-// CalcDateRanges calculates date ranges for different period types
 func CalcDateRanges(periodType string, days int) PeriodDateRanges {
 	now := time.Now()
+	dateFormat := "2006-01-02"
+	historicalStart := "2000-01-01"
 
 	switch periodType {
 	case "today":
+		today := now.Format(dateFormat)
 		return PeriodDateRanges{
-			Current: DateRange{
-				Start: now.Format("2006-01-02"),
-				End:   now.Format("2006-01-02"),
-			},
-			Previous: DateRange{
-				Start: "2000-01-01",
-				End:   now.AddDate(0, 0, -1).Format("2006-01-02"),
-			},
+			Current:  DateRange{Start: today, End: today},
+			Previous: DateRange{Start: historicalStart, End: now.AddDate(0, 0, -1).Format(dateFormat)},
 		}
 
 	case "yesterday":
-		yesterday := now.AddDate(0, 0, -1)
+		yesterday := now.AddDate(0, 0, -1).Format(dateFormat)
 		return PeriodDateRanges{
-			Current: DateRange{
-				Start: yesterday.Format("2006-01-02"),
-				End:   yesterday.Format("2006-01-02"),
-			},
-			Previous: DateRange{
-				Start: "2000-01-01",
-				End:   now.AddDate(0, 0, -2).Format("2006-01-02"),
-			},
+			Current:  DateRange{Start: yesterday, End: yesterday},
+			Previous: DateRange{Start: historicalStart, End: now.AddDate(0, 0, -2).Format(dateFormat)},
 		}
 
 	case "this_week":
 		weekday := int(now.Weekday())
-		if weekday == 0 { // Sunday
+		if weekday == 0 {
 			weekday = 7
 		}
 		startOfWeek := now.AddDate(0, 0, -weekday+1)
 		endOfWeek := startOfWeek.AddDate(0, 0, 6)
 
 		return PeriodDateRanges{
-			Current: DateRange{
-				Start: startOfWeek.Format("2006-01-02"),
-				End:   endOfWeek.Format("2006-01-02"),
-			},
-			Previous: DateRange{
-				Start: "2000-01-01",
-				End:   startOfWeek.AddDate(0, 0, -1).Format("2006-01-02"),
-			},
+			Current:  DateRange{Start: startOfWeek.Format(dateFormat), End: endOfWeek.Format(dateFormat)},
+			Previous: DateRange{Start: historicalStart, End: startOfWeek.AddDate(0, 0, -1).Format(dateFormat)},
 		}
 
 	case "last_week":
@@ -91,14 +68,8 @@ func CalcDateRanges(periodType string, days int) PeriodDateRanges {
 		endOfLastWeek := startOfLastWeek.AddDate(0, 0, 6)
 
 		return PeriodDateRanges{
-			Current: DateRange{
-				Start: startOfLastWeek.Format("2006-01-02"),
-				End:   endOfLastWeek.Format("2006-01-02"),
-			},
-			Previous: DateRange{
-				Start: "2000-01-01",
-				End:   startOfLastWeek.AddDate(0, 0, -1).Format("2006-01-02"),
-			},
+			Current:  DateRange{Start: startOfLastWeek.Format(dateFormat), End: endOfLastWeek.Format(dateFormat)},
+			Previous: DateRange{Start: historicalStart, End: startOfLastWeek.AddDate(0, 0, -1).Format(dateFormat)},
 		}
 
 	case "this_month":
@@ -106,14 +77,8 @@ func CalcDateRanges(periodType string, days int) PeriodDateRanges {
 		endOfMonth := startOfMonth.AddDate(0, 1, -1)
 
 		return PeriodDateRanges{
-			Current: DateRange{
-				Start: startOfMonth.Format("2006-01-02"),
-				End:   endOfMonth.Format("2006-01-02"),
-			},
-			Previous: DateRange{
-				Start: "2000-01-01",
-				End:   startOfMonth.AddDate(0, 0, -1).Format("2006-01-02"),
-			},
+			Current:  DateRange{Start: startOfMonth.Format(dateFormat), End: endOfMonth.Format(dateFormat)},
+			Previous: DateRange{Start: historicalStart, End: startOfMonth.AddDate(0, 0, -1).Format(dateFormat)},
 		}
 
 	case "last_month":
@@ -122,58 +87,44 @@ func CalcDateRanges(periodType string, days int) PeriodDateRanges {
 		endOfLastMonth := startOfThisMonth.AddDate(0, 0, -1)
 
 		return PeriodDateRanges{
-			Current: DateRange{
-				Start: startOfLastMonth.Format("2006-01-02"),
-				End:   endOfLastMonth.Format("2006-01-02"),
-			},
-			Previous: DateRange{
-				Start: "2000-01-01",
-				End:   startOfLastMonth.AddDate(0, 0, -1).Format("2006-01-02"),
-			},
+			Current:  DateRange{Start: startOfLastMonth.Format(dateFormat), End: endOfLastMonth.Format(dateFormat)},
+			Previous: DateRange{Start: historicalStart, End: startOfLastMonth.AddDate(0, 0, -1).Format(dateFormat)},
 		}
 
 	case "last_x_days":
-		endDate := now.AddDate(0, 0, -1) // Yesterday
+		endDate := now.AddDate(0, 0, -1)
 		startDate := endDate.AddDate(0, 0, -days+1)
 
 		return PeriodDateRanges{
-			Current: DateRange{
-				Start: startDate.Format("2006-01-02"),
-				End:   endDate.Format("2006-01-02"),
-			},
-			Previous: DateRange{
-				Start: "2000-01-01",
-				End:   startDate.AddDate(0, 0, -1).Format("2006-01-02"),
-			},
+			Current:  DateRange{Start: startDate.Format(dateFormat), End: endDate.Format(dateFormat)},
+			Previous: DateRange{Start: historicalStart, End: startDate.AddDate(0, 0, -1).Format(dateFormat)},
 		}
 
 	default:
-		// Default to yesterday
 		return CalcDateRanges("yesterday", 1)
 	}
 }
 
-// GetPeriodDisplayName returns human-readable period names
 func GetPeriodDisplayName(periodType string, days int) string {
-	switch periodType {
-	case "today":
-		return "Today"
-	case "yesterday":
-		return "Yesterday"
-	case "this_week":
-		return "This Week"
-	case "last_week":
-		return "Last Week"
-	case "this_month":
-		return "This Month"
-	case "last_month":
-		return "Last Month"
-	case "last_x_days":
+	displayNames := map[string]string{
+		"today":      "Today",
+		"yesterday":  "Yesterday",
+		"this_week":  "This Week",
+		"last_week":  "Last Week",
+		"this_month": "This Month",
+		"last_month": "Last Month",
+	}
+
+	if name, exists := displayNames[periodType]; exists {
+		return name
+	}
+
+	if periodType == "last_x_days" {
 		if days == 1 {
 			return "Yesterday"
 		}
 		return "Last " + strconv.Itoa(days) + " Days"
-	default:
-		return "Unknown Period"
 	}
+
+	return "Unknown Period"
 }
