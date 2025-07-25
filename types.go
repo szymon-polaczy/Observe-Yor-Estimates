@@ -114,7 +114,7 @@ type Field struct {
 
 type Element struct {
 	Type     string      `json:"type"`
-	Text     *Text       `json:"text,omitempty"`
+	Text     interface{} `json:"text,omitempty"`
 	ActionID string      `json:"action_id,omitempty"`
 	Style    string      `json:"style,omitempty"`
 	Value    string      `json:"value,omitempty"`

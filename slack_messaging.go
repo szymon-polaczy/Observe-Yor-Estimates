@@ -103,7 +103,7 @@ func formatProjectMessage(project string, tasks []TaskInfo, period string) Slack
 
 	blocks := []Block{
 		{Type: "header", Text: &Text{Type: "plain_text", Text: title}},
-		{Type: "context", Elements: []Element{{Type: "mrkdwn", Text: &Text{Type: "mrkdwn", Text: time.Now().Format("January 2, 2006")}}}},
+		{Type: "context", Elements: []Element{{Type: "mrkdwn", Text: time.Now().Format("January 2, 2006")}}},
 		{Type: "divider"},
 	}
 
@@ -140,7 +140,7 @@ func formatThresholdMessage(project string, tasks []TaskInfo, period string, thr
 
 	blocks := []Block{
 		{Type: "header", Text: &Text{Type: "plain_text", Text: title}},
-		{Type: "context", Elements: []Element{{Type: "mrkdwn", Text: &Text{Type: "mrkdwn", Text: fmt.Sprintf("📅 Period: %s | Project: %s", period, project)}}}},
+		{Type: "context", Elements: []Element{{Type: "mrkdwn", Text: fmt.Sprintf("📅 Period: %s | Project: %s", period, project)}}},
 		{Type: "divider"},
 	}
 
