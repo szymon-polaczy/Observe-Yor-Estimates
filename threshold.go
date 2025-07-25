@@ -9,14 +9,12 @@ import (
 
 // GetTasksOverThresholdWithProject returns tasks over threshold, optionally filtered by project
 func GetTasksOverThresholdWithProject(db *sql.DB, threshold float64, period string, days int, projectTaskID *int) ([]TaskInfo, error) {
-	dateRanges := CalcDateRanges(period, days)
-	fromDate := dateRanges.Current.Start
-	toDate := dateRanges.Current.End
+	dateRanges := CalculatePeriodRange(period, days)
 
 	// Build project filtering
 	var projectFilterClause string
 	var queryArgs []interface{}
-	queryArgs = append(queryArgs, fromDate, toDate)
+	queryArgs = append(queryArgs, dateRanges.Start, dateRanges.End)
 
 	if projectTaskID != nil {
 		projectTaskIDs, err := GetProjectTaskIDs(db, *projectTaskID)

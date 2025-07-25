@@ -113,11 +113,11 @@ type Field struct {
 }
 
 type Element struct {
-	Type     string      `json:"type"`
-	Text     *Text       `json:"text,omitempty"`
-	ActionID string      `json:"action_id,omitempty"`
-	Style    string      `json:"style,omitempty"`
-	Value    string      `json:"value,omitempty"`
+	Type     string `json:"type"`
+	Text     *Text  `json:"text,omitempty"`
+	ActionID string `json:"action_id,omitempty"`
+	Style    string `json:"style,omitempty"`
+	Value    string `json:"value,omitempty"`
 }
 
 type Accessory struct {
@@ -198,15 +198,10 @@ type Project struct {
 }
 
 // Date range for period calculations
-type DateRange struct {
+type PeriodRange struct {
 	Start string
 	End   string
 	Label string
-}
-
-type PeriodDateRanges struct {
-	Current  DateRange
-	Previous DateRange
 }
 
 // Retry configuration for HTTP requests

@@ -168,7 +168,7 @@ func (sr *SmartRouter) ProcessUnifiedUpdate(req *UnifiedUpdateRequest) *UnifiedU
 	if req.PeriodInfo != nil {
 		periodInfo = *req.PeriodInfo
 	} else {
-		periodInfo = sr.parsePeriodFromText(req.Text, req.Command)
+		periodInfo = ParsePeriodFromText(req.Text, req.Command)
 	}
 	result.PeriodInfo = periodInfo
 
@@ -200,7 +200,7 @@ func (sr *SmartRouter) HandleUpdateRequest(req *SlackCommandRequest) error {
 		ProjectName: req.ProjectName,
 	}
 
-	periodInfo := sr.parsePeriodFromText(req.Text, req.Command)
+	periodInfo := ParsePeriodFromText(req.Text, req.Command)
 	sr.logRequest(req.ProjectName, periodInfo.DisplayName, "slack")
 
 	go sr.processUpdateWithProgress(ctx, periodInfo, req.ResponseURL)
@@ -318,44 +318,6 @@ func (sr *SmartRouter) sendThresholdFallback(taskInfos []TaskUpdateInfo, thresho
 	}
 }
 
-func (sr *SmartRouter) parsePeriodFromText(text, command string) PeriodInfo {
-	text = strings.ToLower(strings.TrimSpace(text))
-
-	words := strings.Fields(text)
-	for i, word := range words {
-		if word == "last" && i+2 < len(words) {
-			if words[i+2] == "days" || words[i+2] == "day" {
-				if days, err := strconv.Atoi(words[i+1]); err == nil && days >= 1 && days <= 60 {
-					return PeriodInfo{
-						Type:        "last_x_days",
-						Days:        days,
-						DisplayName: fmt.Sprintf("Last %d Days", days),
-					}
-				}
-			}
-		}
-	}
-
-	periodMap := map[string]PeriodInfo{
-		"today":      {Type: "today", Days: 0, DisplayName: "Today"},
-		"yesterday":  {Type: "yesterday", Days: 1, DisplayName: "Yesterday"},
-		"this week":  {Type: "this_week", Days: 0, DisplayName: "This Week"},
-		"last week":  {Type: "last_week", Days: 7, DisplayName: "Last Week"},
-		"this month": {Type: "this_month", Days: 0, DisplayName: "This Month"},
-		"last month": {Type: "last_month", Days: 30, DisplayName: "Last Month"},
-		"weekly":     {Type: "last_week", Days: 7, DisplayName: "Last Week"},
-		"monthly":    {Type: "last_month", Days: 30, DisplayName: "Last Month"},
-	}
-
-	for keyword, period := range periodMap {
-		if strings.Contains(text, keyword) {
-			return period
-		}
-	}
-
-	return PeriodInfo{Type: "yesterday", Days: 1, DisplayName: "Yesterday"}
-}
-
 func (sr *SmartRouter) parseThresholdCommand(text string) (float64, PeriodInfo, error) {
 	text = strings.ToLower(strings.TrimSpace(text))
 	text = strings.TrimPrefix(text, "over ")
@@ -379,7 +341,7 @@ func (sr *SmartRouter) parseThresholdCommand(text string) (float64, PeriodInfo, 
 	var periodInfo PeriodInfo
 	if len(parts) >= 2 {
 		periodText := strings.Join(parts[1:], " ")
-		periodInfo = sr.parsePeriodFromText(periodText, "")
+		periodInfo = ParsePeriodFromText(periodText, "")
 	} else {
 		periodInfo = PeriodInfo{Type: "yesterday", Days: 1, DisplayName: "Yesterday"}
 	}

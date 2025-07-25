@@ -147,7 +147,7 @@ func SyncTimeEntriesToDatabaseWithOptions(fromDate, toDate string, includeOrphan
 
 	// Ensure orphaned_time_entries table exists if we're including orphaned entries
 	if includeOrphaned {
-		if err := ensureOrphanedTimeEntriesTable(db); err != nil {
+		if err := createOrphanedTimeEntriesTable(db); err != nil {
 			return fmt.Errorf("failed to ensure orphaned_time_entries table: %w", err)
 		}
 	}
@@ -486,166 +486,6 @@ func checkMissingTasksAndSuggestRemediation(db *sql.DB, missingTaskCount int, lo
 	}
 }
 
-// calculateDateRanges calculates date ranges for different period types
-func calculateDateRanges(periodType string, days int) PeriodDateRanges {
-	now := time.Now()
-
-	switch periodType {
-	case "today":
-		today := now.Format("2006-01-02")
-		yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
-		return PeriodDateRanges{
-			Current:  DateRange{Start: today, End: today, Label: "Today"},
-			Previous: DateRange{Start: yesterday, End: yesterday, Label: "Yesterday"},
-		}
-
-	case "yesterday", "daily":
-		yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
-		dayBefore := now.AddDate(0, 0, -2).Format("2006-01-02")
-		return PeriodDateRanges{
-			Current:  DateRange{Start: yesterday, End: yesterday, Label: "Yesterday"},
-			Previous: DateRange{Start: dayBefore, End: dayBefore, Label: "Day Before"},
-		}
-
-	case "this_week":
-		// Current week: Monday to today
-		weekStart := now.AddDate(0, 0, -int(now.Weekday()-time.Monday))
-		if now.Weekday() == time.Sunday {
-			weekStart = weekStart.AddDate(0, 0, -6) // Go back to Monday
-		}
-		currentWeekEnd := now.Format("2006-01-02")
-
-		// Last week: Monday to Sunday of previous week
-		lastWeekStart := weekStart.AddDate(0, 0, -7).Format("2006-01-02")
-		lastWeekEnd := weekStart.AddDate(0, 0, -1).Format("2006-01-02")
-
-		return PeriodDateRanges{
-			Current:  DateRange{Start: weekStart.Format("2006-01-02"), End: currentWeekEnd, Label: "This Week"},
-			Previous: DateRange{Start: lastWeekStart, End: lastWeekEnd, Label: "Last Week"},
-		}
-
-	case "last_week", "weekly":
-		// Last week: Monday to Sunday of previous week
-		weekStart := now.AddDate(0, 0, -int(now.Weekday()-time.Monday))
-		if now.Weekday() == time.Sunday {
-			weekStart = weekStart.AddDate(0, 0, -6)
-		}
-		lastWeekStart := weekStart.AddDate(0, 0, -7).Format("2006-01-02")
-		lastWeekEnd := weekStart.AddDate(0, 0, -1).Format("2006-01-02")
-
-		// Previous week: Monday to Sunday before last week
-		prevWeekStart := weekStart.AddDate(0, 0, -14).Format("2006-01-02")
-		prevWeekEnd := weekStart.AddDate(0, 0, -8).Format("2006-01-02")
-
-		return PeriodDateRanges{
-			Current:  DateRange{Start: lastWeekStart, End: lastWeekEnd, Label: "Last Week"},
-			Previous: DateRange{Start: prevWeekStart, End: prevWeekEnd, Label: "Previous Week"},
-		}
-
-	case "this_month":
-		// Current month: 1st to today
-		monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
-		currentMonthEnd := now.Format("2006-01-02")
-
-		// Last month: 1st to last day of previous month
-		lastMonthStart := monthStart.AddDate(0, -1, 0).Format("2006-01-02")
-		lastMonthEnd := monthStart.AddDate(0, 0, -1).Format("2006-01-02")
-
-		return PeriodDateRanges{
-			Current:  DateRange{Start: monthStart.Format("2006-01-02"), End: currentMonthEnd, Label: "This Month"},
-			Previous: DateRange{Start: lastMonthStart, End: lastMonthEnd, Label: "Last Month"},
-		}
-
-	case "last_month":
-		// Last month: 1st to last day of previous month
-		monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
-		lastMonthStart := monthStart.AddDate(0, -1, 0).Format("2006-01-02")
-		lastMonthEnd := monthStart.AddDate(0, 0, -1).Format("2006-01-02")
-
-		// Previous month: 1st to last day before last month
-		prevMonthStart := monthStart.AddDate(0, -2, 0).Format("2006-01-02")
-		prevMonthEnd := monthStart.AddDate(-1, 0, 0).Format("2006-01-02")
-
-		return PeriodDateRanges{
-			Current:  DateRange{Start: lastMonthStart, End: lastMonthEnd, Label: "Last Month"},
-			Previous: DateRange{Start: prevMonthStart, End: prevMonthEnd, Label: "Previous Month"},
-		}
-
-	case "last_x_days":
-		// Last X days: X days ago to today
-		currentStart := now.AddDate(0, 0, -days).Format("2006-01-02")
-		currentEnd := now.Format("2006-01-02")
-
-		// Previous X days: 2X days ago to X days ago
-		previousStart := now.AddDate(0, 0, -days*2).Format("2006-01-02")
-		previousEnd := now.AddDate(0, 0, -days).Format("2006-01-02")
-
-		currentLabel := fmt.Sprintf("Last %d Days", days)
-		previousLabel := fmt.Sprintf("Previous %d Days", days)
-
-		return PeriodDateRanges{
-			Current:  DateRange{Start: currentStart, End: currentEnd, Label: currentLabel},
-			Previous: DateRange{Start: previousStart, End: previousEnd, Label: previousLabel},
-		}
-
-	default:
-		// Fallback to yesterday
-		yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
-		dayBefore := now.AddDate(0, 0, -2).Format("2006-01-02")
-		return PeriodDateRanges{
-			Current:  DateRange{Start: yesterday, End: yesterday, Label: "Yesterday"},
-			Previous: DateRange{Start: dayBefore, End: dayBefore, Label: "Day Before"},
-		}
-	}
-}
-
-// formatDuration formats seconds into a human-readable string like "1h 30m"
-func formatDuration(seconds int) string {
-	if seconds == 0 {
-		return "0h 0m"
-	}
-
-	hours := seconds / 3600
-	minutes := (seconds % 3600) / 60
-
-	return fmt.Sprintf("%dh %dm", hours, minutes)
-}
-
-// ensureOrphanedTimeEntriesTable creates the orphaned_time_entries table if it doesn't exist
-func ensureOrphanedTimeEntriesTable(db *sql.DB) error {
-	logger := GetGlobalLogger()
-
-	createTableSQL := `CREATE TABLE IF NOT EXISTS orphaned_time_entries (
-		id INTEGER PRIMARY KEY,
-		task_id INTEGER NOT NULL,
-		user_id INTEGER NOT NULL,
-		date TEXT NOT NULL,
-		start_time TEXT,
-		end_time TEXT,
-		duration INTEGER NOT NULL,
-		description TEXT,
-		billable INTEGER DEFAULT 0,
-		locked INTEGER DEFAULT 0,
-		modify_time TEXT,
-		sync_date TEXT NOT NULL
-	);`
-
-	_, err := db.Exec(createTableSQL)
-	if err != nil {
-		return fmt.Errorf("failed to create orphaned_time_entries table: %w", err)
-	}
-
-	// Create index for efficient lookups
-	indexSQL := `CREATE INDEX IF NOT EXISTS idx_orphaned_time_entries_task_id ON orphaned_time_entries(task_id);`
-	_, err = db.Exec(indexSQL)
-	if err != nil {
-		logger.Warnf("Failed to create index on orphaned_time_entries.task_id: %v", err)
-	}
-
-	logger.Debug("Orphaned time entries table ensured")
-	return nil
-}
-
 // processBatchOrphanedTimeEntries performs optimized batch insert of orphaned time entries
 func processBatchOrphanedTimeEntries(db *sql.DB, entries []ProcessedTimeEntry, stmt *sql.Stmt, logger *Logger) error {
 	if len(entries) == 0 {
@@ -812,8 +652,7 @@ func GetDynamicTaskTimeEntriesWithProject(db *sql.DB, periodType string, days in
 	logger := GetGlobalLogger()
 	logger.Debugf("Querying database for dynamic task time entries with period: %s, days: %d, project filtering", periodType, days)
 
-	// Calculate date ranges for the period
-	dateRanges := calculateDateRanges(periodType, days)
+	dateRange := CalculatePeriodRange(periodType, days)
 
 	var projectTaskIDs []int
 	if projectTaskID != nil {
@@ -867,8 +706,8 @@ FROM current_period tc
 FULL OUTER JOIN previous_period tp ON tc.task_id = tp.task_id AND tc.user_id = tp.user_id
 WHERE COALESCE(tc.total_duration, 0) > 0;`,
 		projectCTE,
-		dateRanges.Current.Start, dateRanges.Current.End, timeEntriesFilter,
-		dateRanges.Previous.Start, dateRanges.Previous.End, timeEntriesFilter)
+		dateRange.Start, dateRange.End, timeEntriesFilter,
+		dateRange.Start, dateRange.End, timeEntriesFilter)
 
 	userRows, err := db.Query(userBreakdownQuery, args...)
 	if err != nil {
@@ -890,8 +729,8 @@ WHERE COALESCE(tc.total_duration, 0) > 0;`,
 
 		userBreakdowns[taskID][userID] = UserTimeContribution{
 			UserID:       userID,
-			CurrentTime:  formatDuration(currentDuration),
-			PreviousTime: formatDuration(previousDuration),
+			CurrentTime:  FormatDuration(currentDuration),
+			PreviousTime: FormatDuration(previousDuration),
 		}
 	}
 
@@ -932,9 +771,9 @@ WHERE COALESCE(tc.total_duration, 0) > 0
   AND t.task_id IS NOT NULL
 ORDER BY COALESCE(tc.total_duration, 0) DESC;`,
 		projectCTE,
-		dateRanges.Current.Start, dateRanges.Current.End, timeEntriesFilter,
-		dateRanges.Previous.Start, dateRanges.Previous.End, timeEntriesFilter,
-		dateRanges.Current.Start, dateRanges.Current.End, timeEntriesFilter)
+		dateRange.Start, dateRange.End, timeEntriesFilter,
+		dateRange.Start, dateRange.End, timeEntriesFilter,
+		dateRange.Start, dateRange.End, timeEntriesFilter)
 
 	rows, err := db.Query(mainQuery, args...)
 	if err != nil {
@@ -965,10 +804,10 @@ ORDER BY COALESCE(tc.total_duration, 0) DESC;`,
 			TaskID:         taskID,
 			ParentID:       parentID,
 			Name:           name,
-			CurrentPeriod:  dateRanges.Current.Label,
-			CurrentTime:    formatDuration(currentDuration),
-			PreviousPeriod: dateRanges.Previous.Label,
-			PreviousTime:   formatDuration(previousDuration),
+			CurrentPeriod:  dateRange.Label,
+			CurrentTime:    FormatDuration(currentDuration),
+			PreviousPeriod: dateRange.Label,
+			PreviousTime:   FormatDuration(previousDuration),
 			DaysWorked:     daysWorked,
 			Comments:       comments,
 			UserBreakdown:  userBreakdown,
@@ -981,6 +820,6 @@ ORDER BY COALESCE(tc.total_duration, 0) DESC;`,
 		return nil, fmt.Errorf("error iterating rows: %w", err)
 	}
 
-	logger.Debugf("Found %d dynamic task updates with project filtering for period: %s", len(taskInfos), dateRanges.Current.Label)
+	logger.Debugf("Found %d dynamic task updates with project filtering for period: %s", len(taskInfos), dateRange.Label)
 	return taskInfos, nil
 }
