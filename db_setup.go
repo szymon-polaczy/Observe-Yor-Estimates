@@ -254,46 +254,16 @@ func createThresholdNotificationsTable(db *sql.DB) error {
 	query := `CREATE TABLE IF NOT EXISTS threshold_notifications (
 		id SERIAL PRIMARY KEY,
 		task_id INTEGER NOT NULL,
-		percentage DECIMAL(5,2) NOT NULL,
-		check_date DATE NOT NULL,
+		threshold_percentage INTEGER NOT NULL,
+		current_percentage DECIMAL(5,2) NOT NULL,
 		notified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-		UNIQUE(task_id, check_date)
+		last_time_entry_date TEXT NOT NULL,
+		FOREIGN KEY (task_id) REFERENCES tasks(task_id),
+		UNIQUE(task_id, threshold_percentage)
 	)`
 
 	_, err := db.Exec(query)
 	return err
-}
-
-func createOrphanedTimeEntriesTable(db *sql.DB) error {
-	createTableSQL := `CREATE TABLE IF NOT EXISTS orphaned_time_entries (
-		id INTEGER PRIMARY KEY,
-		task_id INTEGER NOT NULL,
-		user_id INTEGER NOT NULL,
-		date TEXT NOT NULL,
-		start_time TEXT,
-		end_time TEXT,
-		duration INTEGER NOT NULL,
-		description TEXT,
-		billable INTEGER DEFAULT 0,
-		locked INTEGER DEFAULT 0,
-		modify_time TEXT,
-		sync_date TEXT NOT NULL
-	)`
-
-	_, err := db.Exec(createTableSQL)
-	if err != nil {
-		return fmt.Errorf("failed to create orphaned_time_entries table: %w", err)
-	}
-
-	// Create index for efficient lookups
-	indexSQL := `CREATE INDEX IF NOT EXISTS idx_orphaned_time_entries_task_id ON orphaned_time_entries(task_id)`
-	_, err = db.Exec(indexSQL)
-	if err != nil {
-		logger := GetGlobalLogger()
-		logger.Warnf("Failed to create index on orphaned_time_entries.task_id: %v", err)
-	}
-
-	return nil
 }
 
 func populateProjectsFromTasks(db *sql.DB) error {
