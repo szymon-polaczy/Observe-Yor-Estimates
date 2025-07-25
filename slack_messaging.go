@@ -523,18 +523,6 @@ func sendSlackResponse(responseURL string, message SlackMessage) error {
 	return nil
 }
 
-// outputJSON outputs messages as JSON for testing
-func outputJSON(messages []SlackMessage) {
-	for _, message := range messages {
-		jsonData, err := json.MarshalIndent(message, "", "  ")
-		if err != nil {
-			fmt.Printf("Error marshaling message: %v\n", err)
-			continue
-		}
-		fmt.Println(string(jsonData))
-	}
-}
-
 // Legacy compatibility functions
 
 // getTaskChanges unified dynamic function

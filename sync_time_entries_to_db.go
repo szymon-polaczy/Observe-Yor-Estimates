@@ -141,8 +141,8 @@ func SyncTimeEntriesToDatabaseWithOptions(fromDate, toDate string, includeOrphan
 	// Note: Using shared database connection, no need to close here
 
 	// Ensure time_entries table exists
-	if err := migrateTimeEntriesTable(db); err != nil {
-		return fmt.Errorf("failed to migrate time_entries table: %w", err)
+	if err := createTimeEntriesTable(db); err != nil {
+		return fmt.Errorf("failed to create time_entries table: %w", err)
 	}
 
 	// Ensure orphaned_time_entries table exists if we're including orphaned entries

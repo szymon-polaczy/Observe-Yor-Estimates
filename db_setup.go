@@ -12,7 +12,6 @@ import (
 	_ "github.com/lib/pq"
 )
 
-// Global database connection
 var (
 	globalDB *sql.DB
 	dbMutex  sync.RWMutex
@@ -20,18 +19,14 @@ var (
 	initErr  error
 )
 
-// getDBConnectionString returns the PostgreSQL connection string from environment variables
 func getDBConnectionString() string {
 	logger := GetGlobalLogger()
 
-	// Check for Supabase environment variables
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL != "" {
-		logger.Debug("Using DATABASE_URL environment variable for database connection")
+	if dbURL := os.Getenv("DATABASE_URL"); dbURL != "" {
+		logger.Debug("Using DATABASE_URL environment variable")
 		return dbURL
 	}
 
-	// Fallback to individual components
 	host := os.Getenv("DB_HOST")
 	port := os.Getenv("DB_PORT")
 	user := os.Getenv("DB_USER")
@@ -40,11 +35,7 @@ func getDBConnectionString() string {
 	sslmode := os.Getenv("DB_SSLMODE")
 
 	if host == "" || user == "" || password == "" || dbname == "" {
-		logger.Error("Database configuration missing! Required environment variables:")
-		logger.Error("  Either set DATABASE_URL")
-		logger.Error("  Or set all of: DB_HOST, DB_USER, DB_PASSWORD, DB_NAME")
-		logger.Error("  Optional: DB_PORT (defaults to 5432), DB_SSLMODE (defaults to require)")
-		// Return empty string to trigger error - all required vars must be set
+		logger.Error("Database configuration missing! Set DATABASE_URL or DB_HOST, DB_USER, DB_PASSWORD, DB_NAME")
 		return ""
 	}
 
@@ -55,52 +46,41 @@ func getDBConnectionString() string {
 		sslmode = "require"
 	}
 
-	logger.Debug("Using individual DB_* environment variables for database connection")
 	return fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
 		host, port, user, password, dbname, sslmode)
 }
 
-// validateDatabaseWriteAccess tests if the database is writable
 func validateDatabaseWriteAccess() error {
 	logger := GetGlobalLogger()
 
 	db, err := GetDB()
 	if err != nil {
-		// Check if this is an IPv6 connectivity issue
 		if strings.Contains(err.Error(), "network is unreachable") && strings.Contains(err.Error(), "dial tcp [") {
-			return fmt.Errorf("failed to connect to database: IPv6 connectivity issue detected. The database hostname only resolves to IPv6 addresses but your system cannot reach IPv6 networks. This is a common issue with some network configurations. Consider: 1) Enabling IPv6 connectivity on your system/network, 2) Using a different database that supports IPv4, or 3) Using a VPN/proxy that supports IPv6. Original error: %w", err)
+			return fmt.Errorf("IPv6 connectivity issue detected - check network configuration: %w", err)
 		}
 		return fmt.Errorf("failed to connect to database: %w", err)
 	}
 
-	// Try to create a test table to verify write access
-	testQuery := `CREATE TABLE IF NOT EXISTS write_test (id SERIAL PRIMARY KEY, test_value TEXT)`
-	_, err = db.Exec(testQuery)
-	if err != nil {
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS write_test (id SERIAL PRIMARY KEY)`); err != nil {
 		return fmt.Errorf("database write test failed: %w", err)
 	}
 
-	// Clean up test table
-	_, err = db.Exec(`DROP TABLE IF EXISTS write_test`)
-	if err != nil {
+	if _, err := db.Exec(`DROP TABLE IF EXISTS write_test`); err != nil {
 		logger.Warnf("Failed to clean up write test table: %v", err)
 	}
 
-	logger.Debug("Database write access validated successfully")
+	logger.Debug("Database write access validated")
 	return nil
 }
 
-// GetDB returns a shared connection to the PostgreSQL database, creating it once if needed
 func GetDB() (*sql.DB, error) {
 	dbOnce.Do(func() {
 		logger := GetGlobalLogger()
 		connStr := getDBConnectionString()
 		if connStr == "" {
-			initErr = fmt.Errorf("database connection string not configured - please set DATABASE_URL or individual DB_* environment variables")
+			initErr = fmt.Errorf("database connection string not configured")
 			return
 		}
-
-		logger.Debugf("Initializing database connection to PostgreSQL")
 
 		db, err := sql.Open("postgres", connStr)
 		if err != nil {
@@ -108,71 +88,31 @@ func GetDB() (*sql.DB, error) {
 			return
 		}
 
-		// Set connection pool settings with timeouts optimized for serverless
-		// Optimized connection pool settings for batch operations
-		db.SetConnMaxLifetime(time.Minute * 5)  // Increased for better performance
-		db.SetMaxOpenConns(25)                  // Increased for concurrent batch operations
-		db.SetMaxIdleConns(10)                  // Increased to keep connections alive
-		db.SetConnMaxIdleTime(90 * time.Second) // Close idle connections after 90s
+		db.SetConnMaxLifetime(5 * time.Minute)
+		db.SetMaxOpenConns(25)
+		db.SetMaxIdleConns(10)
+		db.SetConnMaxIdleTime(90 * time.Second)
 
-		// Test the connection with shorter timeout for faster failure detection
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
 		if err := db.PingContext(ctx); err != nil {
 			db.Close()
-			// Provide more helpful error messages for common connectivity issues
 			if strings.Contains(err.Error(), "network is unreachable") && strings.Contains(err.Error(), "dial tcp [") {
-				initErr = fmt.Errorf("failed to ping database: IPv6 connectivity issue detected. The database hostname only resolves to IPv6 addresses but your system cannot reach IPv6 networks. This suggests a network configuration issue. Original error: %w", err)
+				initErr = fmt.Errorf("IPv6 connectivity issue detected: %w", err)
 			} else {
-				initErr = fmt.Errorf("failed to ping database (connection timeout after 10s): %w", err)
+				initErr = fmt.Errorf("failed to ping database: %w", err)
 			}
 			return
 		}
 
-		if err := migrateTasksTable(db); err != nil {
+		if err := createAllTables(db); err != nil {
 			db.Close()
-			initErr = fmt.Errorf("failed to migrate tasks table: %w", err)
+			initErr = fmt.Errorf("failed to create tables: %w", err)
 			return
 		}
 
-		if err := migrateTaskHistoryTable(db); err != nil {
-			db.Close()
-			initErr = fmt.Errorf("failed to migrate task_history table: %w", err)
-			return
-		}
-
-		if err := migrateTimeEntriesTable(db); err != nil {
-			db.Close()
-			initErr = fmt.Errorf("failed to migrate time_entries table: %w", err)
-			return
-		}
-
-		if err := migrateUsersTable(db); err != nil {
-			db.Close()
-			initErr = fmt.Errorf("failed to migrate users table: %w", err)
-			return
-		}
-
-		if err := migrateProjectsTable(db); err != nil {
-			db.Close()
-			initErr = fmt.Errorf("failed to migrate projects table: %w", err)
-			return
-		}
-
-		if err := migrateUserProjectAssignmentsTable(db); err != nil {
-			db.Close()
-			initErr = fmt.Errorf("failed to migrate user_project_assignments table: %w", err)
-			return
-		}
-
-		if err := migrateThresholdNotificationsTable(db); err != nil {
-			db.Close()
-			initErr = fmt.Errorf("failed to migrate threshold_notifications table: %w", err)
-			return
-		}
-
-		logger.Info("Database connection established and tables migrated successfully")
+		logger.Info("Database connection established and tables created")
 
 		dbMutex.Lock()
 		globalDB = db
@@ -193,316 +133,146 @@ func GetDB() (*sql.DB, error) {
 	return globalDB, nil
 }
 
-// migrateTasksTable ensures the tasks table exists and matches the desired schema.
-func migrateTasksTable(db *sql.DB) error {
-	logger := GetGlobalLogger()
-
-	// Check if table exists (PostgreSQL way)
-	row := db.QueryRow("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'tasks');")
-	var exists bool
-	err := row.Scan(&exists)
-	if err != nil {
-		return fmt.Errorf("error checking if tasks table exists: %w", err)
+func createAllTables(db *sql.DB) error {
+	tables := []struct {
+		name   string
+		create func(*sql.DB) error
+	}{
+		{"tasks", createTasksTable},
+		{"task_history", createTaskHistoryTable},
+		{"time_entries", createTimeEntriesTable},
+		{"users", createUsersTable},
+		{"projects", createProjectsTable},
+		{"user_project_assignments", createUserProjectAssignmentsTable},
+		{"threshold_notifications", createThresholdNotificationsTable},
 	}
 
-	if !exists {
-		// Table does not exist, create it
-		logger.Info("Tasks table does not exist, creating it")
-		return createTasksTable(db)
+	for _, table := range tables {
+		if err := table.create(db); err != nil {
+			return fmt.Errorf("failed to create %s table: %w", table.name, err)
+		}
 	}
 
-	logger.Debug("Tasks table already exists, checking for columns")
-
-	// Check if archived column exists and add it if missing
-	if err := ensureArchivedColumn(db); err != nil {
-		return err
-	}
-
-	// Check if project_id column exists and add it if missing
-	return ensureProjectIdColumn(db)
+	return populateProjectsFromTasks(db)
 }
 
 func createTasksTable(db *sql.DB) error {
-	logger := GetGlobalLogger()
+	query := `CREATE TABLE IF NOT EXISTS tasks (
+		task_id INTEGER PRIMARY KEY,
+		parent_id INTEGER NOT NULL,
+		assigned_by INTEGER NOT NULL,
+		name TEXT NOT NULL,
+		level INTEGER NOT NULL,
+		root_group_id INTEGER NOT NULL,
+		archived INTEGER DEFAULT 0,
+		project_id INTEGER REFERENCES projects(id)
+	)`
 
-	createTableSQL := `CREATE TABLE tasks (
-task_id INTEGER PRIMARY KEY,
-parent_id INTEGER NOT NULL,
-assigned_by INTEGER NOT NULL,
-name TEXT NOT NULL,
-level INTEGER NOT NULL,
-root_group_id INTEGER NOT NULL,
-archived INTEGER DEFAULT 0
-);`
-
-	_, err := db.Exec(createTableSQL)
-	if err != nil {
-		return fmt.Errorf("failed to create tasks table: %w", err)
-	}
-
-	logger.Info("Tasks table created successfully")
-	return nil
-}
-
-// ensureArchivedColumn checks if the archived column exists in the tasks table and adds it if missing
-func ensureArchivedColumn(db *sql.DB) error {
-	logger := GetGlobalLogger()
-
-	// Check if archived column exists
-	checkColumnSQL := `SELECT column_name 
-		FROM information_schema.columns 
-		WHERE table_schema = 'public' 
-		AND table_name = 'tasks' 
-		AND column_name = 'archived';`
-
-	var columnName string
-	err := db.QueryRow(checkColumnSQL).Scan(&columnName)
-
-	if err == sql.ErrNoRows {
-		// Column doesn't exist, add it
-		logger.Info("Adding archived column to tasks table")
-		alterTableSQL := `ALTER TABLE tasks ADD COLUMN archived INTEGER DEFAULT 0;`
-		_, err := db.Exec(alterTableSQL)
-		if err != nil {
-			return fmt.Errorf("failed to add archived column to tasks table: %w", err)
-		}
-		logger.Info("Archived column added successfully to tasks table")
-	} else if err != nil {
-		return fmt.Errorf("error checking for archived column: %w", err)
-	} else {
-		logger.Debug("Archived column already exists in tasks table")
-	}
-
-	return nil
-}
-
-// ensureProjectIdColumn checks if the project_id column exists in the tasks table and adds it if missing
-func ensureProjectIdColumn(db *sql.DB) error {
-	logger := GetGlobalLogger()
-
-	// Check if project_id column exists
-	checkColumnSQL := `SELECT column_name 
-		FROM information_schema.columns 
-		WHERE table_schema = 'public' 
-		AND table_name = 'tasks' 
-		AND column_name = 'project_id';`
-
-	var columnName string
-	err := db.QueryRow(checkColumnSQL).Scan(&columnName)
-
-	if err == sql.ErrNoRows {
-		// Column doesn't exist, add it
-		logger.Info("Adding project_id column to tasks table")
-		alterTableSQL := `ALTER TABLE tasks ADD COLUMN project_id INTEGER REFERENCES projects(id);`
-		_, err := db.Exec(alterTableSQL)
-		if err != nil {
-			return fmt.Errorf("failed to add project_id column to tasks table: %w", err)
-		}
-		logger.Info("Project_id column added successfully to tasks table")
-	} else if err != nil {
-		return fmt.Errorf("error checking for project_id column: %w", err)
-	} else {
-		logger.Debug("Project_id column already exists in tasks table")
-	}
-
-	return nil
-}
-
-// migrateTaskHistoryTable ensures the task_history table exists and matches the desired schema.
-func migrateTaskHistoryTable(db *sql.DB) error {
-	logger := GetGlobalLogger()
-
-	// Check if table exists (PostgreSQL way)
-	row := db.QueryRow("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'task_history');")
-	var exists bool
-	err := row.Scan(&exists)
-	if err != nil {
-		return fmt.Errorf("error checking if task_history table exists: %w", err)
-	}
-
-	if !exists {
-		// Table does not exist, create it
-		logger.Info("Task history table does not exist, creating it")
-		return createTaskHistoryTable(db)
-	}
-
-	logger.Debug("Task history table already exists")
-	return nil
+	_, err := db.Exec(query)
+	return err
 }
 
 func createTaskHistoryTable(db *sql.DB) error {
-	logger := GetGlobalLogger()
+	query := `CREATE TABLE IF NOT EXISTS task_history (
+		id SERIAL PRIMARY KEY,
+		task_id INTEGER NOT NULL,
+		name TEXT NOT NULL,
+		timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		change_type TEXT NOT NULL,
+		previous_value TEXT,
+		current_value TEXT,
+		FOREIGN KEY (task_id) REFERENCES tasks(task_id)
+	)`
 
-	createTableSQL := `CREATE TABLE task_history (
-id SERIAL PRIMARY KEY,
-task_id INTEGER NOT NULL,
-name TEXT NOT NULL,
-timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-change_type TEXT NOT NULL,
-previous_value TEXT,
-current_value TEXT,
-FOREIGN KEY (task_id) REFERENCES tasks(task_id)
-);`
-
-	_, err := db.Exec(createTableSQL)
-	if err != nil {
-		return fmt.Errorf("failed to create task_history table: %w", err)
-	}
-
-	logger.Info("Task history table created successfully")
-	return nil
-}
-
-// migrateTimeEntriesTable ensures the time_entries table exists and matches the desired schema.
-func migrateTimeEntriesTable(db *sql.DB) error {
-	logger := GetGlobalLogger()
-
-	// Check if table exists (PostgreSQL way)
-	row := db.QueryRow("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'time_entries');")
-	var exists bool
-	err := row.Scan(&exists)
-	if err != nil {
-		return fmt.Errorf("error checking if time_entries table exists: %w", err)
-	}
-
-	if !exists {
-		// Table does not exist, create it
-		logger.Info("Time entries table does not exist, creating it")
-		return createTimeEntriesTable(db)
-	}
-
-	logger.Debug("Time entries table already exists")
-	return nil
+	_, err := db.Exec(query)
+	return err
 }
 
 func createTimeEntriesTable(db *sql.DB) error {
-	logger := GetGlobalLogger()
+	query := `CREATE TABLE IF NOT EXISTS time_entries (
+		id INTEGER PRIMARY KEY,
+		task_id INTEGER NOT NULL,
+		user_id INTEGER NOT NULL,
+		date TEXT NOT NULL,
+		start_time TEXT,
+		end_time TEXT,
+		duration INTEGER NOT NULL,
+		description TEXT,
+		billable INTEGER DEFAULT 0,
+		locked INTEGER DEFAULT 0,
+		modify_time TEXT,
+		FOREIGN KEY (task_id) REFERENCES tasks(task_id)
+	)`
 
-	createTableSQL := `CREATE TABLE time_entries (
-id INTEGER PRIMARY KEY,
-task_id INTEGER NOT NULL,
-user_id INTEGER NOT NULL,
-date TEXT NOT NULL,
-start_time TEXT,
-end_time TEXT,
-duration INTEGER NOT NULL,
-description TEXT,
-billable INTEGER DEFAULT 0,
-locked INTEGER DEFAULT 0,
-modify_time TEXT,
-FOREIGN KEY (task_id) REFERENCES tasks(task_id)
-);`
-
-	_, err := db.Exec(createTableSQL)
-	if err != nil {
-		return fmt.Errorf("failed to create time_entries table: %w", err)
-	}
-
-	logger.Info("Time entries table created successfully")
-	return nil
-}
-
-// migrateUsersTable ensures the users table exists and matches the desired schema.
-func migrateUsersTable(db *sql.DB) error {
-	logger := GetGlobalLogger()
-
-	// Check if table exists (PostgreSQL way)
-	row := db.QueryRow("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'users');")
-	var exists bool
-	err := row.Scan(&exists)
-	if err != nil {
-		return fmt.Errorf("error checking if users table exists: %w", err)
-	}
-
-	if !exists {
-		// Table does not exist, create it
-		logger.Info("Users table does not exist, creating it")
-		return createUsersTable(db)
-	}
-
-	logger.Debug("Users table already exists")
-	return nil
+	_, err := db.Exec(query)
+	return err
 }
 
 func createUsersTable(db *sql.DB) error {
-	logger := GetGlobalLogger()
+	query := `CREATE TABLE IF NOT EXISTS users (
+		user_id INTEGER PRIMARY KEY,
+		username TEXT NOT NULL,
+		display_name TEXT,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	)`
 
-	createTableSQL := `CREATE TABLE users (
-user_id INTEGER PRIMARY KEY,
-username TEXT NOT NULL,
-display_name TEXT,
-created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);`
-
-	_, err := db.Exec(createTableSQL)
-	if err != nil {
-		return fmt.Errorf("failed to create users table: %w", err)
-	}
-
-	logger.Info("Users table created successfully")
-	return nil
-}
-
-// migrateProjectsTable ensures the projects table exists and matches the desired schema.
-func migrateProjectsTable(db *sql.DB) error {
-	logger := GetGlobalLogger()
-
-	// Check if table exists (PostgreSQL way)
-	row := db.QueryRow("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'projects');")
-	var exists bool
-	err := row.Scan(&exists)
-	if err != nil {
-		return fmt.Errorf("error checking if projects table exists: %w", err)
-	}
-
-	if !exists {
-		// Table does not exist, create it
-		logger.Info("Projects table does not exist, creating it")
-		if err := createProjectsTable(db); err != nil {
-			return err
-		}
-
-		// Populate projects from existing task hierarchy
-		logger.Info("Populating projects table from existing task hierarchy")
-		return populateProjectsFromTasks(db)
-	}
-
-	logger.Debug("Projects table already exists")
-	return nil
+	_, err := db.Exec(query)
+	return err
 }
 
 func createProjectsTable(db *sql.DB) error {
-	logger := GetGlobalLogger()
+	query := `CREATE TABLE IF NOT EXISTS projects (
+		id SERIAL PRIMARY KEY,
+		name TEXT NOT NULL UNIQUE,
+		timecamp_task_id INTEGER NOT NULL UNIQUE,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (timecamp_task_id) REFERENCES tasks(task_id)
+	)`
 
-	createTableSQL := `CREATE TABLE projects (
-id SERIAL PRIMARY KEY,
-name TEXT NOT NULL UNIQUE,
-timecamp_task_id INTEGER NOT NULL UNIQUE,
-created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-FOREIGN KEY (timecamp_task_id) REFERENCES tasks(task_id)
-);`
-
-	_, err := db.Exec(createTableSQL)
-	if err != nil {
-		return fmt.Errorf("failed to create projects table: %w", err)
-	}
-
-	logger.Info("Projects table created successfully")
-	return nil
+	_, err := db.Exec(query)
+	return err
 }
 
-// populateProjectsFromTasks extracts project-level tasks and populates the projects table
+func createUserProjectAssignmentsTable(db *sql.DB) error {
+	query := `CREATE TABLE IF NOT EXISTS user_project_assignments (
+		id SERIAL PRIMARY KEY,
+		slack_user_id TEXT NOT NULL,
+		project_id INTEGER NOT NULL,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (project_id) REFERENCES projects(id),
+		UNIQUE(slack_user_id, project_id)
+	)`
+
+	_, err := db.Exec(query)
+	return err
+}
+
+func createThresholdNotificationsTable(db *sql.DB) error {
+	query := `CREATE TABLE IF NOT EXISTS threshold_notifications (
+		id SERIAL PRIMARY KEY,
+		task_id INTEGER NOT NULL,
+		threshold_percentage INTEGER NOT NULL,
+		current_percentage DECIMAL(5,2) NOT NULL,
+		notified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		last_time_entry_date TEXT NOT NULL,
+		FOREIGN KEY (task_id) REFERENCES tasks(task_id),
+		UNIQUE(task_id, threshold_percentage)
+	)`
+
+	_, err := db.Exec(query)
+	return err
+}
+
 func populateProjectsFromTasks(db *sql.DB) error {
 	logger := GetGlobalLogger()
 
-	// Find all project-level tasks (level 2 in TimeCamp hierarchy)
-	// Level 1 = Basecamp3 (root), Level 2 = Projects, Level 3+ = Sub-tasks
 	query := `
 		SELECT DISTINCT task_id, name
 		FROM tasks
-		WHERE level = 2  -- Projects are level 2 tasks
+		WHERE level = 2
 		ORDER BY name
 	`
 
@@ -522,15 +292,13 @@ func populateProjectsFromTasks(db *sql.DB) error {
 			continue
 		}
 
-		// Insert project into projects table
 		insertQuery := `
 			INSERT INTO projects (name, timecamp_task_id) 
 			VALUES ($1, $2) 
 			ON CONFLICT (timecamp_task_id) DO NOTHING
 		`
 
-		_, err := db.Exec(insertQuery, name, taskID)
-		if err != nil {
+		if _, err := db.Exec(insertQuery, name, taskID); err != nil {
 			logger.Warnf("Failed to insert project %s (task_id: %d): %v", name, taskID, err)
 			continue
 		}
@@ -543,94 +311,5 @@ func populateProjectsFromTasks(db *sql.DB) error {
 	}
 
 	logger.Infof("Successfully populated %d projects from task hierarchy", projectCount)
-	return nil
-}
-
-// migrateUserProjectAssignmentsTable ensures the user_project_assignments table exists
-func migrateUserProjectAssignmentsTable(db *sql.DB) error {
-	logger := GetGlobalLogger()
-
-	// Check if table exists (PostgreSQL way)
-	row := db.QueryRow("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'user_project_assignments');")
-	var exists bool
-	err := row.Scan(&exists)
-	if err != nil {
-		return fmt.Errorf("error checking if user_project_assignments table exists: %w", err)
-	}
-
-	if !exists {
-		// Table does not exist, create it
-		logger.Info("User project assignments table does not exist, creating it")
-		return createUserProjectAssignmentsTable(db)
-	}
-
-	logger.Debug("User project assignments table already exists")
-	return nil
-}
-
-func createUserProjectAssignmentsTable(db *sql.DB) error {
-	logger := GetGlobalLogger()
-
-	createTableSQL := `CREATE TABLE user_project_assignments (
-id SERIAL PRIMARY KEY,
-slack_user_id TEXT NOT NULL,
-project_id INTEGER NOT NULL,
-created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-FOREIGN KEY (project_id) REFERENCES projects(id),
-UNIQUE(slack_user_id, project_id)
-);`
-
-	_, err := db.Exec(createTableSQL)
-	if err != nil {
-		return fmt.Errorf("failed to create user_project_assignments table: %w", err)
-	}
-
-	logger.Info("User project assignments table created successfully")
-	return nil
-}
-
-// migrateThresholdNotificationsTable ensures the threshold_notifications table exists
-func migrateThresholdNotificationsTable(db *sql.DB) error {
-	logger := GetGlobalLogger()
-
-	// Check if table exists (PostgreSQL way)
-	row := db.QueryRow("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'threshold_notifications');")
-	var exists bool
-	err := row.Scan(&exists)
-	if err != nil {
-		return fmt.Errorf("error checking if threshold_notifications table exists: %w", err)
-	}
-
-	if !exists {
-		// Table does not exist, create it
-		logger.Info("Threshold notifications table does not exist, creating it")
-		return createThresholdNotificationsTable(db)
-	}
-
-	logger.Debug("Threshold notifications table already exists")
-	return nil
-}
-
-func createThresholdNotificationsTable(db *sql.DB) error {
-	logger := GetGlobalLogger()
-
-	createTableSQL := `CREATE TABLE threshold_notifications (
-id SERIAL PRIMARY KEY,
-task_id INTEGER NOT NULL,
-threshold_percentage INTEGER NOT NULL,
-current_percentage DECIMAL(5,2) NOT NULL,
-notified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-last_time_entry_date TEXT NOT NULL,
-FOREIGN KEY (task_id) REFERENCES tasks(task_id),
-UNIQUE(task_id, threshold_percentage)
-);`
-
-	_, err := db.Exec(createTableSQL)
-	if err != nil {
-		return fmt.Errorf("failed to create threshold_notifications table: %w", err)
-	}
-
-	logger.Info("Threshold notifications table created successfully")
 	return nil
 }
