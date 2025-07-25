@@ -51,7 +51,6 @@ func FullSyncTimeEntriesToDatabase() error {
 
 	logger.Infof("Full sync: retrieving time entries from %s to %s", fromDate, toDate)
 
-	// Use the updated SyncTimeEntriesToDatabase function with custom date range and orphaned handling
 	return SyncTimeEntriesToDatabaseWithOptions(fromDate, toDate, true)
 }
 
@@ -108,54 +107,6 @@ func FullSyncAll() error {
 	duration := time.Since(startTime)
 	logger.Infof("Optimized full synchronization completed successfully in %v", duration.Round(time.Second))
 	return nil
-}
-
-// SendFullSyncJSON performs a full sync and outputs the result as JSON to stdout
-func SendFullSyncJSON() {
-	logger := GetGlobalLogger()
-	logger.Info("Starting full sync JSON output")
-
-	if err := FullSyncAll(); err != nil {
-		logger.Errorf("Full sync failed: %v", err)
-		errorMessage := SlackMessage{
-			Text: "❌ Error: Full synchronization failed",
-			Blocks: []Block{
-				{
-					Type: "section",
-					Text: &Text{
-						Type: "mrkdwn",
-						Text: fmt.Sprintf("❌ *Full Sync Failed*\n\nError: `%v`\n*Time:* %s", err, time.Now().Format("2006-01-02 15:04:05")),
-					},
-				},
-			},
-		}
-		outputJSON([]SlackMessage{errorMessage})
-		return
-	}
-
-	// Send success message
-	message := SlackMessage{
-		Text: "✅ Full synchronization completed successfully",
-		Blocks: []Block{
-			{
-				Type: "header",
-				Text: &Text{
-					Type: "plain_text",
-					Text: "✅ Full Sync Complete",
-				},
-			},
-			{
-				Type: "section",
-				Text: &Text{
-					Type: "mrkdwn",
-					Text: fmt.Sprintf("*Full synchronization completed successfully*\n\n• All tasks synced from TimeCamp\n• Time entries synced (last 6 months)\n• Database is now up to date\n\n*Completed at:* %s", time.Now().Format("2006-01-02 15:04:05")),
-				},
-			},
-		},
-	}
-
-	outputJSON([]SlackMessage{message})
-	logger.Info("Successfully generated full sync JSON")
 }
 
 // SendFullSyncWithResponseURL performs a full sync and sends the result to a Slack response URL

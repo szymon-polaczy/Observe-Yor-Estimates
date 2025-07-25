@@ -309,8 +309,8 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 			// Previous button
 			if currentPage > 0 {
 				navElements = append(navElements, Element{
-					Type: "button",
-					Text: &Text{Type: "plain_text", Text: "⬅️ Previous"},
+					Type:     "button",
+					Text:     &Text{Type: "plain_text", Text: "⬅️ Previous"},
 					ActionID: fmt.Sprintf("page_%d", currentPage-1),
 					Value:    fmt.Sprintf("%d", currentPage-1),
 				})
@@ -318,8 +318,8 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 
 			// Page indicator
 			navElements = append(navElements, Element{
-				Type: "button",
-				Text: &Text{Type: "plain_text", Text: fmt.Sprintf("Page %d/%d", currentPage+1, totalPages)},
+				Type:     "button",
+				Text:     &Text{Type: "plain_text", Text: fmt.Sprintf("Page %d/%d", currentPage+1, totalPages)},
 				ActionID: "page_info",
 				Value:    "info",
 			})
@@ -327,8 +327,8 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 			// Next button
 			if currentPage < totalPages-1 {
 				navElements = append(navElements, Element{
-					Type: "button",
-					Text: &Text{Type: "plain_text", Text: "Next ➡️"},
+					Type:     "button",
+					Text:     &Text{Type: "plain_text", Text: "Next ➡️"},
 					ActionID: fmt.Sprintf("page_%d", currentPage+1),
 					Value:    fmt.Sprintf("%d", currentPage+1),
 				})

@@ -93,23 +93,6 @@ func SendThresholdMessage(tasks []TaskInfo, period string, threshold float64) er
 	return nil
 }
 
-// SendProgressMessage sends progress updates via response URL
-func SendProgressMessage(responseURL, message string) error {
-	if responseURL == "" {
-		return nil
-	}
-
-	slackMsg := SlackMessage{
-		Text: message,
-		Blocks: []Block{{
-			Type: "section",
-			Text: &Text{Type: "mrkdwn", Text: message},
-		}},
-	}
-
-	return sendSlackResponse(responseURL, slackMsg)
-}
-
 // formatProjectMessage creates message for a project's tasks
 func formatProjectMessage(project string, tasks []TaskInfo, period string) SlackMessage {
 	title := fmt.Sprintf("%s %s Report", EMOJI_CHART, strings.Title(period))
@@ -564,11 +547,6 @@ func getTaskChangesWithProject(db *sql.DB, period string, days int, projectTaskI
 	return GetDynamicTaskTimeEntriesWithProject(db, period, days, projectTaskID)
 }
 
-// GroupTasksByProject groups tasks by project for compatibility
-func GroupTasksByProject(tasks []TaskInfo, allTasks map[int]Task) map[string][]TaskInfo {
-	return groupTasksByProject(tasks)
-}
-
 // convertTaskInfoToTaskUpdateInfo converts TaskInfo back to TaskUpdateInfo for compatibility
 func convertTaskInfoToTaskUpdateInfo(tasks []TaskInfo) []TaskUpdateInfo {
 	var taskUpdates []TaskUpdateInfo
@@ -589,11 +567,6 @@ func convertTaskInfoToTaskUpdateInfo(tasks []TaskInfo) []TaskUpdateInfo {
 		taskUpdates = append(taskUpdates, taskUpdate)
 	}
 	return taskUpdates
-}
-
-// sendSlackMessage wrapper for compatibility
-func sendSlackMessage(message SlackMessage) error {
-	return sendSlackWebhook(message)
 }
 
 // Utility functions

@@ -102,12 +102,6 @@ func safeStringConvert(value interface{}) string {
 	return fmt.Sprintf("%v", value)
 }
 
-// SyncTimeEntriesToDatabase fetches time entries from TimeCamp and stores them in the database
-// If fromDate and toDate are provided, uses those dates; otherwise defaults to last day (optimized for cron jobs)
-func SyncTimeEntriesToDatabase(fromDate, toDate string) error {
-	return SyncTimeEntriesToDatabaseWithOptions(fromDate, toDate, false)
-}
-
 // SyncTimeEntriesToDatabaseWithOptions provides more control over the sync behavior
 // includeOrphaned: if true, stores orphaned time entries for later processing (useful during full sync)
 func SyncTimeEntriesToDatabaseWithOptions(fromDate, toDate string, includeOrphaned bool) error {

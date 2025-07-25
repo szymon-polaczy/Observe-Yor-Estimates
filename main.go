@@ -3,20 +3,13 @@ package main
 import (
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/joho/godotenv"
 	"github.com/robfig/cron/v3"
 )
 
 func main() {
-	var logger *Logger
-	if getOutputJSON() {
-		appLogger = NewLoggerForJSON()
-		logger = appLogger
-	} else {
-		logger = NewLogger()
-	}
+	logger := NewLogger()
 
 	err := godotenv.Load()
 	if err != nil {
@@ -63,90 +56,13 @@ func handleCliCommands(args []string, logger *Logger) {
 	switch command {
 	case "--help", "-h", "help":
 		showHelp()
-	case "update":
-		if len(args) < 2 {
-			logger.Error("Error: update command requires a period (daily, weekly, or monthly)")
-			return
-		}
-
-		// Join all remaining args to support multi-word periods like "last 7 days"
-		fullText := strings.Join(args[1:], " ")
-		logger.Infof("Running update command for: %s", fullText)
-
-		// Parse project and period (similar to how Slack does it)
-		var projectName string
-		var periodText string
-
-		// Check if this looks like a project-specific command
-		// Format: update "project name" period OR update projectname period
-		parts := strings.Fields(fullText)
-		if len(parts) >= 2 {
-			// Try to parse project name in quotes
-			if strings.HasPrefix(fullText, "\"") {
-				endQuote := strings.Index(fullText[1:], "\"")
-				if endQuote > 0 {
-					projectName = fullText[1 : endQuote+1]
-					periodText = strings.TrimSpace(fullText[endQuote+2:])
-				}
-			} else {
-				// Check if first word could be a project name (contains no period keywords)
-				firstWord := parts[0]
-				periodKeywords := []string{"daily", "weekly", "monthly", "today", "yesterday", "this", "last"}
-				isProjectName := true
-				for _, keyword := range periodKeywords {
-					if strings.Contains(strings.ToLower(firstWord), keyword) {
-						isProjectName = false
-						break
-					}
-				}
-				if isProjectName && len(parts) > 1 {
-					projectName = firstWord
-					periodText = strings.Join(parts[1:], " ")
-				}
-			}
-		}
-
-		// If no project detected, treat entire text as period
-		if projectName == "" {
-			periodText = fullText
-		}
-
-		// Use unified processor
-		router := NewSmartRouter()
-		req := &UnifiedUpdateRequest{
-			Command:     "update",
-			Text:        periodText,
-			ProjectName: projectName,
-			Source:      "cli",
-		}
-
-		result := router.ProcessUnifiedUpdate(req)
-		if !result.Success {
-			logger.Fatalf("Failed to process update: %s", result.ErrorMsg)
-		}
-
-		// Send update using the same function as Slack
-		convertedTasks := convertTaskUpdateInfoToTaskInfo(result.TaskInfos)
-		if err := SendTaskMessage(convertedTasks, result.PeriodInfo.DisplayName); err != nil {
-			logger.Fatalf("Failed to send update: %v", err)
-		}
-
-		logger.Infof("Successfully sent %s update with %d tasks", result.PeriodInfo.DisplayName, len(result.TaskInfos))
 	case "full-sync":
 		logger.Info("Running full synchronization command")
-		responseURL := getResponseURL()
-		outputJSON := getOutputJSON()
-		if outputJSON {
-			SendFullSyncJSON()
-		} else if responseURL != "" {
-			SendFullSyncWithResponseURL(responseURL)
-		} else {
-			if err := FullSyncAll(); err != nil {
-				logger.Errorf("Full sync failed: %v", err)
-				os.Exit(1)
-			}
-			logger.Info("Full synchronization completed successfully")
+		if err := FullSyncAll(); err != nil {
+			logger.Errorf("Full sync failed: %v", err)
+			os.Exit(1)
 		}
+		logger.Info("Full synchronization completed successfully")
 	default:
 		logger.Warnf("Unknown command line argument: %s", command)
 		showHelp()
@@ -157,13 +73,13 @@ func setupCronJobs(logger *Logger) {
 	cronScheduler := cron.New()
 
 	addCronJob(cronScheduler, "TASK_SYNC_SCHEDULE", "0 */3 * * *", "task sync", logger, func() {
-		if err := SyncTasksToDatabaseIncremental(); err != nil {
+		if err := SyncTasksToDatabase(false); err != nil {
 			logger.Errorf("Scheduled task sync failed: %v", err)
 		}
 	})
 
 	addCronJob(cronScheduler, "TIME_ENTRIES_SYNC_SCHEDULE", "*/10 * * * *", "time entries sync", logger, func() {
-		if err := SyncTimeEntriesToDatabase("", ""); err != nil {
+		if err := SyncTimeEntriesToDatabaseWithOptions("", "", false); err != nil {
 			logger.Errorf("Scheduled time entries sync failed: %v", err)
 		}
 	})
@@ -183,13 +99,6 @@ func setupCronJobs(logger *Logger) {
 
 		if err := SendSlackUpdate(taskInfos, "daily"); err != nil {
 			logger.Errorf("Failed to send daily Slack update: %v", err)
-		}
-	})
-
-	// Add threshold monitoring cron job (every minute)
-	addCronJob(cronScheduler, "THRESHOLD_MONITORING_SCHEDULE", "*/15 * * * *", "threshold monitoring", logger, func() {
-		if err := RunThresholdMonitoring(); err != nil {
-			logger.Errorf("Threshold monitoring failed: %v", err)
 		}
 	})
 
@@ -256,24 +165,4 @@ func showHelp() {
 	fmt.Println("\nSlack Integration:")
 	fmt.Println("  Set up /oye command in Slack to point to /slack/oye endpoint")
 	fmt.Println("  Requires SLACK_BOT_TOKEN environment variable for direct responses")
-}
-
-func getResponseURL() string {
-	// First check command line arguments
-	for i, arg := range os.Args {
-		if (arg == "--response-url" || arg == "-r") && i+1 < len(os.Args) {
-			return os.Args[i+1]
-		}
-	}
-	return ""
-}
-
-func getOutputJSON() bool {
-	// First check command line arguments
-	for _, arg := range os.Args {
-		if arg == "--json" {
-			return true
-		}
-	}
-	return false
 }

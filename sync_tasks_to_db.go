@@ -315,9 +315,3 @@ func getTimecampTasks() ([]JsonTask, error) {
 
 	return tasks, nil
 }
-
-// SyncTasksToDatabaseIncremental is a wrapper that performs incremental sync (for cron jobs)
-// This only processes tasks that have changed, making it efficient for regular updates
-func SyncTasksToDatabaseIncremental() error {
-	return SyncTasksToDatabase(false)
-}

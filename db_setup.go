@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lib/pq"
 	_ "github.com/lib/pq"
 )
 
@@ -60,8 +59,6 @@ func getDBConnectionString() string {
 	return fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
 		host, port, user, password, dbname, sslmode)
 }
-
-
 
 // validateDatabaseWriteAccess tests if the database is writable
 func validateDatabaseWriteAccess() error {
@@ -194,19 +191,6 @@ func GetDB() (*sql.DB, error) {
 	}
 
 	return globalDB, nil
-}
-
-// CloseDB closes the global database connection
-func CloseDB() error {
-	dbMutex.Lock()
-	defer dbMutex.Unlock()
-
-	if globalDB != nil {
-		err := globalDB.Close()
-		globalDB = nil
-		return err
-	}
-	return nil
 }
 
 // migrateTasksTable ensures the tasks table exists and matches the desired schema.
@@ -458,131 +442,6 @@ updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 
 	logger.Info("Users table created successfully")
 	return nil
-}
-
-// GetUserDisplayName returns the display name for a user ID, falling back to username or user ID
-func GetUserDisplayName(db *sql.DB, userID int) string {
-	var displayName, username sql.NullString
-
-	query := `SELECT username, display_name FROM users WHERE user_id = $1`
-	err := db.QueryRow(query, userID).Scan(&username, &displayName)
-
-	if err != nil {
-		// User not found in database, return user ID format as fallback
-		return fmt.Sprintf("user%d", userID)
-	}
-
-	// Return display_name if available, otherwise username, otherwise user ID
-	if displayName.Valid && displayName.String != "" {
-		return displayName.String
-	}
-	if username.Valid && username.String != "" {
-		return username.String
-	}
-	return fmt.Sprintf("user%d", userID)
-}
-
-// UpsertUser creates or updates a user record
-func UpsertUser(db *sql.DB, userID int, username, displayName string) error {
-	query := `
-		INSERT INTO users (user_id, username, display_name, updated_at) 
-		VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
-		ON CONFLICT (user_id) 
-		DO UPDATE SET 
-			username = EXCLUDED.username,
-			display_name = EXCLUDED.display_name,
-			updated_at = CURRENT_TIMESTAMP`
-
-	_, err := db.Exec(query, userID, username, displayName)
-	return err
-}
-
-// GetAllUserDisplayNames returns a map of user ID to display name for bulk operations
-func GetAllUserDisplayNames(db *sql.DB, userIDs []int) map[int]string {
-	if len(userIDs) == 0 {
-		return make(map[int]string)
-	}
-
-	result := make(map[int]string)
-
-	// Convert int slice to interface slice for pq.Array
-	userIDsInterface := make([]interface{}, len(userIDs))
-	for i, id := range userIDs {
-		userIDsInterface[i] = id
-	}
-
-	query := `SELECT user_id, username, display_name FROM users WHERE user_id = ANY($1)`
-	rows, err := db.Query(query, pq.Array(userIDs))
-	if err != nil {
-		// If query fails, return fallback names
-		for _, userID := range userIDs {
-			result[userID] = fmt.Sprintf("user%d", userID)
-		}
-		return result
-	}
-	defer rows.Close()
-
-	foundUsers := make(map[int]bool)
-	for rows.Next() {
-		var userID int
-		var username, displayName sql.NullString
-
-		err := rows.Scan(&userID, &username, &displayName)
-		if err != nil {
-			continue
-		}
-
-		// Priority: display_name > username > user ID
-		if displayName.Valid && displayName.String != "" {
-			result[userID] = displayName.String
-		} else if username.Valid && username.String != "" {
-			result[userID] = username.String
-		} else {
-			result[userID] = fmt.Sprintf("user%d", userID)
-		}
-		foundUsers[userID] = true
-	}
-
-	// Add fallback names for users not found in the database
-	for _, userID := range userIDs {
-		if !foundUsers[userID] {
-			result[userID] = fmt.Sprintf("user%d", userID)
-		}
-	}
-
-	return result
-}
-
-// CheckDatabaseHasTasks returns true if the database has any tasks, false otherwise
-func CheckDatabaseHasTasks() (bool, error) {
-	db, err := GetDB()
-	if err != nil {
-		return false, fmt.Errorf("failed to get database connection: %w", err)
-	}
-
-	var count int
-	err = db.QueryRow("SELECT COUNT(*) FROM tasks").Scan(&count)
-	if err != nil {
-		return false, fmt.Errorf("failed to count tasks: %w", err)
-	}
-
-	return count > 0, nil
-}
-
-// CheckDatabaseHasTimeEntries returns true if the database has any time entries, false otherwise
-func CheckDatabaseHasTimeEntries() (bool, error) {
-	db, err := GetDB()
-	if err != nil {
-		return false, fmt.Errorf("failed to get database connection: %w", err)
-	}
-
-	var count int
-	err = db.QueryRow("SELECT COUNT(*) FROM time_entries").Scan(&count)
-	if err != nil {
-		return false, fmt.Errorf("failed to count time entries: %w", err)
-	}
-
-	return count > 0, nil
 }
 
 // migrateProjectsTable ensures the projects table exists and matches the desired schema.

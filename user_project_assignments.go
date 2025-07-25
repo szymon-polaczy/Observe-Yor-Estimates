@@ -5,14 +5,6 @@ import (
 	"fmt"
 )
 
-type UserProjectAssignment struct {
-	ID          int    `json:"id"`
-	SlackUserID string `json:"slack_user_id"`
-	ProjectID   int    `json:"project_id"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
-}
-
 // GetUserProjects returns all projects assigned to a user
 func GetUserProjects(db *sql.DB, slackUserID string) ([]Project, error) {
 	query := `

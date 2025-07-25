@@ -43,15 +43,6 @@ func CloseWithErrorLog(closer interface{ Close() error }, resourceName string) {
 	}
 }
 
-// CloseWithErrorReturn safely closes a resource and returns any error
-// Use this pattern when close errors need to be handled by the caller
-func CloseWithErrorReturn(closer interface{ Close() error }) error {
-	if closer == nil {
-		return nil
-	}
-	return closer.Close()
-}
-
 // DefaultRetryConfig returns a sensible default retry configuration
 func DefaultRetryConfig() RetryConfig {
 	return RetryConfig{

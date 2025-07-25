@@ -402,7 +402,7 @@ func (sr *SmartRouter) processThresholdWithProgress(ctx *ConversationContext, th
 			taskInfos = allProjectTasks
 		} else {
 			// Get all tasks over threshold (user has no specific assignments)
-			allTaskInfos, err := GetTasksOverThreshold(db, threshold, periodInfo.Type, periodInfo.Days)
+			allTaskInfos, err := GetTasksOverThresholdWithProject(db, threshold, periodInfo.Type, periodInfo.Days, nil)
 			if err == nil {
 				taskInfos = convertTaskInfoToTaskUpdateInfo(allTaskInfos)
 			}

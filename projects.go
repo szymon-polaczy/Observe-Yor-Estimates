@@ -4,8 +4,6 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
-
-	"github.com/lib/pq"
 )
 
 // GetAllProjects returns all projects from the database
@@ -245,46 +243,4 @@ func ParseProjectFromCommand(commandText string) (projectName string, remainingT
 	}
 
 	return projectName, remainingText
-}
-
-// updateTaskProjectMapping updates the project_id column in tasks table for efficient project filtering
-func updateTaskProjectMapping(db *sql.DB) error {
-	logger := GetGlobalLogger()
-
-	// First, clear all existing project_id mappings
-	_, err := db.Exec("UPDATE tasks SET project_id = NULL")
-	if err != nil {
-		return fmt.Errorf("failed to clear existing project mappings: %w", err)
-	}
-
-	// For each project, find all its descendant tasks and update their project_id
-	projects, err := GetAllProjects(db)
-	if err != nil {
-		return fmt.Errorf("failed to get projects: %w", err)
-	}
-
-	for _, project := range projects {
-		// Get all task IDs that belong to this project (including the project task itself and all descendants)
-		taskIDs, err := GetProjectTaskIDs(db, project.TimeCampTaskID)
-		if err != nil {
-			logger.Warnf("Failed to get task IDs for project %s: %v", project.Name, err)
-			continue
-		}
-
-		if len(taskIDs) == 0 {
-			continue
-		}
-
-		// Update all these tasks to have this project_id
-		updateQuery := `UPDATE tasks SET project_id = $1 WHERE task_id = ANY($2)`
-		_, err = db.Exec(updateQuery, project.ID, pq.Array(taskIDs))
-		if err != nil {
-			logger.Warnf("Failed to update project mapping for %s: %v", project.Name, err)
-			continue
-		}
-
-	}
-
-	logger.Info("Task project mapping updated successfully")
-	return nil
 }
