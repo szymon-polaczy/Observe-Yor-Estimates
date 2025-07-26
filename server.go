@@ -129,8 +129,8 @@ func confirmProject(commandText string) (bool, string, error) {
 	projectNameRegex := regexp.MustCompile(`project (.*?) update`)
 
 	matches := projectNameRegex.FindStringSubmatch(commandText)
-	if len(matches) > 1 {
-		projectName = strings.TrimSpace(matches[1])
+	if len(matches) > 0 {
+		projectName = strings.TrimSpace(matches[0])
 	} else {
 		return false, "", nil
 	}
@@ -161,8 +161,8 @@ func confirmPercentage(commandText string) (bool, string, error) {
 	percentageRegex := regexp.MustCompile(`over (.*?)`)
 
 	matches := percentageRegex.FindStringSubmatch(commandText)
-	if len(matches) > 1 {
-		percentage = strings.TrimSpace(matches[1])
+	if len(matches) > 0 {
+		percentage = strings.TrimSpace(matches[0])
 	} else {
 		return false, "", nil
 	}
@@ -185,8 +185,8 @@ func confirmPeriod(commandText string) (time.Time, time.Time, error) {
 	periodRegex := regexp.MustCompile(`update (.*?)`)
 
 	matches := periodRegex.FindStringSubmatch(commandText)
-	if len(matches) > 1 {
-		period = strings.TrimSpace(matches[1])
+	if len(matches) > 0 {
+		period = strings.TrimSpace(matches[0])
 	}
 
 	if period == "" {
