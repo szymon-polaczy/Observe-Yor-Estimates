@@ -503,10 +503,19 @@ func sendTasksGroupedByProject(responseWriter http.ResponseWriter, req *SlackCom
 		return
 	}
 
-	if req.ResponseURL == "" {
-		logger.Error("No response URL provided, cannot send messages")
+	// Check for required Slack configuration
+	slackBotToken := os.Getenv("SLACK_BOT_TOKEN")
+	if slackBotToken == "" {
+		logger.Error("SLACK_BOT_TOKEN not configured in environment")
 		return
 	}
+	
+	if req.ResponseURL == "" {
+		logger.Error("No response URL provided, cannot send initial message")
+		return
+	}
+	
+	logger.Infof("Using Slack Bot API for threaded messages in channel: %s", req.ChannelID)
 
 	// Get threshold values from environment variables
 	midPoint := DEFAULT_MID_POINT
@@ -586,14 +595,84 @@ func sendTasksGroupedByProject(responseWriter http.ResponseWriter, req *SlackCom
 
 	logger.Infof("Grouped tasks into %d projects", len(projectGroups))
 
+	// Send initial thread message using response URL
+	initialMessage := map[string]interface{}{
+		"response_type": "in_channel",
+		"text":          "📊 Update in thread",
+	}
+
+	initialPayloadBytes, err := json.Marshal(initialMessage)
+	if err != nil {
+		logger.Errorf("Failed to marshal initial message payload: %v", err)
+		return
+	}
+
+	logger.Info("Sending initial thread message")
+	initialResp, err := http.Post(req.ResponseURL, "application/json", strings.NewReader(string(initialPayloadBytes)))
+	if err != nil {
+		logger.Errorf("Failed to send initial thread message: %v", err)
+		return
+	}
+	initialResp.Body.Close()
+
+	if initialResp.StatusCode != http.StatusOK {
+		logger.Errorf("Initial thread message response status: %d", initialResp.StatusCode)
+		return
+	}
+
+	logger.Info("Initial thread message sent successfully")
+
+	// Wait a moment for the message to be processed
+	time.Sleep(500 * time.Millisecond)
+
+	// Get the timestamp of the initial message by calling Slack API
+	// We'll use the conversations.history API to get the latest message timestamp
+	historyURL := "https://slack.com/api/conversations.history"
+	historyParams := fmt.Sprintf("channel=%s&limit=1", req.ChannelID)
+	historyReq, _ := http.NewRequest("GET", historyURL+"?"+historyParams, nil)
+	historyReq.Header.Set("Authorization", "Bearer "+slackBotToken)
+	historyReq.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	historyResp, err := client.Do(historyReq)
+	if err != nil {
+		logger.Errorf("Failed to get conversation history: %v", err)
+		return
+	}
+	defer historyResp.Body.Close()
+
+	var historyData map[string]interface{}
+	if err := json.NewDecoder(historyResp.Body).Decode(&historyData); err != nil {
+		logger.Errorf("Failed to decode history response: %v", err)
+		return
+	}
+
+	// Extract timestamp from the latest message
+	var threadTimestamp string
+	if messages, ok := historyData["messages"].([]interface{}); ok && len(messages) > 0 {
+		if latestMsg, ok := messages[0].(map[string]interface{}); ok {
+			if ts, ok := latestMsg["ts"].(string); ok {
+				threadTimestamp = ts
+				logger.Infof("Got thread timestamp: %s", threadTimestamp)
+			}
+		}
+	}
+
+	if threadTimestamp == "" {
+		logger.Error("Failed to get thread timestamp, sending messages without threading")
+		// Could fallback to non-threaded messages here if needed
+		return
+	}
+
 	// Process each project
 	for projectName, projectTasks := range projectGroups {
 		logger.Infof("Processing project '%s' with %d tasks", projectName, len(projectTasks))
 
-		// Send project header message
+		// Send project header message as threaded reply
 		projectHeaderPayload := map[string]interface{}{
-			"response_type": "in_channel",
-			"text":          fmt.Sprintf("%s **%s**", EMOJI_FOLDER, projectName),
+			"channel":    req.ChannelID,
+			"text":       fmt.Sprintf("%s **%s**", EMOJI_FOLDER, projectName),
+			"thread_ts":  threadTimestamp,
 		}
 
 		headerPayloadBytes, err := json.Marshal(projectHeaderPayload)
@@ -603,7 +682,11 @@ func sendTasksGroupedByProject(responseWriter http.ResponseWriter, req *SlackCom
 		}
 
 		logger.Infof("Sending project header for '%s'", projectName)
-		headerResp, err := http.Post(req.ResponseURL, "application/json", strings.NewReader(string(headerPayloadBytes)))
+		headerReq, _ := http.NewRequest("POST", "https://slack.com/api/chat.postMessage", strings.NewReader(string(headerPayloadBytes)))
+		headerReq.Header.Set("Authorization", "Bearer "+slackBotToken)
+		headerReq.Header.Set("Content-Type", "application/json")
+
+		headerResp, err := client.Do(headerReq)
 		if err != nil {
 			logger.Errorf("Failed to send project header for '%s': %v", projectName, err)
 			continue
@@ -682,8 +765,9 @@ func sendTasksGroupedByProject(responseWriter http.ResponseWriter, req *SlackCom
 					logger.Infof("Sending message chunk for project '%s' with %d blocks (%d chars)", projectName, len(blocks), currentCharCount)
 
 					messagePayload := map[string]interface{}{
-						"response_type": "in_channel",
-						"blocks":        blocks,
+						"channel":   req.ChannelID,
+						"blocks":    blocks,
+						"thread_ts": threadTimestamp,
 					}
 
 					payloadBytes, err := json.Marshal(messagePayload)
@@ -692,7 +776,11 @@ func sendTasksGroupedByProject(responseWriter http.ResponseWriter, req *SlackCom
 						break
 					}
 
-					resp, err := http.Post(req.ResponseURL, "application/json", strings.NewReader(string(payloadBytes)))
+					msgReq, _ := http.NewRequest("POST", "https://slack.com/api/chat.postMessage", strings.NewReader(string(payloadBytes)))
+					msgReq.Header.Set("Authorization", "Bearer "+slackBotToken)
+					msgReq.Header.Set("Content-Type", "application/json")
+
+					resp, err := client.Do(msgReq)
 					if err != nil {
 						logger.Errorf("Failed to send message chunk for project '%s': %v", projectName, err)
 						break
@@ -726,8 +814,9 @@ func sendTasksGroupedByProject(responseWriter http.ResponseWriter, req *SlackCom
 			logger.Infof("Sending final message chunk for project '%s' with %d blocks (%d chars)", projectName, len(blocks), currentCharCount)
 
 			messagePayload := map[string]interface{}{
-				"response_type": "in_channel",
-				"blocks":        blocks,
+				"channel":   req.ChannelID,
+				"blocks":    blocks,
+				"thread_ts": threadTimestamp,
 			}
 
 			payloadBytes, err := json.Marshal(messagePayload)
@@ -736,7 +825,11 @@ func sendTasksGroupedByProject(responseWriter http.ResponseWriter, req *SlackCom
 				continue
 			}
 
-			resp, err := http.Post(req.ResponseURL, "application/json", strings.NewReader(string(payloadBytes)))
+			finalReq, _ := http.NewRequest("POST", "https://slack.com/api/chat.postMessage", strings.NewReader(string(payloadBytes)))
+			finalReq.Header.Set("Authorization", "Bearer "+slackBotToken)
+			finalReq.Header.Set("Content-Type", "application/json")
+
+			resp, err := client.Do(finalReq)
 			if err != nil {
 				logger.Errorf("Failed to send final message chunk for project '%s': %v", projectName, err)
 				continue
