@@ -7,13 +7,26 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
 
+// Global smart router instance
+var globalRouter *SmartRouter
+
 func StartServer(logger *Logger) {
-	// Setup handlers in this file
-	setupSlackRoutes()
+	// Initialize the smart router
+	globalRouter = NewSmartRouter()
+
+	// Unified handler for all OYE commands
+	http.HandleFunc("/slack/oye", handleUnifiedOYECommand)
+
+	// New App Home routes
+	http.HandleFunc("/slack/events", HandleAppHome)
+	http.HandleFunc("/slack/interactive", HandleInteractiveComponents)
 
 	server := &http.Server{Addr: ":8080"}
 
@@ -34,22 +47,6 @@ func StartServer(logger *Logger) {
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		logger.Fatalf("Could not start server: %v", err)
 	}
-}
-
-// Global smart router instance
-var globalRouter *SmartRouter
-
-// setupSlackRoutes sets up the HTTP routes for Slack slash commands
-func setupSlackRoutes() {
-	// Initialize the smart router
-	globalRouter = NewSmartRouter()
-
-	// Unified handler for all OYE commands
-	http.HandleFunc("/slack/oye", handleUnifiedOYECommand)
-
-	// New App Home routes
-	http.HandleFunc("/slack/events", HandleAppHome)
-	http.HandleFunc("/slack/interactive", HandleInteractiveComponents)
 }
 
 // handleUnifiedOYECommand handles the new unified /oye command
@@ -76,80 +73,216 @@ func handleUnifiedOYECommand(w http.ResponseWriter, r *http.Request) {
 
 	logger.Infof("Received /oye command from user %s: %s", req.UserName, req.Text)
 
-	text := strings.ToLower(strings.TrimSpace(req.Text))
+	commandText := strings.ToLower(strings.TrimSpace(req.Text))
 
-	// Parse project name from command if present (only after checking for management commands)
-	projectName, remainingText := ParseProjectFromCommand(req.Text)
+	//string replace /oye with ""
+	commandText = strings.Replace(commandText, "/oye", "", 1)
 
-	// Update the request with parsed project info
-	if projectName != "" && projectName != "all" {
-		req.ProjectName = projectName
-		req.Text = remainingText                            // Update text to remaining command after project name
-		text = strings.ToLower(strings.TrimSpace(req.Text)) // Update text variable too
-	}
-
-	// Route to appropriate handler based on command content
-	if text == "" || text == "help" {
-		// If no remaining text after project name, treat as update request
-		if projectName != "" && projectName != "all" {
-			// Project-specific update request with default period
-			if err := globalRouter.HandleUpdateRequest(req); err != nil {
-				logger.Errorf("Failed to handle project update request: %v", err)
-				sendImmediateResponse(w, "❌ Failed to process project update request", "ephemeral")
-			} else {
-				sendImmediateResponse(w, fmt.Sprintf("⏳ Generating %s project update...", projectName), "ephemeral")
-			}
-			return
-		}
-
+	//if the first word is not in the allowed commands, send help
+	firstWord := strings.Fields(commandText)[0]
+	allowedCommands := []string{"project", "update", "over"}
+	if !slices.Contains(allowedCommands, firstWord) {
 		sendUnifiedHelp(w, req)
 		return
 	}
 
-	if strings.Contains(text, "over ") {
-		// Handle threshold percentage queries like "over 50 daily"
-		if err := globalRouter.HandleThresholdRequest(req); err != nil {
-			logger.Errorf("Failed to handle threshold request: %v", err)
-			sendImmediateResponse(w, "❌ Failed to process threshold request", "ephemeral")
-		} else {
-			sendImmediateResponse(w, "⏳ Checking for tasks over threshold...", "ephemeral")
-		}
+	filteringByProject, projectName, err := confirmProject(w, req, commandText)
+	if err != nil {
+		logger.Errorf(err.Error())
+		sendImmediateResponse(w, err.Error(), "ephemeral")
 		return
 	}
 
-	// Default to update request (daily, weekly, monthly, or user's default)
-	if err := globalRouter.HandleUpdateRequest(req); err != nil {
-		logger.Errorf("Failed to handle update request: %v", err)
-		sendImmediateResponse(w, "❌ Failed to process update request", "ephemeral")
+	filteringByPercentage, percentage, err := confirmPercentage(w, req, commandText)
+	if err != nil {
+		logger.Errorf(err.Error())
+		sendImmediateResponse(w, err.Error(), "ephemeral")
+		return
+	}
+
+	startTime, endTime, err := confirmPeriod(w, req, commandText)
+	if err != nil {
+		logger.Errorf(err.Error())
+		sendImmediateResponse(w, err.Error(), "ephemeral")
+		return
+	}
+
+	tasksGroupedByProject := filteredTasksGroupedByProject(startTime, endTime, filteringByProject, projectName, filteringByPercentage, percentage)
+}
+
+/* Gets the project name from the command text
+ * If the project name is not found, returns an error
+ * If the project name is found, but is not in the database, returns an error
+ * If the project name is found, and is in the database, returns the project name and nil
+ */
+func confirmProject(w http.ResponseWriter, req *SlackCommandRequest, commandText string) (bool, string, error) {
+	projectName := ""
+	projectNameRegex := regexp.MustCompile(`project (.*?) update`)
+
+	matches := projectNameRegex.FindStringSubmatch(commandText)
+	if len(matches) > 1 {
+		projectName = strings.TrimSpace(matches[1])
 	} else {
-		sendImmediateResponse(w, "⏳ Generating your update! I'll show progress as I work...", "ephemeral")
+		return false, "", nil
+	}
+
+	if projectName == "" {
+		return true, "", fmt.Errorf("Failed to parse project name from command")
+	}
+
+	db, err := GetDB()
+	if err != nil {
+		return true, "", fmt.Errorf("Failed to get database: %v", err)
+	}
+
+	_, err = FindProjectsByName(db, projectName)
+	if err != nil {
+		return true, "", err
+	}
+
+	return true, projectName, nil
+}
+
+/* Gets the percentage from the command text
+ * If the percentage is not found, returns an error
+ * If the percentage is found, returns the percentage and nil
+ */
+func confirmPercentage(w http.ResponseWriter, req *SlackCommandRequest, commandText string) (bool, string, error) {
+	percentage := ""
+	percentageRegex := regexp.MustCompile(`over (.*?)`)
+
+	matches := percentageRegex.FindStringSubmatch(commandText)
+	if len(matches) > 1 {
+		percentage = strings.TrimSpace(matches[1])
+	} else {
+		return false, "", nil
+	}
+
+	if percentage == "" {
+		return true, "", fmt.Errorf("Failed to parse percentage from command")
+	}
+
+	return true, percentage, nil
+}
+
+/* Gets the period from the command text
+ * If the period is not found, returns an error
+ * If the period is found, checks if it is a valid period
+ * If the period is found, and is valid, returns the period's start and end times and nil
+ * If the period is found, and is invalid, returns an error
+ */
+func confirmPeriod(w http.ResponseWriter, req *SlackCommandRequest, commandText string) (time.Time, time.Time, error) {
+	period := ""
+	periodRegex := regexp.MustCompile(`update (.*?)`)
+
+	matches := periodRegex.FindStringSubmatch(commandText)
+	if len(matches) > 1 {
+		period = strings.TrimSpace(matches[1])
+	}
+
+	if period == "" {
+		return time.Time{}, time.Time{}, fmt.Errorf("Failed to parse period from command")
+	}
+
+	now := time.Now()
+	var startTime, endTime time.Time
+
+	// Check for "last x days" pattern
+	lastDaysRegex := regexp.MustCompile(`^last (\d+) days?$`)
+	if lastDaysRegex.MatchString(period) {
+		matches := lastDaysRegex.FindStringSubmatch(period)
+		if len(matches) > 1 {
+			days := matches[1]
+			// Convert to int to validate it's a positive number
+			if daysInt, err := strconv.Atoi(days); err != nil {
+				return time.Time{}, time.Time{}, fmt.Errorf("Invalid number in 'last %s days': not a valid number", days)
+			} else if daysInt <= 0 {
+				return time.Time{}, time.Time{}, fmt.Errorf("Invalid number in 'last %s days': must be a positive number", days)
+			} else {
+				// Start: x days ago at 0:00, End: today at 23:59
+				startTime = now.AddDate(0, 0, -daysInt).Truncate(24 * time.Hour)
+				endTime = time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 999999999, now.Location())
+				return startTime, endTime, nil
+			}
+		}
+	}
+
+	switch period {
+	case "today":
+		// Today 0:00 to today 23:59
+		startTime = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		endTime = time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 999999999, now.Location())
+	case "yesterday":
+		// Yesterday 0:00 to yesterday 23:59
+		yesterday := now.AddDate(0, 0, -1)
+		startTime = time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 0, 0, 0, 0, yesterday.Location())
+		endTime = time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 23, 59, 59, 999999999, yesterday.Location())
+	case "this week":
+		// Monday 0:00 to Sunday 23:59 of current week
+		weekday := int(now.Weekday())
+		if weekday == 0 { // Sunday
+			weekday = 7
+		}
+		monday := now.AddDate(0, 0, -(weekday - 1))
+		sunday := monday.AddDate(0, 0, 6)
+		startTime = time.Date(monday.Year(), monday.Month(), monday.Day(), 0, 0, 0, 0, monday.Location())
+		endTime = time.Date(sunday.Year(), sunday.Month(), sunday.Day(), 23, 59, 59, 999999999, sunday.Location())
+	case "last week":
+		// Monday 0:00 to Sunday 23:59 of last week
+		weekday := int(now.Weekday())
+		if weekday == 0 { // Sunday
+			weekday = 7
+		}
+		lastMonday := now.AddDate(0, 0, -(weekday-1)-7)
+		lastSunday := lastMonday.AddDate(0, 0, 6)
+		startTime = time.Date(lastMonday.Year(), lastMonday.Month(), lastMonday.Day(), 0, 0, 0, 0, lastMonday.Location())
+		endTime = time.Date(lastSunday.Year(), lastSunday.Month(), lastSunday.Day(), 23, 59, 59, 999999999, lastSunday.Location())
+	case "this month":
+		// First day of month 0:00 to last day of month 23:59
+		firstDay := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+		lastDay := firstDay.AddDate(0, 1, -1)
+		startTime = firstDay
+		endTime = time.Date(lastDay.Year(), lastDay.Month(), lastDay.Day(), 23, 59, 59, 999999999, lastDay.Location())
+	case "last month":
+		// First day of last month 0:00 to last day of last month 23:59
+		firstDayLastMonth := time.Date(now.Year(), now.Month()-1, 1, 0, 0, 0, 0, now.Location())
+		lastDayLastMonth := firstDayLastMonth.AddDate(0, 1, -1)
+		startTime = firstDayLastMonth
+		endTime = time.Date(lastDayLastMonth.Year(), lastDayLastMonth.Month(), lastDayLastMonth.Day(), 23, 59, 59, 999999999, lastDayLastMonth.Location())
+	default:
+		return time.Time{}, time.Time{}, fmt.Errorf("Invalid period: %s", period)
+	}
+
+	return startTime, endTime, nil
+}
+
+func filteredTasksGroupedByProject(startTime time.Time, endTime time.Time, filteringByProject bool, projectName string, filteringByPercentage bool, percentage string) []TaskInfo {
+	db, err := GetDB()
+	if err != nil {
+		return []TaskInfo{}
 	}
 }
 
 func sendUnifiedHelp(w http.ResponseWriter, req *SlackCommandRequest) {
 	helpText := "*🎯 OYE (Observe-Yor-Estimates) Commands*\n\n" +
 		"*Time Frame Options:*\n" +
-		"• `/oye` or `/oye daily` - Yesterday's tasks (default)\n" +
-		"• `/oye today` - Today's tasks\n" +
-		"• `/oye yesterday` - Yesterday's tasks\n" +
-		"• `/oye weekly` or `/oye last week` - Last week's tasks\n" +
-		"• `/oye this week` - Current week's tasks\n" +
-		"• `/oye monthly` or `/oye last month` - Last month's tasks\n" +
-		"• `/oye this month` - Current month's tasks\n" +
-		"• `/oye last 7 days` - Custom range (1-60 days)\n\n" +
-		"*Project Filtering:*\n" +
-		"• `/oye \"project name\" daily` - Daily update for specific project\n" +
-		"• `/oye marketing last week` - Weekly update for project (fuzzy match)\n" +
-		"• `/oye all this month` - Monthly update for all projects\n" +
-		"• `/oye \"3dconnexion\" over 90 last 30 days` - Project-specific thresholds\n\n" +
-		"*Threshold Monitoring:*\n" +
-		"• `/oye over 50 today` - Tasks over 50% of estimation\n" +
-		"• `/oye over 80 this week` - Tasks over 80% of estimation\n" +
-		"• `/oye over 100 last month` - Tasks over budget\n\n" +
+		"• `/oye update [period]` - Update for specific time frame\n" +
+		"• `/oye project [project name] update [period]` - Update for specific project and time frame\n" +
+		"• `/oye over [percentage] [period]` - Check for tasks over threshold\n" +
+		"• `/oye project [project name] over [percentage] update [period]` - Check for tasks over threshold for a specific project\n" +
+
+		"*Available Periods:*\n" +
+		"• today\n" +
+		"• yesterday\n" +
+		"• last week\n" +
+		"• this week\n" +
+		"• last month\n" +
+		"• this month\n" +
+		"• last x days\n" +
+
 		"*Tips:*\n" +
 		"• Updates are private by default (only you see them)\n" +
-		"• Use \"public\" in any command to share with channel\n" +
-		"• Quote project names with spaces: `/oye \"My Project\" today`\n" +
+		"• Project names with spaces are fine without quotes\n" +
 		"• Project names support fuzzy matching\n" +
 		"• Custom ranges: `/oye last 14 days` (1-60 days supported)\n" +
 		"• When you assign projects, automatic updates show only your projects\n" +
