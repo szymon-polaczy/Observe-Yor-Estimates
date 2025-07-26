@@ -15,13 +15,7 @@ import (
 	"time"
 )
 
-// Global smart router instance
-var globalRouter *SmartRouter
-
 func StartServer(logger *Logger) {
-	// Initialize the smart router
-	globalRouter = NewSmartRouter()
-
 	// Unified handler for all OYE commands
 	http.HandleFunc("/slack/oye", handleUnifiedOYECommand)
 
@@ -269,6 +263,7 @@ func confirmPeriod(commandText string) (time.Time, time.Time, error) {
 	return startTime, endTime, nil
 }
 
+// fully AI generated
 func filteredTasksGroupedByProject(startTime time.Time, endTime time.Time, filteringByProject bool, projectName string, filteringByPercentage bool, percentage string) []TaskInfo {
 	logger := GetGlobalLogger()
 	logger.Infof("filteredTasksGroupedByProject called with: startTime=%s, endTime=%s, filteringByProject=%t, projectName='%s', filteringByPercentage=%t, percentage='%s'",
@@ -413,6 +408,7 @@ func filteredTasksGroupedByProject(startTime time.Time, endTime time.Time, filte
 	return allTasks
 }
 
+// fully AI generated
 func addCommentsToTasks(tasks []TaskInfo) []TaskInfo {
 	logger := GetGlobalLogger()
 	if len(tasks) == 0 {
@@ -445,7 +441,7 @@ func addCommentsToTasks(tasks []TaskInfo) []TaskInfo {
 		placeholders[i] = fmt.Sprintf("$%d", i+1)
 	}
 	placeholderStr := strings.Join(placeholders, ",")
-	
+
 	query := fmt.Sprintf(`
 		SELECT task_id, description
 		FROM time_entries 
@@ -462,7 +458,7 @@ func addCommentsToTasks(tasks []TaskInfo) []TaskInfo {
 
 	logger.Infof("Executing comment query: %s", query)
 	logger.Infof("Query args: %v", args)
-	
+
 	rows, err := db.Query(query, args...)
 	if err != nil {
 		logger.Errorf("Failed to query comments: %v", err)
@@ -518,6 +514,7 @@ func addCommentsToTasks(tasks []TaskInfo) []TaskInfo {
 	return tasks
 }
 
+// fully AI generated
 func sendTasksGroupedByProject(responseWriter http.ResponseWriter, req *SlackCommandRequest, tasksGroupedByProject []TaskInfo) {
 	logger := GetGlobalLogger()
 	logger.Infof("Starting sendTasksGroupedByProject with %d tasks", len(tasksGroupedByProject))
@@ -558,7 +555,7 @@ func sendTasksGroupedByProject(responseWriter http.ResponseWriter, req *SlackCom
 
 	logger.Infof("Using thresholds - MID_POINT: %.1f, HIGH_POINT: %.1f", midPoint, highPoint)
 
-	// Group tasks by project - despite the parameter name, tasksGroupedByProject 
+	// Group tasks by project - despite the parameter name, tasksGroupedByProject
 	// is actually a flat array from filteredTasksGroupedByProject, so we need to group them here
 	db, err := GetDB()
 	if err != nil {
@@ -734,15 +731,15 @@ func sendTasksGroupedByProject(responseWriter http.ResponseWriter, req *SlackCom
 
 		for _, task := range projectTasks {
 			logger.Infof("Processing task %d (%s) with %d comments", task.TaskID, task.Name, len(task.Comments))
-			
+
 			// Build task text - EstimationInfo.Text already contains percentage and emoji
 			taskText := fmt.Sprintf("*%s*", task.Name)
-			
+
 			// Add time spent on the task
 			if task.CurrentTime != "" {
 				taskText += fmt.Sprintf("\nTime spent: %s", task.CurrentTime)
 			}
-			
+
 			// Add estimation info if available
 			if task.EstimationInfo.Text != "" {
 				taskText += fmt.Sprintf("\n%s", task.EstimationInfo.Text)
@@ -876,6 +873,7 @@ func sendTasksGroupedByProject(responseWriter http.ResponseWriter, req *SlackCom
 	logger.Info("Completed sendTasksGroupedByProject")
 }
 
+/* Displays help text for the OYE command */
 func sendUnifiedHelp(responseWriter http.ResponseWriter) {
 	helpText := "*🎯 OYE (Observe-Yor-Estimates) Commands*\n\n" +
 		"*Time Frame Options:*\n" +
@@ -910,7 +908,7 @@ func sendUnifiedHelp(responseWriter http.ResponseWriter) {
 	json.NewEncoder(responseWriter).Encode(response)
 }
 
-// parseSlackCommand parses the form data from a Slack slash command
+/* Parses the form data from a Slack slash command */
 func parseSlackCommand(r *http.Request) (*SlackCommandRequest, error) {
 	err := r.ParseForm()
 	if err != nil {
@@ -932,7 +930,7 @@ func parseSlackCommand(r *http.Request) (*SlackCommandRequest, error) {
 	}, nil
 }
 
-// verifySlackRequest verifies that the request is from Slack
+/* Verifies that the request is from Slack */
 func verifySlackRequest(req *SlackCommandRequest) error {
 	expectedToken := os.Getenv("SLACK_VERIFICATION_TOKEN")
 	if expectedToken == "" {
@@ -947,7 +945,7 @@ func verifySlackRequest(req *SlackCommandRequest) error {
 	return nil
 }
 
-// sendImmediateResponse sends an immediate response to Slack
+/* Sends an immediate response to Slack */
 func sendImmediateResponse(w http.ResponseWriter, message string, responseType string) {
 	if responseType == "" {
 		responseType = "ephemeral" // Only visible to the user who ran the command

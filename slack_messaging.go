@@ -36,63 +36,6 @@ func SendTaskMessage(tasks []TaskInfo, period string) error {
 	return nil
 }
 
-// SendTaskMessageToResponseURL sends task updates grouped by project via response URL
-func SendTaskMessageToResponseURL(tasks []TaskInfo, period string, responseURL string) error {
-	if responseURL == "" {
-		return fmt.Errorf("response URL is required")
-	}
-
-	if len(tasks) == 0 {
-		message := formatNoTasksMessage(period)
-		return sendSlackResponse(responseURL, message)
-	}
-
-	// Group by project
-	projectGroups := groupTasksByProject(tasks)
-
-	// Send message for each project
-	for project, projectTasks := range projectGroups {
-		message := formatProjectMessage(project, projectTasks, period)
-
-		// Check message limits and split if needed
-		validation := validateMessageLimits(message)
-		if !validation.IsValid {
-			return splitAndSendToResponseURL(message, responseURL)
-		}
-
-		if err := sendSlackResponse(responseURL, message); err != nil {
-			logger := GetGlobalLogger()
-			logger.Errorf("Failed to send message for project %s via response URL: %v", project, err)
-			logger.Errorf("Message: %v", message)
-			return err
-		}
-	}
-
-	return nil
-}
-
-// SendThresholdMessage sends threshold alert messages
-func SendThresholdMessage(tasks []TaskInfo, period string, threshold float64) error {
-	if len(tasks) == 0 {
-		message := formatNoThresholdMessage(period, threshold)
-		return validateAndSend(message)
-	}
-
-	projectGroups := groupTasksByProject(tasks)
-
-	for project, projectTasks := range projectGroups {
-		message := formatThresholdMessage(project, projectTasks, period, threshold)
-
-		if err := validateAndSend(message); err != nil {
-			logger := GetGlobalLogger()
-			logger.Errorf("Failed to send threshold message for project %s: %v", project, err)
-			return err
-		}
-	}
-
-	return nil
-}
-
 // formatProjectMessage creates message for a project's tasks
 func formatProjectMessage(project string, tasks []TaskInfo, period string) SlackMessage {
 	title := fmt.Sprintf("%s %s Report", EMOJI_CHART, strings.Title(period))
@@ -315,20 +258,6 @@ func sendNoTasksMessage(period string) error {
 	return validateAndSend(slackMsg)
 }
 
-// formatNoThresholdMessage creates message when no threshold violations
-func formatNoThresholdMessage(period string, threshold float64) SlackMessage {
-	message := fmt.Sprintf("%s No tasks found over %.0f%% threshold for %s period",
-		EMOJI_TARGET, threshold, period)
-
-	return SlackMessage{
-		Text: message,
-		Blocks: []Block{{
-			Type: "section",
-			Text: &Text{Type: "mrkdwn", Text: message},
-		}},
-	}
-}
-
 // validateAndSend validates message limits and sends
 func validateAndSend(message SlackMessage) error {
 	validation := validateMessageLimits(message)
@@ -421,48 +350,6 @@ func splitAndSendMessage(message SlackMessage) error {
 	return nil
 }
 
-// splitAndSendToResponseURL splits large messages and sends them via response URL
-func splitAndSendToResponseURL(message SlackMessage, responseURL string) error {
-	maxBlocks := MAX_SLACK_BLOCKS - 2 // reserve for header/footer
-
-	if len(message.Blocks) <= maxBlocks {
-		return sendSlackResponse(responseURL, message)
-	}
-
-	// Keep header blocks
-	headerBlocks := []Block{}
-	taskBlocks := []Block{}
-
-	for i, block := range message.Blocks {
-		if i < 3 { // header, context, divider
-			headerBlocks = append(headerBlocks, block)
-		} else {
-			taskBlocks = append(taskBlocks, block)
-		}
-	}
-
-	// Send in chunks
-	for i := 0; i < len(taskBlocks); i += maxBlocks {
-		end := i + maxBlocks
-		if end > len(taskBlocks) {
-			end = len(taskBlocks)
-		}
-
-		chunkBlocks := append(headerBlocks, taskBlocks[i:end]...)
-
-		chunkMessage := SlackMessage{
-			Text:   message.Text,
-			Blocks: chunkBlocks,
-		}
-
-		if err := sendSlackResponse(responseURL, chunkMessage); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
 // sendSlackWebhook sends message via webhook
 func sendSlackWebhook(message SlackMessage) error {
 	webhookURL := os.Getenv("SLACK_WEBHOOK_URL")
@@ -528,33 +415,6 @@ func sendSlackResponse(responseURL string, message SlackMessage) error {
 // getTaskChanges unified dynamic function
 func getTaskChanges(db *sql.DB, period string, days int) ([]TaskUpdateInfo, error) {
 	return GetDynamicTaskTimeEntriesWithProject(db, period, days, nil)
-}
-
-// getTaskChangesWithProject unified dynamic function
-func getTaskChangesWithProject(db *sql.DB, period string, days int, projectTaskID *int) ([]TaskUpdateInfo, error) {
-	return GetDynamicTaskTimeEntriesWithProject(db, period, days, projectTaskID)
-}
-
-// convertTaskInfoToTaskUpdateInfo converts TaskInfo back to TaskUpdateInfo for compatibility
-func convertTaskInfoToTaskUpdateInfo(tasks []TaskInfo) []TaskUpdateInfo {
-	var taskUpdates []TaskUpdateInfo
-	for _, task := range tasks {
-		taskUpdate := TaskUpdateInfo{
-			TaskID:         task.TaskID,
-			ParentID:       task.ParentID,
-			Name:           task.Name,
-			EstimationInfo: task.EstimationInfo.Text,
-			CurrentPeriod:  task.CurrentPeriod,
-			CurrentTime:    task.CurrentTime,
-			PreviousPeriod: task.PreviousPeriod,
-			PreviousTime:   task.PreviousTime,
-			DaysWorked:     task.DaysWorked,
-			Comments:       task.Comments,
-			UserBreakdown:  task.UserBreakdown,
-		}
-		taskUpdates = append(taskUpdates, taskUpdate)
-	}
-	return taskUpdates
 }
 
 // Utility functions
