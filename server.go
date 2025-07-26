@@ -271,7 +271,7 @@ func confirmPeriod(commandText string) (time.Time, time.Time, error) {
 
 func filteredTasksGroupedByProject(startTime time.Time, endTime time.Time, filteringByProject bool, projectName string, filteringByPercentage bool, percentage string) []TaskInfo {
 	logger := GetGlobalLogger()
-	logger.Infof("filteredTasksGroupedByProject called with: startTime=%s, endTime=%s, filteringByProject=%t, projectName='%s', filteringByPercentage=%t, percentage='%s'", 
+	logger.Infof("filteredTasksGroupedByProject called with: startTime=%s, endTime=%s, filteringByProject=%t, projectName='%s', filteringByPercentage=%t, percentage='%s'",
 		startTime.Format("2006-01-02 15:04:05"), endTime.Format("2006-01-02 15:04:05"), filteringByProject, projectName, filteringByPercentage, percentage)
 
 	db, err := GetDB()
@@ -509,12 +509,12 @@ func sendTasksGroupedByProject(responseWriter http.ResponseWriter, req *SlackCom
 		logger.Error("SLACK_BOT_TOKEN not configured in environment")
 		return
 	}
-	
+
 	if req.ResponseURL == "" {
 		logger.Error("No response URL provided, cannot send initial message")
 		return
 	}
-	
+
 	logger.Infof("Using Slack Bot API for threaded messages in channel: %s", req.ChannelID)
 
 	// Get threshold values from environment variables
@@ -670,9 +670,9 @@ func sendTasksGroupedByProject(responseWriter http.ResponseWriter, req *SlackCom
 
 		// Send project header message as threaded reply
 		projectHeaderPayload := map[string]interface{}{
-			"channel":    req.ChannelID,
-			"text":       fmt.Sprintf("%s **%s**", EMOJI_FOLDER, projectName),
-			"thread_ts":  threadTimestamp,
+			"channel":   req.ChannelID,
+			"text":      fmt.Sprintf("%s **%s**", EMOJI_FOLDER, projectName),
+			"thread_ts": threadTimestamp,
 		}
 
 		headerPayloadBytes, err := json.Marshal(projectHeaderPayload)
@@ -708,27 +708,13 @@ func sendTasksGroupedByProject(responseWriter http.ResponseWriter, req *SlackCom
 		currentCharCount := 0
 
 		for _, task := range projectTasks {
-			// Determine status emoji based on percentage
-			statusEmoji := EMOJI_NO_TIME
-			if task.EstimationInfo.ErrorMessage == "" && task.EstimationInfo.Percentage > 0 {
-				percentage := task.EstimationInfo.Percentage
-				if percentage > 100 {
-					statusEmoji = EMOJI_CRITICAL
-				} else if percentage > highPoint {
-					statusEmoji = EMOJI_HIGH_USAGE
-				} else if percentage > midPoint {
-					statusEmoji = EMOJI_WARNING
-				} else {
-					statusEmoji = EMOJI_ON_TRACK
-				}
-			}
-
-			// Build task text
+			// Build task text - EstimationInfo.Text already contains percentage and emoji
 			taskText := fmt.Sprintf("*%s*", task.Name)
 			if task.EstimationInfo.Text != "" {
-				taskText += fmt.Sprintf("\n%s %.1f%% %s", task.EstimationInfo.Text, task.EstimationInfo.Percentage, statusEmoji)
+				taskText += fmt.Sprintf("\n%s", task.EstimationInfo.Text)
 			} else {
-				taskText += fmt.Sprintf(" %s", statusEmoji)
+				// For tasks without estimation, add no time emoji
+				taskText += fmt.Sprintf(" %s", EMOJI_NO_TIME)
 			}
 
 			// Add comments as unordered list
