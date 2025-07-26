@@ -51,24 +51,24 @@ func StartServer(logger *Logger) {
 }
 
 // handleUnifiedOYECommand handles the new unified /oye command
-func handleUnifiedOYECommand(w http.ResponseWriter, r *http.Request) {
+func handleUnifiedOYECommand(responseWriter http.ResponseWriter, request *http.Request) {
 	logger := GetGlobalLogger()
 
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	if request.Method != http.MethodPost {
+		http.Error(responseWriter, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	req, err := parseSlackCommand(r)
+	req, err := parseSlackCommand(request)
 	if err != nil {
 		logger.Errorf("Failed to parse slash command: %v", err)
-		http.Error(w, "Bad request", http.StatusBadRequest)
+		http.Error(responseWriter, "Bad request", http.StatusBadRequest)
 		return
 	}
 
 	if err := verifySlackRequest(req); err != nil {
 		logger.Errorf("Failed to verify Slack request: %v", err)
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		http.Error(responseWriter, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
@@ -83,40 +83,40 @@ func handleUnifiedOYECommand(w http.ResponseWriter, r *http.Request) {
 	firstWord := strings.Fields(commandText)[0]
 	allowedCommands := []string{"project", "update", "over"}
 	if !slices.Contains(allowedCommands, firstWord) {
-		sendUnifiedHelp(w, req)
+		sendUnifiedHelp(responseWriter)
 		return
 	}
 
 	filteringByProject, projectName, err := confirmProject(commandText)
 	if err != nil {
 		logger.Errorf(err.Error())
-		sendImmediateResponse(w, err.Error(), "ephemeral")
+		sendImmediateResponse(responseWriter, err.Error(), "ephemeral")
 		return
 	}
 
 	filteringByPercentage, percentage, err := confirmPercentage(commandText)
 	if err != nil {
 		logger.Errorf(err.Error())
-		sendImmediateResponse(w, err.Error(), "ephemeral")
+		sendImmediateResponse(responseWriter, err.Error(), "ephemeral")
 		return
 	}
 
 	startTime, endTime, err := confirmPeriod(commandText)
 	if err != nil {
 		logger.Errorf(err.Error())
-		sendImmediateResponse(w, err.Error(), "ephemeral")
+		sendImmediateResponse(responseWriter, err.Error(), "ephemeral")
 		return
 	}
 
 	tasksGroupedByProject := filteredTasksGroupedByProject(startTime, endTime, filteringByProject, projectName, filteringByPercentage, percentage)
 	if len(tasksGroupedByProject) == 0 {
-		sendImmediateResponse(w, "No tasks found", "ephemeral")
+		sendImmediateResponse(responseWriter, "No tasks found", "ephemeral")
 		return
 	}
 
 	tasksGroupedByProject = addCommentsToTasks(tasksGroupedByProject)
 
-	sendTasksGroupedByProject(w, req, tasksGroupedByProject)
+	sendTasksGroupedByProject(responseWriter, req, tasksGroupedByProject)
 }
 
 /* Gets the project name from the command text
@@ -457,11 +457,272 @@ func addCommentsToTasks(tasks []TaskInfo) []TaskInfo {
 	return tasks
 }
 
-func sendTasksGroupedByProject(w http.ResponseWriter, req *SlackCommandRequest, tasksGroupedByProject []TaskInfo) {
+func sendTasksGroupedByProject(responseWriter http.ResponseWriter, req *SlackCommandRequest, tasksGroupedByProject []TaskInfo) {
+	logger := GetGlobalLogger()
+	logger.Infof("Starting sendTasksGroupedByProject with %d tasks", len(tasksGroupedByProject))
 
+	if len(tasksGroupedByProject) == 0 {
+		logger.Info("No tasks to send, returning early")
+		return
+	}
+
+	if req.ResponseURL == "" {
+		logger.Error("No response URL provided, cannot send messages")
+		return
+	}
+
+	// Get threshold values from environment variables
+	midPoint := DEFAULT_MID_POINT
+	if envMidPoint := os.Getenv("MID_POINT"); envMidPoint != "" {
+		if parsed, err := strconv.ParseFloat(envMidPoint, 64); err == nil {
+			midPoint = parsed
+		}
+	}
+
+	highPoint := DEFAULT_HIGH_POINT
+	if envHighPoint := os.Getenv("HIGH_POINT"); envHighPoint != "" {
+		if parsed, err := strconv.ParseFloat(envHighPoint, 64); err == nil {
+			highPoint = parsed
+		}
+	}
+
+	logger.Infof("Using thresholds - MID_POINT: %.1f, HIGH_POINT: %.1f", midPoint, highPoint)
+
+	// Group tasks by project inline
+	db, err := GetDB()
+	if err != nil {
+		logger.Errorf("Failed to get database connection: %v", err)
+		return
+	}
+
+	// Get all tasks for hierarchy lookup
+	allTasksQuery := "SELECT task_id, parent_id, name FROM tasks"
+	rows, err := db.Query(allTasksQuery)
+	if err != nil {
+		logger.Errorf("Failed to query all tasks for hierarchy: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	taskHierarchy := make(map[int]struct {
+		ParentID int
+		Name     string
+	})
+
+	for rows.Next() {
+		var taskID, parentID int
+		var name string
+		if err := rows.Scan(&taskID, &parentID, &name); err == nil {
+			taskHierarchy[taskID] = struct {
+				ParentID int
+				Name     string
+			}{ParentID: parentID, Name: name}
+		}
+	}
+
+	// Group tasks by project
+	projectGroups := make(map[string][]TaskInfo)
+	for _, task := range tasksGroupedByProject {
+		projectName := "Other"
+
+		// Walk up the hierarchy to find project name
+		currentID := task.TaskID
+		var previousName string
+		for depth := 0; depth < 10; depth++ { // max depth to prevent infinite loop
+			if taskInfo, exists := taskHierarchy[currentID]; exists {
+				if taskInfo.ParentID == 0 {
+					// Reached root, use previous name as project
+					if previousName != "" {
+						projectName = previousName
+					}
+					break
+				}
+				previousName = taskInfo.Name
+				currentID = taskInfo.ParentID
+			} else {
+				break
+			}
+		}
+
+		projectGroups[projectName] = append(projectGroups[projectName], task)
+	}
+
+	logger.Infof("Grouped tasks into %d projects", len(projectGroups))
+
+	// Process each project
+	for projectName, projectTasks := range projectGroups {
+		logger.Infof("Processing project '%s' with %d tasks", projectName, len(projectTasks))
+
+		// Send project header message
+		projectHeaderPayload := map[string]interface{}{
+			"response_type": "in_channel",
+			"text":          fmt.Sprintf("%s **%s**", EMOJI_FOLDER, projectName),
+		}
+
+		headerPayloadBytes, err := json.Marshal(projectHeaderPayload)
+		if err != nil {
+			logger.Errorf("Failed to marshal project header payload: %v", err)
+			continue
+		}
+
+		logger.Infof("Sending project header for '%s'", projectName)
+		headerResp, err := http.Post(req.ResponseURL, "application/json", strings.NewReader(string(headerPayloadBytes)))
+		if err != nil {
+			logger.Errorf("Failed to send project header for '%s': %v", projectName, err)
+			continue
+		}
+		headerResp.Body.Close()
+
+		if headerResp.StatusCode != http.StatusOK {
+			logger.Errorf("Project header response status %d for '%s'", headerResp.StatusCode, projectName)
+		} else {
+			logger.Infof("Successfully sent project header for '%s'", projectName)
+		}
+
+		// Wait 150ms before next message
+		time.Sleep(150 * time.Millisecond)
+
+		// Create task blocks
+		var blocks []map[string]interface{}
+		currentBlockCount := 0
+		currentCharCount := 0
+
+		for _, task := range projectTasks {
+			// Determine status emoji based on percentage
+			statusEmoji := EMOJI_NO_TIME
+			if task.EstimationInfo.ErrorMessage == "" && task.EstimationInfo.Percentage > 0 {
+				percentage := task.EstimationInfo.Percentage
+				if percentage > 100 {
+					statusEmoji = EMOJI_CRITICAL
+				} else if percentage > highPoint {
+					statusEmoji = EMOJI_HIGH_USAGE
+				} else if percentage > midPoint {
+					statusEmoji = EMOJI_WARNING
+				} else {
+					statusEmoji = EMOJI_ON_TRACK
+				}
+			}
+
+			// Build task text
+			taskText := fmt.Sprintf("*%s*", task.Name)
+			if task.EstimationInfo.Text != "" {
+				taskText += fmt.Sprintf("\n%s %.1f%% %s", task.EstimationInfo.Text, task.EstimationInfo.Percentage, statusEmoji)
+			} else {
+				taskText += fmt.Sprintf(" %s", statusEmoji)
+			}
+
+			// Add comments as unordered list
+			if len(task.Comments) > 0 {
+				taskText += "\n"
+				for _, comment := range task.Comments {
+					if comment != "" {
+						// Limit comment length to avoid overwhelming
+						if len(comment) > 100 {
+							comment = comment[:97] + "..."
+						}
+						taskText += fmt.Sprintf("• %s\n", comment)
+					}
+				}
+			}
+
+			// Create task block
+			taskBlock := map[string]interface{}{
+				"type": "section",
+				"text": map[string]interface{}{
+					"type": "mrkdwn",
+					"text": taskText,
+				},
+			}
+
+			// Estimate character count for this block
+			blockBytes, _ := json.Marshal(taskBlock)
+			blockCharCount := len(blockBytes)
+
+			// Check if adding this block would exceed limits
+			if currentBlockCount+1 > MAX_SLACK_BLOCKS || currentCharCount+blockCharCount > MAX_MESSAGE_CHARS_BUFFER {
+				// Send current blocks if we have any
+				if len(blocks) > 0 {
+					logger.Infof("Sending message chunk for project '%s' with %d blocks (%d chars)", projectName, len(blocks), currentCharCount)
+
+					messagePayload := map[string]interface{}{
+						"response_type": "in_channel",
+						"blocks":        blocks,
+					}
+
+					payloadBytes, err := json.Marshal(messagePayload)
+					if err != nil {
+						logger.Errorf("Failed to marshal message payload: %v", err)
+						break
+					}
+
+					resp, err := http.Post(req.ResponseURL, "application/json", strings.NewReader(string(payloadBytes)))
+					if err != nil {
+						logger.Errorf("Failed to send message chunk for project '%s': %v", projectName, err)
+						break
+					}
+					resp.Body.Close()
+
+					if resp.StatusCode != http.StatusOK {
+						logger.Errorf("Message chunk response status %d for project '%s'", resp.StatusCode, projectName)
+					} else {
+						logger.Infof("Successfully sent message chunk for project '%s'", projectName)
+					}
+
+					// Wait 150ms before next message
+					time.Sleep(150 * time.Millisecond)
+
+					// Reset for next chunk
+					blocks = []map[string]interface{}{}
+					currentBlockCount = 0
+					currentCharCount = 0
+				}
+			}
+
+			// Add block to current batch
+			blocks = append(blocks, taskBlock)
+			currentBlockCount++
+			currentCharCount += blockCharCount
+		}
+
+		// Send remaining blocks if any
+		if len(blocks) > 0 {
+			logger.Infof("Sending final message chunk for project '%s' with %d blocks (%d chars)", projectName, len(blocks), currentCharCount)
+
+			messagePayload := map[string]interface{}{
+				"response_type": "in_channel",
+				"blocks":        blocks,
+			}
+
+			payloadBytes, err := json.Marshal(messagePayload)
+			if err != nil {
+				logger.Errorf("Failed to marshal final message payload: %v", err)
+				continue
+			}
+
+			resp, err := http.Post(req.ResponseURL, "application/json", strings.NewReader(string(payloadBytes)))
+			if err != nil {
+				logger.Errorf("Failed to send final message chunk for project '%s': %v", projectName, err)
+				continue
+			}
+			resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK {
+				logger.Errorf("Final message chunk response status %d for project '%s'", resp.StatusCode, projectName)
+			} else {
+				logger.Infof("Successfully sent final message chunk for project '%s'", projectName)
+			}
+
+			// Wait 150ms before next project
+			time.Sleep(150 * time.Millisecond)
+		}
+
+		logger.Infof("Completed processing project '%s'", projectName)
+	}
+
+	logger.Info("Completed sendTasksGroupedByProject")
 }
 
-func sendUnifiedHelp(w http.ResponseWriter, req *SlackCommandRequest) {
+func sendUnifiedHelp(responseWriter http.ResponseWriter) {
 	helpText := "*🎯 OYE (Observe-Yor-Estimates) Commands*\n\n" +
 		"*Time Frame Options:*\n" +
 		"• `/oye update [period]` - Update for specific time frame\n" +
@@ -491,8 +752,8 @@ func sendUnifiedHelp(w http.ResponseWriter, req *SlackCommandRequest) {
 		Text:         helpText,
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	responseWriter.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(responseWriter).Encode(response)
 }
 
 // parseSlackCommand parses the form data from a Slack slash command
