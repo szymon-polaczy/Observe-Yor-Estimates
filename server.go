@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -86,21 +87,21 @@ func handleUnifiedOYECommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	filteringByProject, projectName, err := confirmProject(w, req, commandText)
+	filteringByProject, projectName, err := confirmProject(commandText)
 	if err != nil {
 		logger.Errorf(err.Error())
 		sendImmediateResponse(w, err.Error(), "ephemeral")
 		return
 	}
 
-	filteringByPercentage, percentage, err := confirmPercentage(w, req, commandText)
+	filteringByPercentage, percentage, err := confirmPercentage(commandText)
 	if err != nil {
 		logger.Errorf(err.Error())
 		sendImmediateResponse(w, err.Error(), "ephemeral")
 		return
 	}
 
-	startTime, endTime, err := confirmPeriod(w, req, commandText)
+	startTime, endTime, err := confirmPeriod(commandText)
 	if err != nil {
 		logger.Errorf(err.Error())
 		sendImmediateResponse(w, err.Error(), "ephemeral")
@@ -108,6 +109,14 @@ func handleUnifiedOYECommand(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tasksGroupedByProject := filteredTasksGroupedByProject(startTime, endTime, filteringByProject, projectName, filteringByPercentage, percentage)
+	if len(tasksGroupedByProject) == 0 {
+		sendImmediateResponse(w, "No tasks found", "ephemeral")
+		return
+	}
+
+	tasksGroupedByProject = addCommentsToTasks(tasksGroupedByProject)
+
+	sendTasksGroupedByProject(w, req, tasksGroupedByProject)
 }
 
 /* Gets the project name from the command text
@@ -115,7 +124,7 @@ func handleUnifiedOYECommand(w http.ResponseWriter, r *http.Request) {
  * If the project name is found, but is not in the database, returns an error
  * If the project name is found, and is in the database, returns the project name and nil
  */
-func confirmProject(w http.ResponseWriter, req *SlackCommandRequest, commandText string) (bool, string, error) {
+func confirmProject(commandText string) (bool, string, error) {
 	projectName := ""
 	projectNameRegex := regexp.MustCompile(`project (.*?) update`)
 
@@ -147,7 +156,7 @@ func confirmProject(w http.ResponseWriter, req *SlackCommandRequest, commandText
  * If the percentage is not found, returns an error
  * If the percentage is found, returns the percentage and nil
  */
-func confirmPercentage(w http.ResponseWriter, req *SlackCommandRequest, commandText string) (bool, string, error) {
+func confirmPercentage(commandText string) (bool, string, error) {
 	percentage := ""
 	percentageRegex := regexp.MustCompile(`over (.*?)`)
 
@@ -171,7 +180,7 @@ func confirmPercentage(w http.ResponseWriter, req *SlackCommandRequest, commandT
  * If the period is found, and is valid, returns the period's start and end times and nil
  * If the period is found, and is invalid, returns an error
  */
-func confirmPeriod(w http.ResponseWriter, req *SlackCommandRequest, commandText string) (time.Time, time.Time, error) {
+func confirmPeriod(commandText string) (time.Time, time.Time, error) {
 	period := ""
 	periodRegex := regexp.MustCompile(`update (.*?)`)
 
@@ -261,6 +270,195 @@ func filteredTasksGroupedByProject(startTime time.Time, endTime time.Time, filte
 	if err != nil {
 		return []TaskInfo{}
 	}
+
+	// Convert time range to date strings for SQL query (time_entries uses TEXT date field)
+	startDateStr := startTime.Format("2006-01-02")
+	endDateStr := endTime.Format("2006-01-02")
+
+	// Build SQL query with optional project filtering
+	query := `
+	WITH filtered_tasks AS (
+		SELECT DISTINCT t.task_id 
+		FROM tasks t`
+
+	args := []interface{}{}
+
+	// Add project filtering if specified
+	if filteringByProject && projectName != "" {
+		query += ` 
+		JOIN projects p ON t.project_id = p.id
+		WHERE p.name = ?`
+		args = append(args, projectName)
+	} else {
+		query += ` WHERE 1=1`
+	}
+
+	query += `
+	),
+	task_time_data AS (
+		SELECT 
+			t.task_id,
+			t.parent_id,
+			t.name,
+			COALESCE(SUM(CASE 
+				WHEN te.date >= ? AND te.date <= ? 
+				THEN te.duration 
+				ELSE 0 
+			END), 0) as current_period_duration,
+			COALESCE(SUM(te.duration), 0) as total_duration
+		FROM tasks t
+		LEFT JOIN time_entries te ON t.task_id = te.task_id
+		WHERE t.task_id IN (SELECT task_id FROM filtered_tasks)
+		GROUP BY t.task_id, t.parent_id, t.name
+		HAVING current_period_duration > 0
+	)
+	SELECT * FROM task_time_data ORDER BY name`
+
+	args = append(args, startDateStr, endDateStr)
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return []TaskInfo{}
+	}
+	defer rows.Close()
+
+	var allTasks []TaskInfo
+	var percentageThreshold float64
+
+	// Parse percentage threshold if filtering by percentage
+	if filteringByPercentage {
+		if percentageFloat, err := strconv.ParseFloat(strings.TrimSuffix(percentage, "%"), 64); err == nil {
+			percentageThreshold = percentageFloat
+		} else {
+			return []TaskInfo{} // Invalid percentage format
+		}
+	}
+
+	for rows.Next() {
+		var task TaskInfo
+		var currentDuration, totalDuration int
+
+		err := rows.Scan(
+			&task.TaskID,
+			&task.ParentID,
+			&task.Name,
+			&currentDuration,
+			&totalDuration,
+		)
+		if err != nil {
+			continue
+		}
+
+		// Format durations using existing formatDuration function (takes seconds)
+		task.CurrentTime = formatDuration(currentDuration)
+		task.CurrentPeriod = task.CurrentTime // Set both fields for consistency
+
+		// Parse estimation from task name and calculate usage
+		estimationInfo := ParseTaskEstimationWithUsage(task.Name, task.CurrentTime, "0h 0m")
+		task.EstimationInfo = estimationInfo
+
+		// If filtering by percentage, apply the logic
+		if filteringByPercentage {
+			// Skip tasks without valid estimations
+			if estimationInfo.ErrorMessage != "" {
+				continue
+			}
+
+			// Skip tasks below threshold
+			if estimationInfo.Percentage < percentageThreshold {
+				continue
+			}
+		}
+
+		allTasks = append(allTasks, task)
+	}
+
+	return allTasks
+}
+
+func addCommentsToTasks(tasks []TaskInfo) []TaskInfo {
+	if len(tasks) == 0 {
+		return tasks
+	}
+
+	db, err := GetDB()
+	if err != nil {
+		return tasks
+	}
+
+	// Collect all task IDs
+	taskIDs := make([]string, 0, len(tasks))
+	taskMap := make(map[int]*TaskInfo)
+
+	for i := range tasks {
+		taskIDs = append(taskIDs, strconv.Itoa(tasks[i].TaskID))
+		taskMap[tasks[i].TaskID] = &tasks[i]
+	}
+
+	// Query for comments from time_entries descriptions
+	placeholders := strings.Repeat("?,", len(taskIDs)-1) + "?"
+	query := fmt.Sprintf(`
+		SELECT task_id, description
+		FROM time_entries 
+		WHERE task_id IN (%s) 
+		AND description IS NOT NULL 
+		AND description != ''
+		ORDER BY task_id, date DESC`, placeholders)
+
+	// Convert taskIDs to []interface{} for query args
+	args := make([]interface{}, len(taskIDs))
+	for i, id := range taskIDs {
+		args[i] = id
+	}
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return tasks
+	}
+	defer rows.Close()
+
+	// Map to collect comments by task_id
+	taskComments := make(map[int][]string)
+
+	for rows.Next() {
+		var taskID int
+		var description sql.NullString
+
+		if err := rows.Scan(&taskID, &description); err != nil {
+			continue
+		}
+
+		if description.Valid && description.String != "" {
+			// Split descriptions by "; " as done in existing code
+			comments := strings.Split(description.String, "; ")
+			taskComments[taskID] = append(taskComments[taskID], comments...)
+		}
+	}
+
+	// Add comments to tasks and remove duplicates
+	for taskID, comments := range taskComments {
+		if task, exists := taskMap[taskID]; exists {
+			// Remove duplicates and empty strings
+			uniqueComments := make([]string, 0)
+			seen := make(map[string]bool)
+
+			for _, comment := range comments {
+				comment = strings.TrimSpace(comment)
+				if comment != "" && !seen[comment] {
+					uniqueComments = append(uniqueComments, comment)
+					seen[comment] = true
+				}
+			}
+
+			task.Comments = uniqueComments
+		}
+	}
+
+	return tasks
+}
+
+func sendTasksGroupedByProject(w http.ResponseWriter, req *SlackCommandRequest, tasksGroupedByProject []TaskInfo) {
+
 }
 
 func sendUnifiedHelp(w http.ResponseWriter, req *SlackCommandRequest) {
