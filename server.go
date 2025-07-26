@@ -414,12 +414,17 @@ func filteredTasksGroupedByProject(startTime time.Time, endTime time.Time, filte
 }
 
 func addCommentsToTasks(tasks []TaskInfo) []TaskInfo {
+	logger := GetGlobalLogger()
 	if len(tasks) == 0 {
+		logger.Info("No tasks to add comments to")
 		return tasks
 	}
 
+	logger.Infof("Adding comments to %d tasks", len(tasks))
+
 	db, err := GetDB()
 	if err != nil {
+		logger.Errorf("Failed to get database connection for comments: %v", err)
 		return tasks
 	}
 
@@ -432,15 +437,22 @@ func addCommentsToTasks(tasks []TaskInfo) []TaskInfo {
 		taskMap[tasks[i].TaskID] = &tasks[i]
 	}
 
-	// Query for comments from time_entries descriptions
-	placeholders := strings.Repeat("?,", len(taskIDs)-1) + "?"
+	logger.Infof("Querying comments for task IDs: %v", taskIDs)
+
+	// Query for comments from time_entries descriptions using PostgreSQL placeholders
+	placeholders := make([]string, len(taskIDs))
+	for i := range taskIDs {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+	}
+	placeholderStr := strings.Join(placeholders, ",")
+	
 	query := fmt.Sprintf(`
 		SELECT task_id, description
 		FROM time_entries 
 		WHERE task_id IN (%s) 
 		AND description IS NOT NULL 
 		AND description != ''
-		ORDER BY task_id, date DESC`, placeholders)
+		ORDER BY task_id, date DESC`, placeholderStr)
 
 	// Convert taskIDs to []interface{} for query args
 	args := make([]interface{}, len(taskIDs))
@@ -448,29 +460,39 @@ func addCommentsToTasks(tasks []TaskInfo) []TaskInfo {
 		args[i] = id
 	}
 
+	logger.Infof("Executing comment query: %s", query)
+	logger.Infof("Query args: %v", args)
+	
 	rows, err := db.Query(query, args...)
 	if err != nil {
+		logger.Errorf("Failed to query comments: %v", err)
 		return tasks
 	}
 	defer rows.Close()
 
 	// Map to collect comments by task_id
 	taskComments := make(map[int][]string)
+	commentCount := 0
 
 	for rows.Next() {
 		var taskID int
 		var description sql.NullString
 
 		if err := rows.Scan(&taskID, &description); err != nil {
+			logger.Errorf("Failed to scan comment row: %v", err)
 			continue
 		}
 
 		if description.Valid && description.String != "" {
+			logger.Infof("Found comment for task %d: %s", taskID, description.String)
 			// Split descriptions by "; " as done in existing code
 			comments := strings.Split(description.String, "; ")
 			taskComments[taskID] = append(taskComments[taskID], comments...)
+			commentCount++
 		}
 	}
+
+	logger.Infof("Found %d comment entries for %d tasks", commentCount, len(taskComments))
 
 	// Add comments to tasks and remove duplicates
 	for taskID, comments := range taskComments {
@@ -487,10 +509,12 @@ func addCommentsToTasks(tasks []TaskInfo) []TaskInfo {
 				}
 			}
 
+			logger.Infof("Adding %d unique comments to task %d (%s)", len(uniqueComments), taskID, task.Name)
 			task.Comments = uniqueComments
 		}
 	}
 
+	logger.Infof("Completed adding comments to tasks")
 	return tasks
 }
 
@@ -534,7 +558,8 @@ func sendTasksGroupedByProject(responseWriter http.ResponseWriter, req *SlackCom
 
 	logger.Infof("Using thresholds - MID_POINT: %.1f, HIGH_POINT: %.1f", midPoint, highPoint)
 
-	// Group tasks by project inline
+	// Group tasks by project - despite the parameter name, tasksGroupedByProject 
+	// is actually a flat array from filteredTasksGroupedByProject, so we need to group them here
 	db, err := GetDB()
 	if err != nil {
 		logger.Errorf("Failed to get database connection: %v", err)
@@ -593,7 +618,7 @@ func sendTasksGroupedByProject(responseWriter http.ResponseWriter, req *SlackCom
 		projectGroups[projectName] = append(projectGroups[projectName], task)
 	}
 
-	logger.Infof("Grouped tasks into %d projects", len(projectGroups))
+	logger.Infof("Grouped %d tasks into %d projects", len(tasksGroupedByProject), len(projectGroups))
 
 	// Send initial thread message using response URL
 	initialMessage := map[string]interface{}{
@@ -708,8 +733,17 @@ func sendTasksGroupedByProject(responseWriter http.ResponseWriter, req *SlackCom
 		currentCharCount := 0
 
 		for _, task := range projectTasks {
+			logger.Infof("Processing task %d (%s) with %d comments", task.TaskID, task.Name, len(task.Comments))
+			
 			// Build task text - EstimationInfo.Text already contains percentage and emoji
 			taskText := fmt.Sprintf("*%s*", task.Name)
+			
+			// Add time spent on the task
+			if task.CurrentTime != "" {
+				taskText += fmt.Sprintf("\nTime spent: %s", task.CurrentTime)
+			}
+			
+			// Add estimation info if available
 			if task.EstimationInfo.Text != "" {
 				taskText += fmt.Sprintf("\n%s", task.EstimationInfo.Text)
 			} else {
@@ -719,16 +753,20 @@ func sendTasksGroupedByProject(responseWriter http.ResponseWriter, req *SlackCom
 
 			// Add comments as unordered list
 			if len(task.Comments) > 0 {
+				logger.Infof("Adding %d comments to task %d", len(task.Comments), task.TaskID)
 				taskText += "\n"
-				for _, comment := range task.Comments {
+				for i, comment := range task.Comments {
 					if comment != "" {
 						// Limit comment length to avoid overwhelming
 						if len(comment) > 100 {
 							comment = comment[:97] + "..."
 						}
 						taskText += fmt.Sprintf("• %s\n", comment)
+						logger.Infof("Comment %d for task %d: %s", i+1, task.TaskID, comment)
 					}
 				}
+			} else {
+				logger.Infof("No comments found for task %d", task.TaskID)
 			}
 
 			// Create task block
