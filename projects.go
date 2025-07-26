@@ -3,7 +3,6 @@ package main
 import (
 	"database/sql"
 	"fmt"
-	"strings"
 )
 
 // GetAllProjects returns all projects from the database
@@ -176,71 +175,4 @@ func GetProjectTaskIDs(db *sql.DB, projectTaskID int) ([]int, error) {
 	}
 
 	return taskIDs, nil
-}
-
-// ParseProjectFromCommand extracts project name from command text
-// Supports both quoted and unquoted project names
-func ParseProjectFromCommand(commandText string) (projectName string, remainingText string) {
-	commandText = strings.TrimSpace(commandText)
-
-	// Check for quoted project name
-	if strings.HasPrefix(commandText, "\"") {
-		endQuote := strings.Index(commandText[1:], "\"")
-		if endQuote != -1 {
-			projectName = commandText[1 : endQuote+1]
-			remainingText = strings.TrimSpace(commandText[endQuote+2:])
-			return projectName, remainingText
-		}
-	}
-
-	// Check for single quoted project name
-	if strings.HasPrefix(commandText, "'") {
-		endQuote := strings.Index(commandText[1:], "'")
-		if endQuote != -1 {
-			projectName = commandText[1 : endQuote+1]
-			remainingText = strings.TrimSpace(commandText[endQuote+2:])
-			return projectName, remainingText
-		}
-	}
-
-	// Check for special keywords
-	parts := strings.Fields(commandText)
-	if len(parts) > 0 {
-		firstWord := strings.ToLower(parts[0])
-		if firstWord == "all" {
-			return "all", strings.TrimSpace(strings.Join(parts[1:], " "))
-		}
-
-		// Try to find where the project name ends (before "over", "daily", "weekly", "monthly" or time keywords)
-		endKeywords := []string{"over", "daily", "weekly", "monthly", "this", "last", "today", "yesterday", "week", "month", "day", "days"}
-		projectParts := []string{}
-
-		for i, part := range parts {
-			lowerPart := strings.ToLower(part)
-			isEndKeyword := false
-			for _, keyword := range endKeywords {
-				if lowerPart == keyword {
-					isEndKeyword = true
-					break
-				}
-			}
-
-			if isEndKeyword {
-				remainingText = strings.TrimSpace(strings.Join(parts[i:], " "))
-				break
-			}
-
-			projectParts = append(projectParts, part)
-		}
-
-		if len(projectParts) > 0 {
-			projectName = strings.Join(projectParts, " ")
-			if remainingText == "" {
-				// No end keyword found, assume whole text is project name
-				remainingText = ""
-			}
-		}
-	}
-
-	return projectName, remainingText
 }
