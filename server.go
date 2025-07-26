@@ -297,7 +297,7 @@ func filteredTasksGroupedByProject(startTime time.Time, endTime time.Time, filte
 			t.parent_id,
 			t.name,
 			COALESCE(SUM(CASE 
-				WHEN te.date >= ? AND te.date <= ? 
+				WHEN te.date >= $1 AND te.date <= $2 
 				THEN te.duration 
 				ELSE 0 
 			END), 0) as current_period_duration,
@@ -305,10 +305,10 @@ func filteredTasksGroupedByProject(startTime time.Time, endTime time.Time, filte
 		FROM tasks t
 		LEFT JOIN time_entries te ON t.task_id = te.task_id
 		LEFT JOIN projects p ON t.project_id = p.id
-		WHERE p.name = ?
+		WHERE p.name = $3
 		GROUP BY t.task_id, t.parent_id, t.name
 		HAVING COALESCE(SUM(CASE 
-			WHEN te.date >= ? AND te.date <= ? 
+			WHEN te.date >= $4 AND te.date <= $5 
 			THEN te.duration 
 			ELSE 0 
 		END), 0) > 0
@@ -322,17 +322,17 @@ func filteredTasksGroupedByProject(startTime time.Time, endTime time.Time, filte
 			t.parent_id,
 			t.name,
 			COALESCE(SUM(CASE 
-				WHEN te.date >= ? AND te.date <= ? 
+				WHEN te.date >= $1 AND te.date <= $2 
 				THEN te.duration 
 				ELSE 0 
 			END), 0) as current_period_duration,
 			COALESCE(SUM(te.duration), 0) as total_duration
 		FROM tasks t
 		INNER JOIN time_entries te ON t.task_id = te.task_id
-		WHERE te.date >= ? AND te.date <= ?
+		WHERE te.date >= $3 AND te.date <= $4
 		GROUP BY t.task_id, t.parent_id, t.name
 		HAVING COALESCE(SUM(CASE 
-			WHEN te.date >= ? AND te.date <= ? 
+			WHEN te.date >= $5 AND te.date <= $6 
 			THEN te.duration 
 			ELSE 0 
 		END), 0) > 0
