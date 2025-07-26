@@ -182,11 +182,11 @@ func confirmPercentage(commandText string) (bool, string, error) {
  */
 func confirmPeriod(commandText string) (time.Time, time.Time, error) {
 	period := ""
-	periodRegex := regexp.MustCompile(`update (.*?)`)
+	periodRegex := regexp.MustCompile(`update (.*)`)
 
 	matches := periodRegex.FindStringSubmatch(commandText)
-	if len(matches) > 0 {
-		period = strings.TrimSpace(matches[0])
+	if len(matches) >= 1 {
+		period = strings.TrimSpace(matches[1])
 	}
 
 	if period == "" {
