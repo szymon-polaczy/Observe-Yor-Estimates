@@ -181,6 +181,7 @@ func confirmPercentage(commandText string) (bool, string, error) {
  * If the period is found, and is invalid, returns an error
  */
 func confirmPeriod(commandText string) (time.Time, time.Time, error) {
+	logger := GetGlobalLogger()
 	period := ""
 	periodRegex := regexp.MustCompile(`update (.*)`)
 
@@ -193,6 +194,7 @@ func confirmPeriod(commandText string) (time.Time, time.Time, error) {
 		return time.Time{}, time.Time{}, fmt.Errorf("Failed to parse period from command")
 	}
 
+	logger.Infof("Parsing period: '%s'", period)
 	now := time.Now()
 	var startTime, endTime time.Time
 
@@ -211,6 +213,7 @@ func confirmPeriod(commandText string) (time.Time, time.Time, error) {
 				// Start: x days ago at 0:00, End: today at 23:59
 				startTime = now.AddDate(0, 0, -daysInt).Truncate(24 * time.Hour)
 				endTime = time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 999999999, now.Location())
+				logger.Infof("Period '%s' resolved to: %s to %s", period, startTime.Format("2006-01-02 15:04:05"), endTime.Format("2006-01-02 15:04:05"))
 				return startTime, endTime, nil
 			}
 		}
@@ -262,41 +265,34 @@ func confirmPeriod(commandText string) (time.Time, time.Time, error) {
 		return time.Time{}, time.Time{}, fmt.Errorf("Invalid period: %s", period)
 	}
 
+	logger.Infof("Period '%s' resolved to: %s to %s", period, startTime.Format("2006-01-02 15:04:05"), endTime.Format("2006-01-02 15:04:05"))
 	return startTime, endTime, nil
 }
 
 func filteredTasksGroupedByProject(startTime time.Time, endTime time.Time, filteringByProject bool, projectName string, filteringByPercentage bool, percentage string) []TaskInfo {
+	logger := GetGlobalLogger()
+	logger.Infof("filteredTasksGroupedByProject called with: startTime=%s, endTime=%s, filteringByProject=%t, projectName='%s', filteringByPercentage=%t, percentage='%s'", 
+		startTime.Format("2006-01-02 15:04:05"), endTime.Format("2006-01-02 15:04:05"), filteringByProject, projectName, filteringByPercentage, percentage)
+
 	db, err := GetDB()
 	if err != nil {
+		logger.Errorf("Failed to get database connection: %v", err)
 		return []TaskInfo{}
 	}
 
 	// Convert time range to date strings for SQL query (time_entries uses TEXT date field)
 	startDateStr := startTime.Format("2006-01-02")
 	endDateStr := endTime.Format("2006-01-02")
+	logger.Infof("Searching for tasks between dates: %s and %s", startDateStr, endDateStr)
 
-	// Build SQL query with optional project filtering
-	query := `
-	WITH filtered_tasks AS (
-		SELECT DISTINCT t.task_id 
-		FROM tasks t`
+	// Simplified query that should work with the actual database structure
+	var query string
+	var args []interface{}
 
-	args := []interface{}{}
-
-	// Add project filtering if specified
 	if filteringByProject && projectName != "" {
-		query += ` 
-		JOIN projects p ON t.project_id = p.id
-		WHERE p.name = ?`
-		args = append(args, projectName)
-	} else {
-		query += ` WHERE 1=1`
-	}
-
-	query += `
-	),
-	task_time_data AS (
-		SELECT 
+		// When filtering by project, join with projects table
+		query = `
+		SELECT DISTINCT
 			t.task_id,
 			t.parent_id,
 			t.name,
@@ -308,33 +304,68 @@ func filteredTasksGroupedByProject(startTime time.Time, endTime time.Time, filte
 			COALESCE(SUM(te.duration), 0) as total_duration
 		FROM tasks t
 		LEFT JOIN time_entries te ON t.task_id = te.task_id
-		WHERE t.task_id IN (SELECT task_id FROM filtered_tasks)
+		LEFT JOIN projects p ON t.project_id = p.id
+		WHERE p.name = ?
 		GROUP BY t.task_id, t.parent_id, t.name
-		HAVING current_period_duration > 0
-	)
-	SELECT * FROM task_time_data ORDER BY name`
+		HAVING COALESCE(SUM(CASE 
+			WHEN te.date >= ? AND te.date <= ? 
+			THEN te.duration 
+			ELSE 0 
+		END), 0) > 0
+		ORDER BY t.name`
+		args = []interface{}{startDateStr, endDateStr, projectName, startDateStr, endDateStr}
+	} else {
+		// When not filtering by project, get all tasks with time entries in the period
+		query = `
+		SELECT 
+			t.task_id,
+			t.parent_id,
+			t.name,
+			COALESCE(SUM(CASE 
+				WHEN te.date >= ? AND te.date <= ? 
+				THEN te.duration 
+				ELSE 0 
+			END), 0) as current_period_duration,
+			COALESCE(SUM(te.duration), 0) as total_duration
+		FROM tasks t
+		INNER JOIN time_entries te ON t.task_id = te.task_id
+		WHERE te.date >= ? AND te.date <= ?
+		GROUP BY t.task_id, t.parent_id, t.name
+		HAVING COALESCE(SUM(CASE 
+			WHEN te.date >= ? AND te.date <= ? 
+			THEN te.duration 
+			ELSE 0 
+		END), 0) > 0
+		ORDER BY t.name`
+		args = []interface{}{startDateStr, endDateStr, startDateStr, endDateStr, startDateStr, endDateStr}
+	}
 
-	args = append(args, startDateStr, endDateStr)
-
+	logger.Infof("Executing query with args: %v", args)
 	rows, err := db.Query(query, args...)
 	if err != nil {
+		logger.Errorf("Database query failed: %v", err)
+		logger.Errorf("Query was: %s", query)
 		return []TaskInfo{}
 	}
 	defer rows.Close()
 
 	var allTasks []TaskInfo
 	var percentageThreshold float64
+	taskCount := 0
 
 	// Parse percentage threshold if filtering by percentage
 	if filteringByPercentage {
 		if percentageFloat, err := strconv.ParseFloat(strings.TrimSuffix(percentage, "%"), 64); err == nil {
 			percentageThreshold = percentageFloat
+			logger.Infof("Filtering by percentage threshold: %.1f%%", percentageThreshold)
 		} else {
+			logger.Errorf("Invalid percentage format: %s", percentage)
 			return []TaskInfo{} // Invalid percentage format
 		}
 	}
 
 	for rows.Next() {
+		taskCount++
 		var task TaskInfo
 		var currentDuration, totalDuration int
 
@@ -346,8 +377,11 @@ func filteredTasksGroupedByProject(startTime time.Time, endTime time.Time, filte
 			&totalDuration,
 		)
 		if err != nil {
+			logger.Errorf("Failed to scan task row %d: %v", taskCount, err)
 			continue
 		}
+
+		logger.Infof("Found task %d: ID=%d, Name='%s', CurrentDuration=%d seconds", taskCount, task.TaskID, task.Name, currentDuration)
 
 		// Format durations using existing formatDuration function (takes seconds)
 		task.CurrentTime = formatDuration(currentDuration)
@@ -361,11 +395,13 @@ func filteredTasksGroupedByProject(startTime time.Time, endTime time.Time, filte
 		if filteringByPercentage {
 			// Skip tasks without valid estimations
 			if estimationInfo.ErrorMessage != "" {
+				logger.Infof("Skipping task %d (no valid estimation): %s", task.TaskID, estimationInfo.ErrorMessage)
 				continue
 			}
 
 			// Skip tasks below threshold
 			if estimationInfo.Percentage < percentageThreshold {
+				logger.Infof("Skipping task %d (below threshold): %.1f%% < %.1f%%", task.TaskID, estimationInfo.Percentage, percentageThreshold)
 				continue
 			}
 		}
@@ -373,6 +409,7 @@ func filteredTasksGroupedByProject(startTime time.Time, endTime time.Time, filte
 		allTasks = append(allTasks, task)
 	}
 
+	logger.Infof("Query returned %d total tasks, filtered to %d tasks", taskCount, len(allTasks))
 	return allTasks
 }
 
