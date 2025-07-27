@@ -108,7 +108,7 @@ func handleUnifiedOYECommand(responseWriter http.ResponseWriter, request *http.R
 		return
 	}
 
-	filteredTasks = addCommentsToTasks(filteredTasks)
+	filteredTasks = addCommentsToTasks(filteredTasks, startTime, endTime)
 	filteredTasksGroupedByProject := groupTasksByProject(filteredTasks)
 
 	sendTasksGroupedByProject(req, filteredTasksGroupedByProject)
@@ -416,7 +416,7 @@ func getFilteredTasks(startTime time.Time, endTime time.Time, filteringByProject
 }
 
 // fully AI generated
-func addCommentsToTasks(tasks []TaskInfo) []TaskInfo {
+func addCommentsToTasks(tasks []TaskInfo, startTime time.Time, endTime time.Time) []TaskInfo {
 	logger := GetGlobalLogger()
 	if len(tasks) == 0 {
 		logger.Info("No tasks to add comments to")
@@ -449,13 +449,17 @@ func addCommentsToTasks(tasks []TaskInfo) []TaskInfo {
 	}
 	placeholderStr := strings.Join(placeholders, ",")
 
+	startDateStr := startTime.Format("2006-01-02")
+	endDateStr := endTime.Format("2006-01-02")
+
 	query := fmt.Sprintf(`
-		SELECT task_id, description
+		SELECT task_id, description, date
 		FROM time_entries 
-		WHERE task_id IN (%s) 
+		WHERE task_id IN ($1) 
+		AND date >= $2 AND date <= $3
 		AND description IS NOT NULL 
 		AND description != ''
-		ORDER BY task_id, date DESC`, placeholderStr)
+		ORDER BY task_id, date DESC`, placeholderStr, startDateStr, endDateStr)
 
 	// Convert taskIDs to []interface{} for query args
 	args := make([]interface{}, len(taskIDs))
