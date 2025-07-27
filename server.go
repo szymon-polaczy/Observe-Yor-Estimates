@@ -300,7 +300,7 @@ func filteredTasksGroupedByProject(startTime time.Time, endTime time.Time, filte
 		FROM tasks t
 		LEFT JOIN time_entries te ON t.task_id = te.task_id
 		LEFT JOIN projects p ON t.project_id = p.id
-		WHERE p.name = $3
+		WHERE LOWER(p.name) = LOWER($3)
 		GROUP BY t.task_id, t.parent_id, t.name
 		HAVING COALESCE(SUM(CASE 
 			WHEN te.date >= $4 AND te.date <= $5
