@@ -447,7 +447,7 @@ func addCommentsToTasks(tasks []TaskInfo, startTime time.Time, endTime time.Time
 	placeholderStr := strings.Join(taskIDs, ",")
 
 	queryWithTaskIDs := fmt.Sprintf(`
-		SELECT task_id, description, date
+		SELECT task_id, description
 		FROM time_entries 
 		WHERE task_id IN (%s) 
 		AND date >= '%s' AND date <= '%s'
