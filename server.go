@@ -446,14 +446,16 @@ func addCommentsToTasks(tasks []TaskInfo, startTime time.Time, endTime time.Time
 	endDateStr := endTime.Format("2006-01-02")
 	placeholderStr := strings.Join(taskIDs, ",")
 
-	rows, err := db.Query(`
+	queryWithTaskIDs := fmt.Sprintf(`
 		SELECT task_id, description, date
 		FROM time_entries 
-		WHERE task_id IN ($1) 
-		AND date >= $2 AND date <= $3
+		WHERE task_id IN (%s) 
+		AND date >= '%s' AND date <= '%s'
 		AND description IS NOT NULL 
 		AND description != ''
 		ORDER BY task_id, date DESC`, placeholderStr, startDateStr, endDateStr)
+
+	rows, err := db.Query(queryWithTaskIDs)
 	if err != nil {
 		logger.Errorf("Failed to query comments: %v", err)
 		return tasks
