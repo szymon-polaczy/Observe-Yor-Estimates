@@ -75,7 +75,7 @@ func handleUnifiedOYECommand(responseWriter http.ResponseWriter, request *http.R
 
 	//if the first word is not in the allowed commands, send help
 	firstWord := strings.Fields(commandText)[0]
-	allowedCommands := []string{"project", "update", "over"}
+	allowedCommands := []string{"project", "for", "over"}
 	if !slices.Contains(allowedCommands, firstWord) {
 		sendUnifiedHelp(responseWriter)
 		return
@@ -120,11 +120,11 @@ func handleUnifiedOYECommand(responseWriter http.ResponseWriter, request *http.R
  */
 func confirmProject(commandText string) (bool, string, error) {
 	projectName := ""
-	projectNameRegex := regexp.MustCompile(`project (.*?) update`)
+	projectNameRegex := regexp.MustCompile(`project (.*?) (for|over)`)
 
 	matches := projectNameRegex.FindStringSubmatch(commandText)
-	if len(matches) > 0 {
-		projectName = strings.TrimSpace(matches[0])
+	if len(matches) >= 1 {
+		projectName = strings.TrimSpace(matches[1])
 	} else {
 		return false, "", nil
 	}
@@ -152,11 +152,11 @@ func confirmProject(commandText string) (bool, string, error) {
  */
 func confirmPercentage(commandText string) (bool, string, error) {
 	percentage := ""
-	percentageRegex := regexp.MustCompile(`over (.*?)`)
+	percentageRegex := regexp.MustCompile(`over (.*?) for`)
 
 	matches := percentageRegex.FindStringSubmatch(commandText)
-	if len(matches) > 0 {
-		percentage = strings.TrimSpace(matches[0])
+	if len(matches) >= 1 {
+		percentage = strings.TrimSpace(matches[1])
 	} else {
 		return false, "", nil
 	}
@@ -177,7 +177,7 @@ func confirmPercentage(commandText string) (bool, string, error) {
 func confirmPeriod(commandText string) (time.Time, time.Time, error) {
 	logger := GetGlobalLogger()
 	period := ""
-	periodRegex := regexp.MustCompile(`update (.*)`)
+	periodRegex := regexp.MustCompile(`for (.*)`)
 
 	matches := periodRegex.FindStringSubmatch(commandText)
 	if len(matches) >= 1 {
@@ -877,10 +877,10 @@ func sendTasksGroupedByProject(responseWriter http.ResponseWriter, req *SlackCom
 func sendUnifiedHelp(responseWriter http.ResponseWriter) {
 	helpText := "*🎯 OYE (Observe-Yor-Estimates) Commands*\n\n" +
 		"*Time Frame Options:*\n" +
-		"• `/oye update [period]` - Update for specific time frame\n" +
-		"• `/oye project [project name] update [period]` - Update for specific project and time frame\n" +
-		"• `/oye over [percentage] [period]` - Check for tasks over threshold\n" +
-		"• `/oye project [project name] over [percentage] update [period]` - Check for tasks over threshold for a specific project\n" +
+		"• `/oye for [period]` - Update for specific time frame\n" +
+		"• `/oye project [project name] for [period]` - Update for specific project and time frame\n" +
+		"• `/oye over [percentage] for [period]` - Check for tasks over threshold\n" +
+		"• `/oye project [project name] over [percentage] for [period]` - Check for tasks over threshold for a specific project\n" +
 
 		"*Available Periods:*\n" +
 		"• today\n" +
