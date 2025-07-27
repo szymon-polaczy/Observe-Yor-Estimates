@@ -110,7 +110,7 @@ func handleUnifiedOYECommand(responseWriter http.ResponseWriter, request *http.R
 
 	tasksGroupedByProject = addCommentsToTasks(tasksGroupedByProject)
 
-	sendTasksGroupedByProject(responseWriter, req, tasksGroupedByProject)
+	sendTasksGroupedByProject(req, tasksGroupedByProject)
 }
 
 /* Gets the project name from the command text
@@ -335,6 +335,8 @@ func filteredTasksGroupedByProject(startTime time.Time, endTime time.Time, filte
 		args = []interface{}{startDateStr, endDateStr, startDateStr, endDateStr, startDateStr, endDateStr}
 	}
 
+	logger.Infof("Query: %s", query)
+
 	logger.Infof("Executing query with args: %v", args)
 	rows, err := db.Query(query, args...)
 	if err != nil {
@@ -515,7 +517,7 @@ func addCommentsToTasks(tasks []TaskInfo) []TaskInfo {
 }
 
 // fully AI generated
-func sendTasksGroupedByProject(responseWriter http.ResponseWriter, req *SlackCommandRequest, tasksGroupedByProject []TaskInfo) {
+func sendTasksGroupedByProject(req *SlackCommandRequest, tasksGroupedByProject []TaskInfo) {
 	logger := GetGlobalLogger()
 	logger.Infof("Starting sendTasksGroupedByProject with %d tasks", len(tasksGroupedByProject))
 
