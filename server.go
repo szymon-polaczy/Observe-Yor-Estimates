@@ -442,37 +442,18 @@ func addCommentsToTasks(tasks []TaskInfo, startTime time.Time, endTime time.Time
 
 	logger.Infof("Querying comments for task IDs: %v", taskIDs)
 
-	// Query for comments from time_entries descriptions using PostgreSQL placeholders
-	placeholders := make([]string, len(taskIDs))
-	for i := range taskIDs {
-		placeholders[i] = fmt.Sprintf("$%d", i+1)
-	}
-	placeholderStr := strings.Join(placeholders, ",")
-
 	startDateStr := startTime.Format("2006-01-02")
 	endDateStr := endTime.Format("2006-01-02")
+	placeholderStr := strings.Join(taskIDs, ",")
 
-	query := fmt.Sprintf(`
+	rows, err := db.Query(`
 		SELECT task_id, description, date
 		FROM time_entries 
-		WHERE task_id IN (%s) 
-		AND date >= '%s' AND date <= '%s'
+		WHERE task_id IN ($1) 
+		AND date >= $2 AND date <= $3
 		AND description IS NOT NULL 
 		AND description != ''
-		ORDER BY task_id, date DESC`, placeholderStr)
-
-	// Convert taskIDs to []interface{} for query args
-	args := make([]interface{}, len(taskIDs))
-	for i, id := range taskIDs {
-		args[i] = id
-	}
-
-	args = append(args, startDateStr, endDateStr)
-
-	logger.Infof("Executing comment query: %s", query)
-	logger.Infof("Query args: %v", args)
-
-	rows, err := db.Query(query, args...)
+		ORDER BY task_id, date DESC`, placeholderStr, startDateStr, endDateStr)
 	if err != nil {
 		logger.Errorf("Failed to query comments: %v", err)
 		return tasks
