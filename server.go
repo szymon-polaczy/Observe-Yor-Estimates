@@ -287,12 +287,12 @@ func filteredTasksGroupedByProject(startTime time.Time, endTime time.Time, filte
 	if filteringByProject && projectName != "" {
 		// When filtering by project, join with projects table
 		query = `
-		SELECT DISTINCT
+		SELECT 
 			t.task_id,
 			t.parent_id,
 			t.name,
 			COALESCE(SUM(CASE 
-				WHEN te.date >= $1 AND te.date <= $2 
+				WHEN te.date >= $1 AND te.date <= $2
 				THEN te.duration 
 				ELSE 0 
 			END), 0) as current_period_duration,
@@ -303,11 +303,11 @@ func filteredTasksGroupedByProject(startTime time.Time, endTime time.Time, filte
 		WHERE p.name = $3
 		GROUP BY t.task_id, t.parent_id, t.name
 		HAVING COALESCE(SUM(CASE 
-			WHEN te.date >= $4 AND te.date <= $5 
+			WHEN te.date >= $4 AND te.date <= $5
 			THEN te.duration 
 			ELSE 0 
 		END), 0) > 0
-		ORDER BY t.name`
+		ORDER BY t.name;`
 		args = []interface{}{startDateStr, endDateStr, projectName, startDateStr, endDateStr}
 	} else {
 		// When not filtering by project, get all tasks with time entries in the period
@@ -317,22 +317,21 @@ func filteredTasksGroupedByProject(startTime time.Time, endTime time.Time, filte
 			t.parent_id,
 			t.name,
 			COALESCE(SUM(CASE 
-				WHEN te.date >= $1 AND te.date <= $2 
+				WHEN te.date >= $1 AND te.date <= $2
 				THEN te.duration 
 				ELSE 0 
 			END), 0) as current_period_duration,
 			COALESCE(SUM(te.duration), 0) as total_duration
 		FROM tasks t
-		INNER JOIN time_entries te ON t.task_id = te.task_id
-		WHERE te.date >= $3 AND te.date <= $4
+		LEFT JOIN time_entries te ON t.task_id = te.task_id
 		GROUP BY t.task_id, t.parent_id, t.name
 		HAVING COALESCE(SUM(CASE 
-			WHEN te.date >= $5 AND te.date <= $6 
+			WHEN te.date >= $3 AND te.date <= $4
 			THEN te.duration 
 			ELSE 0 
 		END), 0) > 0
-		ORDER BY t.name`
-		args = []interface{}{startDateStr, endDateStr, startDateStr, endDateStr, startDateStr, endDateStr}
+		ORDER BY t.name;`
+		args = []interface{}{startDateStr, endDateStr, startDateStr, endDateStr}
 	}
 
 	logger.Infof("Query: %s", query)
