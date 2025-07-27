@@ -102,15 +102,16 @@ func handleUnifiedOYECommand(responseWriter http.ResponseWriter, request *http.R
 		return
 	}
 
-	tasksGroupedByProject := filteredTasksGroupedByProject(startTime, endTime, filteringByProject, projectName, filteringByPercentage, percentage)
-	if len(tasksGroupedByProject) == 0 {
+	filteredTasks := getFilteredTasks(startTime, endTime, filteringByProject, projectName, filteringByPercentage, percentage)
+	if len(filteredTasks) == 0 {
 		sendImmediateResponse(responseWriter, "No tasks found", "ephemeral")
 		return
 	}
 
-	tasksGroupedByProject = addCommentsToTasks(tasksGroupedByProject)
+	filteredTasks = addCommentsToTasks(filteredTasks)
+	filteredTasksGroupedByProject := groupTasksByProject(filteredTasks)
 
-	sendTasksGroupedByProject(req, tasksGroupedByProject)
+	sendTasksGroupedByProject(req, filteredTasksGroupedByProject)
 }
 
 /* Gets the project name from the command text
@@ -264,9 +265,9 @@ func confirmPeriod(commandText string) (time.Time, time.Time, error) {
 }
 
 // fully AI generated
-func filteredTasksGroupedByProject(startTime time.Time, endTime time.Time, filteringByProject bool, projectName string, filteringByPercentage bool, percentage string) []TaskInfo {
+func getFilteredTasks(startTime time.Time, endTime time.Time, filteringByProject bool, projectName string, filteringByPercentage bool, percentage string) []TaskInfo {
 	logger := GetGlobalLogger()
-	logger.Infof("filteredTasksGroupedByProject called with: startTime=%s, endTime=%s, filteringByProject=%t, projectName='%s', filteringByPercentage=%t, percentage='%s'",
+	logger.Infof("getFilteredTasks called with: startTime=%s, endTime=%s, filteringByProject=%t, projectName='%s', filteringByPercentage=%t, percentage='%s'",
 		startTime.Format("2006-01-02 15:04:05"), endTime.Format("2006-01-02 15:04:05"), filteringByProject, projectName, filteringByPercentage, percentage)
 
 	db, err := GetDB()
@@ -516,11 +517,11 @@ func addCommentsToTasks(tasks []TaskInfo) []TaskInfo {
 }
 
 // fully AI generated
-func sendTasksGroupedByProject(req *SlackCommandRequest, tasksGroupedByProject []TaskInfo) {
+func sendTasksGroupedByProject(req *SlackCommandRequest, projectGroups map[string][]TaskInfo) {
 	logger := GetGlobalLogger()
-	logger.Infof("Starting sendTasksGroupedByProject with %d tasks", len(tasksGroupedByProject))
+	logger.Infof("Starting sendTasksGroupedByProject with %d tasks", len(projectGroups))
 
-	if len(tasksGroupedByProject) == 0 {
+	if len(projectGroups) == 0 {
 		logger.Info("No tasks to send, returning early")
 		return
 	}
@@ -555,68 +556,6 @@ func sendTasksGroupedByProject(req *SlackCommandRequest, tasksGroupedByProject [
 	}
 
 	logger.Infof("Using thresholds - MID_POINT: %.1f, HIGH_POINT: %.1f", midPoint, highPoint)
-
-	// Group tasks by project - despite the parameter name, tasksGroupedByProject
-	// is actually a flat array from filteredTasksGroupedByProject, so we need to group them here
-	db, err := GetDB()
-	if err != nil {
-		logger.Errorf("Failed to get database connection: %v", err)
-		return
-	}
-
-	// Get all tasks for hierarchy lookup
-	allTasksQuery := "SELECT task_id, parent_id, name FROM tasks"
-	rows, err := db.Query(allTasksQuery)
-	if err != nil {
-		logger.Errorf("Failed to query all tasks for hierarchy: %v", err)
-		return
-	}
-	defer rows.Close()
-
-	taskHierarchy := make(map[int]struct {
-		ParentID int
-		Name     string
-	})
-
-	for rows.Next() {
-		var taskID, parentID int
-		var name string
-		if err := rows.Scan(&taskID, &parentID, &name); err == nil {
-			taskHierarchy[taskID] = struct {
-				ParentID int
-				Name     string
-			}{ParentID: parentID, Name: name}
-		}
-	}
-
-	// Group tasks by project
-	projectGroups := make(map[string][]TaskInfo)
-	for _, task := range tasksGroupedByProject {
-		projectName := "Other"
-
-		// Walk up the hierarchy to find project name
-		currentID := task.TaskID
-		var previousName string
-		for depth := 0; depth < 10; depth++ { // max depth to prevent infinite loop
-			if taskInfo, exists := taskHierarchy[currentID]; exists {
-				if taskInfo.ParentID == 0 {
-					// Reached root, use previous name as project
-					if previousName != "" {
-						projectName = previousName
-					}
-					break
-				}
-				previousName = taskInfo.Name
-				currentID = taskInfo.ParentID
-			} else {
-				break
-			}
-		}
-
-		projectGroups[projectName] = append(projectGroups[projectName], task)
-	}
-
-	logger.Infof("Grouped %d tasks into %d projects", len(tasksGroupedByProject), len(projectGroups))
 
 	// Send initial thread message using response URL
 	initialMessage := map[string]interface{}{
