@@ -459,13 +459,15 @@ func addCommentsToTasks(tasks []TaskInfo, startTime time.Time, endTime time.Time
 		AND date >= '%s' AND date <= '%s'
 		AND description IS NOT NULL 
 		AND description != ''
-		ORDER BY task_id, date DESC`, placeholderStr, startDateStr, endDateStr)
+		ORDER BY task_id, date DESC`, placeholderStr)
 
 	// Convert taskIDs to []interface{} for query args
 	args := make([]interface{}, len(taskIDs))
 	for i, id := range taskIDs {
 		args[i] = id
 	}
+
+	args = append(args, startDateStr, endDateStr)
 
 	logger.Infof("Executing comment query: %s", query)
 	logger.Infof("Query args: %v", args)
