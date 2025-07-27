@@ -217,3 +217,14 @@ type RetryConfig struct {
 	MaxWait     time.Duration
 	Multiplier  float64
 }
+
+// Slack user information
+type SlackUser struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	RealName    string `json:"real_name"`
+	DisplayName string `json:"display_name"`
+	Email       string `json:"email"`
+	IsBot       bool   `json:"is_bot"`
+	Deleted     bool   `json:"deleted"`
+}

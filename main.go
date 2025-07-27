@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/robfig/cron/v3"
@@ -84,22 +85,84 @@ func setupCronJobs(logger *Logger) {
 		}
 	})
 
+	addCronJob(cronScheduler, "SLACK_USER_SYNC_SCHEDULE", "0 5 * * *", "Slack user sync", logger, func() {
+		if err := SyncSlackUsersToDatabase(); err != nil {
+			logger.Errorf("Scheduled Slack user sync failed: %v", err)
+		}
+	})
+
 	addCronJob(cronScheduler, "DAILY_UPDATE_SCHEDULE", "0 6 * * *", "daily Slack update", logger, func() {
+		commandText := "for yesterday"
+		filteringByPercentage := false
+		percentage := ""
+
 		db, err := GetDB()
 		if err != nil {
 			logger.Errorf("Failed to get database connection for daily update: %v", err)
 			return
 		}
 
-		taskInfos, err := getTaskChanges(db, "daily", 1)
+		// Get all Slack users from database (synced earlier by user sync cron job)
+		users, err := GetSlackUsersFromDatabase()
 		if err != nil {
-			logger.Errorf("Failed to get task changes for daily update: %v", err)
+			logger.Errorf("Failed to get Slack users for daily update: %v", err)
 			return
 		}
 
-		if err := SendSlackUpdate(taskInfos, "daily"); err != nil {
-			logger.Errorf("Failed to send daily Slack update: %v", err)
+		logger.Infof("Starting daily updates for %d users", len(users))
+
+		// Get time period for filtering tasks
+		startTime, endTime, err := confirmPeriod(commandText)
+		if err != nil {
+			logger.Errorf("Failed to parse period for daily update: %v", err)
+			return
 		}
+
+		// Process each user individually
+		for _, user := range users {
+			logger.Infof("Processing daily update for user %s (%s)", user.ID, user.RealName)
+
+			// Get user's project assignments
+			userProjects, err := GetUserProjects(db, user.ID)
+			if err != nil {
+				logger.Errorf("Failed to get projects for user %s: %v", user.ID, err)
+				continue
+			}
+
+			// Extract project names for filtering
+			userProjectNames := []string{}
+			for _, project := range userProjects {
+				userProjectNames = append(userProjectNames, project.Name)
+			}
+
+			// Determine if we should filter by project or show all tasks
+			filteringByProject := len(userProjectNames) > 0
+
+			logger.Infof("User %s has %d assigned projects: %v", user.ID, len(userProjectNames), userProjectNames)
+
+			// Get filtered tasks for this user
+			filteredTasks := getFilteredTasks(startTime, endTime, filteringByProject, userProjectNames, filteringByPercentage, percentage)
+			if len(filteredTasks) == 0 {
+				logger.Infof("No tasks found for user %s in the specified period", user.ID)
+				continue
+			}
+
+			logger.Infof("Found %d tasks for user %s", len(filteredTasks), user.ID)
+
+			// Add comments and group by project
+			filteredTasks = addCommentsToTasks(filteredTasks, startTime, endTime)
+			filteredTasksGroupedByProject := groupTasksByProject(filteredTasks)
+
+			// Send personalized update to this user
+			sendTasksGroupedByProjectToUser(user.ID, filteredTasksGroupedByProject)
+
+			// Small delay between users to avoid rate limiting
+			time.Sleep(250 * time.Millisecond)
+
+			logger.Infof("Completed daily update for user %s", user.ID)
+		}
+
+		logger.Infof("Completed daily updates for all %d users", len(users))
 	})
 
 	// Add orphaned time entries processing cron job (every hour)
@@ -148,21 +211,5 @@ func addCronJob(scheduler *cron.Cron, envVar, defaultSchedule, jobName string, l
 func showHelp() {
 	fmt.Println("Usage: observe-yor-estimates [command]")
 	fmt.Println("\nAvailable commands:")
-	fmt.Println("  update <period>          - Send Slack update for a period (daily, weekly, monthly)")
 	fmt.Println("  full-sync                - Full sync of all tasks and time entries")
-	fmt.Println("  threshold-check          - Manual threshold monitoring check")
-	fmt.Println("")
-	fmt.Println("  --version, version         - Show application version")
-	fmt.Println("  --help, -h, help         - Show help message")
-	fmt.Println("\nSync Behavior:")
-	fmt.Println("  • Cron jobs use incremental sync every 3 hours (only process changed tasks)")
-	fmt.Println("  • Manual commands use full sync (process all tasks)")
-	fmt.Println("  • Uses TimeCamp API minimal option for optimized performance")
-	fmt.Println("\nThreshold Monitoring:")
-	fmt.Println("  • Automatic alerts for tasks crossing 50%, 80%, 90%, and 100% thresholds")
-	fmt.Println("  • Runs every 15 minutes via cron job")
-	fmt.Println("  • Manual Slack commands: /oye over <percentage> <period>")
-	fmt.Println("\nSlack Integration:")
-	fmt.Println("  Set up /oye command in Slack to point to /slack/oye endpoint")
-	fmt.Println("  Requires SLACK_BOT_TOKEN environment variable for direct responses")
 }

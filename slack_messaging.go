@@ -23,7 +23,7 @@ func SendTaskMessage(tasks []TaskInfo, period string) error {
 
 	// Send message for each project
 	for project, projectTasks := range projectGroups {
-		message := formatProjectMessage(project, projectTasks, period)
+		message := formatProjectMessage(project, projectTasks)
 
 		if err := validateAndSend(message); err != nil {
 			logger := GetGlobalLogger()
@@ -37,8 +37,8 @@ func SendTaskMessage(tasks []TaskInfo, period string) error {
 }
 
 // formatProjectMessage creates message for a project's tasks
-func formatProjectMessage(project string, tasks []TaskInfo, period string) SlackMessage {
-	title := fmt.Sprintf("%s %s Report", EMOJI_CHART, strings.Title(period))
+func formatProjectMessage(project string, tasks []TaskInfo) SlackMessage {
+	title := fmt.Sprintf("%s Report", EMOJI_CHART)
 
 	var text strings.Builder
 	text.WriteString(fmt.Sprintf("*%s*\n", title))

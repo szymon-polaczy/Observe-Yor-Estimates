@@ -145,6 +145,7 @@ func createAllTables(db *sql.DB) error {
 		{"projects", createProjectsTable},
 		{"user_project_assignments", createUserProjectAssignmentsTable},
 		{"threshold_notifications", createThresholdNotificationsTable},
+		{"slack_users", createSlackUsersTable},
 	}
 
 	for _, table := range tables {
@@ -312,4 +313,19 @@ func populateProjectsFromTasks(db *sql.DB) error {
 
 	logger.Infof("Successfully populated %d projects from task hierarchy", projectCount)
 	return nil
+}
+
+func createSlackUsersTable(db *sql.DB) error {
+	query := `CREATE TABLE IF NOT EXISTS slack_users (
+		slack_user_id TEXT PRIMARY KEY,
+		real_name TEXT,
+		display_name TEXT,
+		email TEXT,
+		is_bot BOOLEAN DEFAULT FALSE,
+		deleted BOOLEAN DEFAULT FALSE,
+		last_sync TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	)`
+
+	_, err := db.Exec(query)
+	return err
 }
