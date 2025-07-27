@@ -67,6 +67,7 @@ type TaskInfo struct {
 	CurrentTime    string
 	PreviousPeriod string
 	PreviousTime   string
+	TotalDuration  string
 	DaysWorked     int
 	Comments       []string
 	UserBreakdown  map[int]UserTimeContribution

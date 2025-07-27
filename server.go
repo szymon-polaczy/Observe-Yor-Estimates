@@ -381,7 +381,7 @@ func filteredTasksGroupedByProject(startTime time.Time, endTime time.Time, filte
 
 		// Format durations using existing formatDuration function (takes seconds)
 		task.CurrentTime = formatDuration(currentDuration)
-		task.CurrentPeriod = task.CurrentTime // Set both fields for consistency
+		task.TotalDuration = formatDuration(totalDuration)
 
 		// Parse estimation from task name and calculate usage
 		estimationInfo := ParseTaskEstimationWithUsage(task.Name, task.CurrentTime, "0h 0m")
@@ -737,16 +737,11 @@ func sendTasksGroupedByProject(req *SlackCommandRequest, tasksGroupedByProject [
 			taskText := fmt.Sprintf("*%s*", task.Name)
 
 			// Add time spent on the task
-			if task.CurrentTime != "" {
-				taskText += fmt.Sprintf("\nTime spent: %s", task.CurrentTime)
-			}
+			taskText += fmt.Sprintf("\nTime spent: %s | Total time: %s", task.CurrentTime, task.TotalDuration)
 
 			// Add estimation info if available
 			if task.EstimationInfo.Text != "" {
-				taskText += fmt.Sprintf("\n%s", task.EstimationInfo.Text)
-			} else {
-				// For tasks without estimation, add no time emoji
-				taskText += fmt.Sprintf(" %s", EMOJI_NO_TIME)
+				taskText += fmt.Sprintf(" | %s", task.EstimationInfo.Text)
 			}
 
 			// Add comments as unordered list
