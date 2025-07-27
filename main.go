@@ -21,9 +21,6 @@ func main() {
 		logger.Fatalf("Critical error: Missing required environment variables: %v", err)
 	}
 
-	test()
-	return
-
 	if len(os.Args) > 1 {
 		handleCliCommands(os.Args[1:], logger)
 		return
@@ -50,86 +47,6 @@ func main() {
 	// Start HTTP server for Slack commands (this will block)
 	logger.Info("Starting HTTP server for Slack integrations...")
 	StartServer(logger)
-}
-
-func test() {
-	logger := NewLogger()
-
-	commandText := "for this week"
-	filteringByPercentage := false
-	percentage := ""
-
-	db, err := GetDB()
-	if err != nil {
-		logger.Errorf("Failed to get database connection for daily update: %v", err)
-		return
-	}
-	//for testing leave ony the user named Szymon
-	users := []SlackUser{
-		{
-			ID:          "U08K0Q485NY",
-			RealName:    "Szymon",
-			DisplayName: "Szymon",
-			Email:       "",
-			IsBot:       false,
-			Deleted:     false,
-		},
-	}
-
-	logger.Infof("Starting daily updates for %d users", len(users))
-
-	// Get time period for filtering tasks
-	startTime, endTime, err := confirmPeriod(commandText)
-	if err != nil {
-		logger.Errorf("Failed to parse period for daily update: %v", err)
-		return
-	}
-
-	// Process each user individually
-	for _, user := range users {
-		logger.Infof("Processing daily update for user %s (%s)", user.ID, user.RealName)
-
-		// Get user's project assignments
-		userProjects, err := GetUserProjects(db, user.ID)
-		if err != nil {
-			logger.Errorf("Failed to get projects for user %s: %v", user.ID, err)
-			continue
-		}
-
-		// Extract project names for filtering
-		userProjectNames := []string{}
-		for _, project := range userProjects {
-			userProjectNames = append(userProjectNames, project.Name)
-		}
-
-		// Determine if we should filter by project or show all tasks
-		filteringByProject := len(userProjectNames) > 0
-
-		logger.Infof("User %s has %d assigned projects: %v", user.ID, len(userProjectNames), userProjectNames)
-
-		// Get filtered tasks for this user
-		filteredTasks := getFilteredTasks(startTime, endTime, filteringByProject, userProjectNames, filteringByPercentage, percentage)
-		if len(filteredTasks) == 0 {
-			logger.Infof("No tasks found for user %s in the specified period", user.ID)
-			continue
-		}
-
-		logger.Infof("Found %d tasks for user %s", len(filteredTasks), user.ID)
-
-		// Add comments and group by project
-		filteredTasks = addCommentsToTasks(filteredTasks)
-		filteredTasksGroupedByProject := groupTasksByProject(filteredTasks)
-
-		// Send personalized update to this user
-		sendTasksGroupedByProjectToUser(user.ID, filteredTasksGroupedByProject)
-
-		// Small delay between users to avoid rate limiting
-		time.Sleep(250 * time.Millisecond)
-
-		logger.Infof("Completed daily update for user %s", user.ID)
-	}
-
-	logger.Infof("Completed daily updates for all %d users", len(users))
 }
 
 func handleCliCommands(args []string, logger *Logger) {
