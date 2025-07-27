@@ -666,8 +666,8 @@ func sendTasksGroupedByProject(req *SlackCommandRequest, projectGroups map[strin
 			logger.Infof("Successfully sent project header for '%s'", projectName)
 		}
 
-		// Wait 150ms before next message
-		time.Sleep(150 * time.Millisecond)
+		// Wait 200ms before next message
+		time.Sleep(200 * time.Millisecond)
 
 		// Create task blocks
 		var blocks []map[string]interface{}
@@ -754,8 +754,8 @@ func sendTasksGroupedByProject(req *SlackCommandRequest, projectGroups map[strin
 						logger.Infof("Successfully sent message chunk for project '%s'", projectName)
 					}
 
-					// Wait 150ms before next message
-					time.Sleep(150 * time.Millisecond)
+					// Wait 200ms before next message
+					time.Sleep(200 * time.Millisecond)
 
 					// Reset for next chunk
 					blocks = []map[string]interface{}{}
@@ -803,8 +803,8 @@ func sendTasksGroupedByProject(req *SlackCommandRequest, projectGroups map[strin
 				logger.Infof("Successfully sent final message chunk for project '%s'", projectName)
 			}
 
-			// Wait 150ms before next project
-			time.Sleep(150 * time.Millisecond)
+			// Wait 200ms before next project
+			time.Sleep(200 * time.Millisecond)
 		}
 
 		logger.Infof("Completed processing project '%s'", projectName)
@@ -972,8 +972,8 @@ func sendTasksGroupedByProjectToUser(userID string, projectGroups map[string][]T
 						logger.Infof("Successfully sent message chunk for project '%s' to user %s", projectName, userID)
 					}
 
-					// Wait 150ms before next message
-					time.Sleep(150 * time.Millisecond)
+					// Wait 200ms before next message
+					time.Sleep(200 * time.Millisecond)
 
 					// Reset for next chunk
 					blocks = []map[string]interface{}{}
@@ -1020,8 +1020,8 @@ func sendTasksGroupedByProjectToUser(userID string, projectGroups map[string][]T
 				logger.Infof("Successfully sent final message chunk for project '%s' to user %s", projectName, userID)
 			}
 
-			// Wait 150ms before next project
-			time.Sleep(150 * time.Millisecond)
+			// Wait 200ms before next project
+			time.Sleep(200 * time.Millisecond)
 		}
 
 		logger.Infof("Completed processing project '%s' for user %s", projectName, userID)
