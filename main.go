@@ -150,7 +150,7 @@ func setupCronJobs(logger *Logger) {
 			logger.Infof("Found %d tasks for user %s", len(filteredTasks), user.ID)
 
 			// Add comments and group by project
-			filteredTasks = addCommentsToTasks(filteredTasks)
+			filteredTasks = addCommentsToTasks(filteredTasks, startTime, endTime)
 			filteredTasksGroupedByProject := groupTasksByProject(filteredTasks)
 
 			// Send personalized update to this user
