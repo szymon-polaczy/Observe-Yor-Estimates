@@ -174,7 +174,7 @@ func (s *SlackAPIClient) SendFinalUpdate(ctx *ConversationContext, taskInfos []T
 
 	// Convert to TaskInfo and format using simplified system
 	convertedTasks := convertTaskUpdateInfoToTaskInfo(taskInfos)
-	message := formatProjectMessage("Update", convertedTasks, period)
+	message := formatProjectMessage("Update", convertedTasks)
 
 	payload := map[string]interface{}{
 		"channel": ctx.ChannelID,
