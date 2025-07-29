@@ -92,77 +92,7 @@ func setupCronJobs(logger *Logger) {
 	})
 
 	addCronJob(cronScheduler, "DAILY_UPDATE_SCHEDULE", "0 6 * * *", "daily Slack update", logger, func() {
-		commandText := "for yesterday"
-		filteringByPercentage := false
-		percentage := ""
-
-		db, err := GetDB()
-		if err != nil {
-			logger.Errorf("Failed to get database connection for daily update: %v", err)
-			return
-		}
-
-		// Get all Slack users from database (synced earlier by user sync cron job)
-		users, err := GetSlackUsersFromDatabase()
-		if err != nil {
-			logger.Errorf("Failed to get Slack users for daily update: %v", err)
-			return
-		}
-
-		logger.Infof("Starting daily updates for %d users", len(users))
-
-		// Get time period for filtering tasks
-		startTime, endTime, err := confirmPeriod(commandText)
-		if err != nil {
-			logger.Errorf("Failed to parse period for daily update: %v", err)
-			return
-		}
-
-		// Process each user individually
-		for _, user := range users {
-			logger.Infof("Processing daily update for user %s (%s)", user.ID, user.RealName)
-
-			// Get user's project assignments
-			userProjects, err := GetUserProjects(db, user.ID)
-			if err != nil {
-				logger.Errorf("Failed to get projects for user %s: %v", user.ID, err)
-				continue
-			}
-
-			// Extract project names for filtering
-			userProjectNames := []string{}
-			for _, project := range userProjects {
-				userProjectNames = append(userProjectNames, project.Name)
-			}
-
-			// Determine if we should filter by project or show all tasks
-			filteringByProject := len(userProjectNames) > 0
-
-			logger.Infof("User %s has %d assigned projects: %v", user.ID, len(userProjectNames), userProjectNames)
-
-			// Get filtered tasks for this user
-			filteredTasks := getFilteredTasks(startTime, endTime, filteringByProject, userProjectNames, filteringByPercentage, percentage)
-			if len(filteredTasks) == 0 {
-				logger.Infof("No tasks found for user %s in the specified period", user.ID)
-				continue
-			}
-
-			logger.Infof("Found %d tasks for user %s", len(filteredTasks), user.ID)
-
-			// Add comments and group by project
-			filteredTasks = addCommentsToTasks(filteredTasks, startTime, endTime)
-			filteredTasksGroupedByProject := groupTasksByProject(filteredTasks)
-
-			// Send personalized update to this user
-			sendTasksGroupedByProjectToUser(user.ID, filteredTasksGroupedByProject)
-
-			// Small delay between users to avoid rate limiting
-			time.Sleep(250 * time.Millisecond)
-
-			logger.Infof("Completed daily update for user %s", user.ID)
-		}
-
-		logger.Infof("Completed daily updates for all %d users", len(users))
+		sendDailyUpdate(logger)
 	})
 
 	// Add orphaned time entries processing cron job (every hour)
@@ -192,6 +122,80 @@ func setupCronJobs(logger *Logger) {
 
 	cronScheduler.Start()
 	logger.Info("Cron scheduler started successfully")
+}
+
+func sendDailyUpdate(logger *Logger) {
+	commandText := "for yesterday"
+	filteringByPercentage := false
+	percentage := ""
+
+	db, err := GetDB()
+	if err != nil {
+		logger.Errorf("Failed to get database connection for daily update: %v", err)
+		return
+	}
+
+	// Get all Slack users from database (synced earlier by user sync cron job)
+	users, err := GetSlackUsersFromDatabase()
+	if err != nil {
+		logger.Errorf("Failed to get Slack users for daily update: %v", err)
+		return
+	}
+
+	logger.Infof("Starting daily updates for %d users", len(users))
+
+	// Get time period for filtering tasks
+	startTime, endTime, err := confirmPeriod(commandText)
+	if err != nil {
+		logger.Errorf("Failed to parse period for daily update: %v", err)
+		return
+	}
+
+	// Process each user individually
+	for _, user := range users {
+		logger.Infof("Processing daily update for user %s (%s)", user.ID, user.RealName)
+
+		// Get user's project assignments
+		userProjects, err := GetUserProjects(db, user.ID)
+		if err != nil {
+			logger.Errorf("Failed to get projects for user %s: %v", user.ID, err)
+			continue
+		}
+
+		// Extract project names for filtering
+		userProjectNames := []string{}
+		for _, project := range userProjects {
+			userProjectNames = append(userProjectNames, project.Name)
+		}
+
+		// Determine if we should filter by project or show all tasks
+		filteringByProject := len(userProjectNames) > 0
+
+		logger.Infof("User %s has %d assigned projects: %v", user.ID, len(userProjectNames), userProjectNames)
+
+		// Get filtered tasks for this user
+		filteredTasks := getFilteredTasks(startTime, endTime, filteringByProject, userProjectNames, filteringByPercentage, percentage)
+		if len(filteredTasks) == 0 {
+			logger.Infof("No tasks found for user %s in the specified period", user.ID)
+			continue
+		}
+
+		logger.Infof("Found %d tasks for user %s", len(filteredTasks), user.ID)
+
+		// Add comments and group by project
+		filteredTasks = addCommentsToTasks(filteredTasks, startTime, endTime)
+		filteredTasksGroupedByProject := groupTasksByProject(filteredTasks)
+
+		// Send personalized update to this user
+		sendTasksGroupedByProjectToUser(user.ID, filteredTasksGroupedByProject)
+
+		// Small delay between users to avoid rate limiting
+		time.Sleep(250 * time.Millisecond)
+
+		logger.Infof("Completed daily update for user %s", user.ID)
+	}
+
+	logger.Infof("Completed daily updates for all %d users", len(users))
 }
 
 func addCronJob(scheduler *cron.Cron, envVar, defaultSchedule, jobName string, logger *Logger, cmd func()) {
