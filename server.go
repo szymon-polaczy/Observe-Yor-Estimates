@@ -568,6 +568,7 @@ func sendTasksGroupedByProject(req *SlackCommandRequest, projectGroups map[strin
 
 	// Process and send all projects as threaded replies
 	for projectName, projectTasks := range projectGroups {
+		time.Sleep(350 * time.Millisecond)
 		logger.Infof("Processing project '%s' with %d tasks", projectName, len(projectTasks))
 
 		// Send project header
@@ -576,7 +577,6 @@ func sendTasksGroupedByProject(req *SlackCommandRequest, projectGroups map[strin
 			logger.Errorf("Failed to send header for project '%s': %v", projectName, err)
 			continue
 		}
-		time.Sleep(200 * time.Millisecond)
 
 		// Create and send task blocks
 		taskChunks := createTaskBlocks(projectTasks)
@@ -685,34 +685,6 @@ func createProjectHeaderBlock(projectName string) map[string]interface{} {
 			"text": fmt.Sprintf("%s **%s**", EMOJI_FOLDER, projectName),
 		},
 	}
-}
-
-// sendSlackBlockResponse sends a response via response URL using blocks (for slash command responses)
-func sendSlackBlockResponse(responseURL string, blocks []map[string]interface{}, responseType string) error {
-	logger := GetGlobalLogger()
-	
-	payload := map[string]interface{}{
-		"response_type": responseType,
-		"blocks":        blocks,
-	}
-
-	payloadBytes, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("failed to marshal payload: %v", err)
-	}
-
-	resp, err := http.Post(responseURL, "application/json", strings.NewReader(string(payloadBytes)))
-	if err != nil {
-		return fmt.Errorf("failed to send response: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("response status: %d", resp.StatusCode)
-	}
-
-	logger.Info("Response sent successfully via response URL")
-	return nil
 }
 
 // sendSlackMessage sends messages via Slack API (for follow-up messages)
@@ -832,6 +804,7 @@ func sendTasksGroupedByProjectToUser(userID string, projectGroups map[string][]T
 
 	// Process each project
 	for projectName, projectTasks := range projectGroups {
+		time.Sleep(350 * time.Millisecond)
 		logger.Infof("Processing project '%s' with %d tasks for user %s", projectName, len(projectTasks), userID)
 
 		// Send project header message as direct message
@@ -840,7 +813,6 @@ func sendTasksGroupedByProjectToUser(userID string, projectGroups map[string][]T
 			logger.Errorf("Failed to send header for project '%s' to user %s: %v", projectName, userID, err)
 			continue
 		}
-		time.Sleep(200 * time.Millisecond)
 
 		// Create and send task blocks
 		taskChunks := createTaskBlocks(projectTasks)
