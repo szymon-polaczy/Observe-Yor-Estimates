@@ -236,43 +236,51 @@ func BuildSimpleAppHomeViewWithSearch(userProjects []Project, allProjects []Proj
 		},
 	})
 
-	// Add search input field
+	// Add search section with input and button
 	blocks = append(blocks, Block{
-		Type: "input",
-		Element: map[string]interface{}{
-			"type":      "plain_text_input",
-			"action_id": "project_search",
-			"placeholder": map[string]string{
-				"type": "plain_text",
-				"text": "Search projects...",
-			},
-			"initial_value": searchQuery,
-			"dispatch_action_config": map[string]interface{}{
-				"trigger_actions_on": []string{"on_character_entered"},
-			},
-		},
-		Label: &Text{
-			Type: "plain_text",
-			Text: "🔍 Search Projects",
+		Type: "section",
+		Text: &Text{
+			Type: "mrkdwn",
+			Text: "*🔍 Search Projects*",
 		},
 	})
 
-	// Add clear search button if there's an active search
-	if searchQuery != "" {
-		blocks = append(blocks, Block{
-			Type: "actions",
-			Elements: []interface{}{
-				ButtonElement{
-					Type:     "button",
-					Text:     &Text{Type: "plain_text", Text: "❌ Clear Search"},
-					ActionID: "clear_search",
-					Value:    "clear",
-					Style:    "primary",
-				},
+	// Search input and button in actions block
+	searchElements := []interface{}{
+		map[string]interface{}{
+			"type":      "plain_text_input",
+			"action_id": "project_search_input",
+			"placeholder": map[string]string{
+				"type": "plain_text",
+				"text": "Enter project name...",
 			},
-		})
+			"initial_value": searchQuery,
+		},
+		ButtonElement{
+			Type:     "button",
+			Text:     &Text{Type: "plain_text", Text: "🔍 Search"},
+			ActionID: "search_submit",
+			Value:    "search",
+			Style:    "primary",
+		},
 	}
 
+	if searchQuery != "" {
+		clearButton := ButtonElement{
+			Type:     "button",
+			Text:     &Text{Type: "plain_text", Text: "❌ Clear"},
+			ActionID: "clear_search",
+			Value:    "clear",
+		}
+		searchElements = append(searchElements, clearButton)
+	}
+
+	blocks = append(blocks, Block{
+		Type:     "actions",
+		Elements: searchElements,
+	})
+
+	// Add clear search button if there's an active search (moved this logic above)
 	// Apply search filter to projects
 	filteredProjects := filterProjectsBySearch(allProjects, searchQuery)
 
@@ -496,11 +504,20 @@ func HandleInteractiveComponents(w http.ResponseWriter, r *http.Request) {
 		logger.Errorf("Failed to unmarshal generic payload: %v", err)
 	} else {
 		logger.Infof("Payload type: %v", genericPayload["type"])
+		logger.Infof("Full payload structure: %+v", genericPayload)
 		if actions, ok := genericPayload["actions"].([]interface{}); ok && len(actions) > 0 {
 			if action, ok := actions[0].(map[string]interface{}); ok {
 				logger.Infof("Action ID: %v", action["action_id"])
 				logger.Infof("Action type: %v", action["type"])
+				logger.Infof("Action value: %v", action["value"])
 			}
+		}
+		// Also check for state/view information that might contain input values
+		if state, ok := genericPayload["state"].(map[string]interface{}); ok {
+			logger.Infof("State found: %+v", state)
+		}
+		if view, ok := genericPayload["view"].(map[string]interface{}); ok {
+			logger.Infof("View found: %+v", view)
 		}
 	}
 
@@ -514,26 +531,31 @@ func HandleInteractiveComponents(w http.ResponseWriter, r *http.Request) {
 	logger.Infof("Interactive component request from user %s, payload type: %s", payload.User.ID, payload.Type)
 	logger.Infof("Number of actions: %d", len(payload.Actions))
 
+	// Extract search value from state if available
+	searchValue := extractSearchValueFromState(payload.State)
+	if searchValue != "" {
+		logger.Infof("Found search value in state: '%s'", searchValue)
+	}
+
 	// Handle checkbox actions
 	if len(payload.Actions) > 0 {
 		action := payload.Actions[0]
 		logger.Infof("Action ID: %s, Selected options: %d", action.ActionID, len(action.SelectedOptions))
 
+		// Use search value from state for all actions (this ensures search is preserved)
+		currentSearchQuery := searchValue
+
 		if strings.HasPrefix(action.ActionID, "project_assignments") {
 			logger.Info("Processing project assignment checkboxes...")
 
-			// Extract page number and search query from action_id
+			// Extract page number from action_id (search query comes from state now)
 			pageNum := 0
-			searchQuery := ""
 			if strings.Contains(action.ActionID, "page_") {
 				parts := strings.Split(action.ActionID, "page_")
 				if len(parts) > 1 {
 					pageSearchParts := strings.Split(parts[1], "_search_")
 					if num, err := strconv.Atoi(pageSearchParts[0]); err == nil {
 						pageNum = num
-					}
-					if len(pageSearchParts) > 1 {
-						searchQuery = pageSearchParts[1]
 					}
 				}
 			}
@@ -544,9 +566,9 @@ func HandleInteractiveComponents(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			// Refresh the App Home view with the same page and search
+			// Refresh the App Home view with the same page and current search
 			logger.Info("Refreshing App Home view...")
-			if err := PublishAppHomeViewWithSearch(payload.User.ID, pageNum, searchQuery); err != nil {
+			if err := PublishAppHomeViewWithSearch(payload.User.ID, pageNum, currentSearchQuery); err != nil {
 				logger.Errorf("Failed to refresh app home view: %v", err)
 			} else {
 				logger.Info("App Home view refreshed successfully")
@@ -558,12 +580,17 @@ func HandleInteractiveComponents(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "Failed to process page navigation", http.StatusInternalServerError)
 				return
 			}
-		} else if action.ActionID == "project_search" {
-			logger.Info("Processing project search...")
-			searchValue := action.Value
-			logger.Infof("Search value: '%s'", searchValue)
-			if err := PublishAppHomeViewWithSearch(payload.User.ID, 0, searchValue); err != nil {
+		} else if action.ActionID == "project_search_input" {
+			logger.Info("Processing project search input action...")
+			// For input actions, refresh with the value from state
+			if err := PublishAppHomeViewWithSearch(payload.User.ID, 0, currentSearchQuery); err != nil {
 				logger.Errorf("Failed to update app home with search: %v", err)
+			}
+		} else if action.ActionID == "search_submit" {
+			logger.Info("Processing search submit...")
+			// Use the search value from state when search button is clicked
+			if err := PublishAppHomeViewWithSearch(payload.User.ID, 0, currentSearchQuery); err != nil {
+				logger.Errorf("Failed to submit search: %v", err)
 			}
 		} else if action.ActionID == "clear_search" {
 			logger.Info("Processing clear search...")
@@ -572,6 +599,11 @@ func HandleInteractiveComponents(w http.ResponseWriter, r *http.Request) {
 			}
 		} else {
 			logger.Warnf("Unknown action ID: %s", action.ActionID)
+			// For any unknown action, still try to preserve search state
+			logger.Info("Refreshing with preserved search state...")
+			if err := PublishAppHomeViewWithSearch(payload.User.ID, 0, currentSearchQuery); err != nil {
+				logger.Errorf("Failed to refresh with search state: %v", err)
+			}
 		}
 	} else {
 		logger.Warn("No actions in payload")
@@ -593,6 +625,12 @@ type SlackInteractivePayload struct {
 		SelectedOptions []SelectedOption `json:"selected_options,omitempty"`
 		Value           string           `json:"value,omitempty"`
 	} `json:"actions"`
+	State struct {
+		Values map[string]map[string]struct {
+			Type  string `json:"type"`
+			Value string `json:"value"`
+		} `json:"values"`
+	} `json:"state,omitempty"`
 	View struct {
 		Type string `json:"type,omitempty"`
 	} `json:"view,omitempty"`
@@ -736,6 +774,27 @@ func HandlePageNavigationWithSearch(userID, actionID, value string) error {
 
 	logger.Infof("Successfully navigated to page %d with search '%s' for user %s", pageNum, searchQuery, userID)
 	return nil
+}
+
+// extractSearchValueFromState extracts the search input value from the Slack state object
+func extractSearchValueFromState(state struct {
+	Values map[string]map[string]struct {
+		Type  string `json:"type"`
+		Value string `json:"value"`
+	} `json:"values"`
+}) string {
+	// Look for the search input in the state values
+	for blockID, block := range state.Values {
+		for actionID, element := range block {
+			if actionID == "project_search_input" {
+				return element.Value
+			}
+		}
+		// Also log the structure for debugging
+		logger := GetGlobalLogger()
+		logger.Infof("State block %s: %+v", blockID, block)
+	}
+	return ""
 }
 
 // filterProjectsBySearch filters projects based on a search query
