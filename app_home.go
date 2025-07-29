@@ -541,6 +541,13 @@ func HandleInteractiveComponents(w http.ResponseWriter, r *http.Request) {
 	searchValue := extractSearchValueFromState(payload.State)
 	if searchValue != "" {
 		logger.Infof("Found search value in state: '%s'", searchValue)
+	} else {
+		logger.Info("No search value found in state")
+	}
+
+	// Log all actions for debugging
+	for i, action := range payload.Actions {
+		logger.Infof("Action %d: ID='%s', Type='%s', Value='%s'", i, action.ActionID, action.Type, action.Value)
 	}
 
 	// Handle checkbox actions
@@ -593,10 +600,13 @@ func HandleInteractiveComponents(w http.ResponseWriter, r *http.Request) {
 				logger.Errorf("Failed to update app home with search: %v", err)
 			}
 		} else if action.ActionID == "search_submit" {
-			logger.Info("Processing search submit...")
+			logger.Info("Processing search submit button click...")
+			logger.Infof("Search submit - current search value from state: '%s'", currentSearchQuery)
 			// Use the search value from state when search button is clicked
 			if err := PublishAppHomeViewWithSearch(payload.User.ID, 0, currentSearchQuery); err != nil {
 				logger.Errorf("Failed to submit search: %v", err)
+			} else {
+				logger.Infof("Successfully processed search for query: '%s'", currentSearchQuery)
 			}
 		} else if action.ActionID == "clear_search" {
 			logger.Info("Processing clear search...")
@@ -789,17 +799,22 @@ func extractSearchValueFromState(state struct {
 		Value string `json:"value"`
 	} `json:"values"`
 }) string {
+	logger := GetGlobalLogger()
+	logger.Infof("Extracting search value from state with %d blocks", len(state.Values))
+
 	// Look for the search input in the state values
 	for blockID, block := range state.Values {
+		logger.Infof("Checking block %s with %d elements", blockID, len(block))
 		for actionID, element := range block {
+			logger.Infof("  Element: actionID='%s', type='%s', value='%s'", actionID, element.Type, element.Value)
 			if actionID == "project_search_input" {
+				logger.Infof("Found search input with value: '%s'", element.Value)
 				return element.Value
 			}
 		}
-		// Also log the structure for debugging
-		logger := GetGlobalLogger()
-		logger.Infof("State block %s: %+v", blockID, block)
 	}
+
+	logger.Info("No search input found in state")
 	return ""
 }
 
