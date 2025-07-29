@@ -100,7 +100,7 @@ type Block struct {
 	Accessory *Accessory             `json:"accessory,omitempty"`
 	BlockID   string                 `json:"block_id,omitempty"`
 	Label     *Text                  `json:"label,omitempty"`
-	Element   map[string]interface{} `json:"element,omitempty"`
+	Element   interface{}            `json:"element,omitempty"`
 }
 
 type Text struct {
@@ -134,6 +134,13 @@ type ButtonElement struct {
 	ActionID string `json:"action_id,omitempty"`
 	Style    string `json:"style,omitempty"`
 	Value    string `json:"value,omitempty"`
+}
+
+type InputElement struct {
+	Type         string            `json:"type"`
+	ActionID     string            `json:"action_id"`
+	Placeholder  map[string]string `json:"placeholder,omitempty"`
+	InitialValue string            `json:"initial_value,omitempty"`
 }
 
 type Accessory struct {

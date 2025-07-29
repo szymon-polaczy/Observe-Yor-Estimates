@@ -236,63 +236,13 @@ func BuildSimpleAppHomeViewWithSearch(userProjects []Project, allProjects []Proj
 		},
 	})
 
-	// Simple search section - remove problematic input field, use buttons only
-	if searchQuery == "" {
-		// Show search help and quick search options
-		blocks = append(blocks, Block{
-			Type: "section",
-			Text: &Text{
-				Type: "mrkdwn",
-				Text: "*🔍 Search Projects*\nClick buttons below for quick search, or use: `/oye search [project name]`",
-			},
-		})
-
-		// Quick search buttons for common terms
-		quickSearchElements := []interface{}{
-			ButtonElement{
-				Type:     "button",
-				Text:     &Text{Type: "plain_text", Text: "🔍 \"Web\""},
-				ActionID: "quick_search_web",
-				Value:    "web",
-			},
-			ButtonElement{
-				Type:     "button",
-				Text:     &Text{Type: "plain_text", Text: "🔍 \"API\""},
-				ActionID: "quick_search_api",
-				Value:    "api",
-			},
-			ButtonElement{
-				Type:     "button",
-				Text:     &Text{Type: "plain_text", Text: "🔍 \"Test\""},
-				ActionID: "quick_search_test",
-				Value:    "test",
-			},
-		}
-
-		blocks = append(blocks, Block{
-			Type:     "actions",
-			Elements: quickSearchElements,
-		})
-	} else {
-		// Show current search and clear button
+	// Show current search state if there's an active search
+	if searchQuery != "" {
 		blocks = append(blocks, Block{
 			Type: "section",
 			Text: &Text{
 				Type: "mrkdwn",
 				Text: fmt.Sprintf("*🔍 Search Results for: \"%s\"*", searchQuery),
-			},
-		})
-
-		blocks = append(blocks, Block{
-			Type: "actions",
-			Elements: []interface{}{
-				ButtonElement{
-					Type:     "button",
-					Text:     &Text{Type: "plain_text", Text: "❌ Clear Search"},
-					ActionID: "clear_search",
-					Value:    "clear",
-					Style:    "primary",
-				},
 			},
 		})
 	}
@@ -308,19 +258,20 @@ func BuildSimpleAppHomeViewWithSearch(userProjects []Project, allProjects []Proj
 
 	// Search input and clear buttons - use proper input block
 	blocks = append(blocks, Block{
-		Type: "input",
+		Type:    "input",
+		BlockID: "search_input_block",
 		Label: &Text{
 			Type: "plain_text",
 			Text: "🔍 Search Projects",
 		},
-		Element: map[string]interface{}{
-			"type":      "plain_text_input",
-			"action_id": "project_search_input",
-			"placeholder": map[string]string{
+		Element: InputElement{
+			Type:         "plain_text_input",
+			ActionID:     "project_search_input",
+			Placeholder: map[string]string{
 				"type": "plain_text",
 				"text": "Enter project name...",
 			},
-			"initial_value": searchQuery,
+			InitialValue: searchQuery,
 		},
 	})
 	// Buttons in separate actions block
@@ -660,15 +611,6 @@ func HandleInteractiveComponents(w http.ResponseWriter, r *http.Request) {
 			if err := PublishAppHomeViewWithSearch(payload.User.ID, 0, currentSearchQuery); err != nil {
 				logger.Errorf("Failed to update app home with search: %v", err)
 			}
-		} else if action.ActionID == "quick_search" || strings.HasPrefix(action.ActionID, "quick_search_") {
-			logger.Info("Processing quick search button click...")
-			searchTerm := action.Value
-			logger.Infof("Quick search for term: '%s'", searchTerm)
-			if err := PublishAppHomeViewWithSearch(payload.User.ID, 0, searchTerm); err != nil {
-				logger.Errorf("Failed to process quick search: %v", err)
-			} else {
-				logger.Infof("Successfully processed quick search for: '%s'", searchTerm)
-			}
 		} else if action.ActionID == "search_submit" {
 			logger.Info("Processing search submit button click...")
 			logger.Infof("Search submit - current search value from state: '%s'", currentSearchQuery)
@@ -877,14 +819,28 @@ func extractSearchValueFromState(state struct {
 		logger.Infof("Checking block %s with %d elements", blockID, len(block))
 		for actionID, element := range block {
 			logger.Infof("  Element: actionID='%s', type='%s', value='%s'", actionID, element.Type, element.Value)
+			
+			// Primary check: look for our specific action_id
 			if actionID == "project_search_input" {
 				logger.Infof("Found search input with value: '%s'", element.Value)
-				return element.Value
+				return strings.TrimSpace(element.Value)
+			}
+		}
+		
+		// Fallback: check if this is our specific search block
+		if blockID == "search_input_block" {
+			logger.Infof("Found search_input_block, checking all elements...")
+			for _, element := range block {
+				if element.Type == "plain_text_input" {
+					logger.Infof("Found plain_text_input in search block with value: '%s'", element.Value)
+					return strings.TrimSpace(element.Value)
+				}
 			}
 		}
 	}
 
-	logger.Info("No search input found in state")
+	logger.Info("No search input found in state - checking for empty state as valid input")
+	// Return empty string as valid search (to clear search)
 	return ""
 }
 
