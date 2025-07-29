@@ -533,17 +533,26 @@ func sendTasksGroupedByProject(req *SlackCommandRequest, projectGroups map[strin
 
 	// Send initial response via response URL
 	logger.Info("Sending initial response message")
-	initialBlocks := []map[string]interface{}{
-		{
-			"type": "section",
-			"text": map[string]interface{}{
-				"type": "mrkdwn",
-				"text": "📊 Update in thread",
-			},
-		},
+	initialPayload := map[string]interface{}{
+		"response_type": "in_channel",
+		"text":          "📊 Update in thread",
 	}
-	if err := sendSlackBlockResponse(req.ResponseURL, initialBlocks, "in_channel"); err != nil {
+
+	payloadBytes, err := json.Marshal(initialPayload)
+	if err != nil {
+		logger.Errorf("Failed to marshal initial payload: %v", err)
+		return
+	}
+
+	resp, err := http.Post(req.ResponseURL, "application/json", strings.NewReader(string(payloadBytes)))
+	if err != nil {
 		logger.Errorf("Failed to send initial response: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		logger.Errorf("Initial response status: %d", resp.StatusCode)
 		return
 	}
 
