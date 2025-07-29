@@ -236,6 +236,67 @@ func BuildSimpleAppHomeViewWithSearch(userProjects []Project, allProjects []Proj
 		},
 	})
 
+	// Simple search section - remove problematic input field, use buttons only
+	if searchQuery == "" {
+		// Show search help and quick search options
+		blocks = append(blocks, Block{
+			Type: "section",
+			Text: &Text{
+				Type: "mrkdwn",
+				Text: "*🔍 Search Projects*\nClick buttons below for quick search, or use: `/oye search [project name]`",
+			},
+		})
+
+		// Quick search buttons for common terms
+		quickSearchElements := []interface{}{
+			ButtonElement{
+				Type:     "button",
+				Text:     &Text{Type: "plain_text", Text: "🔍 \"Web\""},
+				ActionID: "quick_search",
+				Value:    "web",
+			},
+			ButtonElement{
+				Type:     "button",
+				Text:     &Text{Type: "plain_text", Text: "🔍 \"API\""},
+				ActionID: "quick_search",
+				Value:    "api",
+			},
+			ButtonElement{
+				Type:     "button",
+				Text:     &Text{Type: "plain_text", Text: "🔍 \"Test\""},
+				ActionID: "quick_search",
+				Value:    "test",
+			},
+		}
+
+		blocks = append(blocks, Block{
+			Type:     "actions",
+			Elements: quickSearchElements,
+		})
+	} else {
+		// Show current search and clear button
+		blocks = append(blocks, Block{
+			Type: "section",
+			Text: &Text{
+				Type: "mrkdwn",
+				Text: fmt.Sprintf("*🔍 Search Results for: \"%s\"*", searchQuery),
+			},
+		})
+
+		blocks = append(blocks, Block{
+			Type: "actions",
+			Elements: []interface{}{
+				ButtonElement{
+					Type:     "button",
+					Text:     &Text{Type: "plain_text", Text: "❌ Clear Search"},
+					ActionID: "clear_search",
+					Value:    "clear",
+					Style:    "primary",
+				},
+			},
+		})
+	}
+
 	// Add search section with input and button
 	blocks = append(blocks, Block{
 		Type: "section",
@@ -598,6 +659,15 @@ func HandleInteractiveComponents(w http.ResponseWriter, r *http.Request) {
 			// For input actions, refresh with the value from state
 			if err := PublishAppHomeViewWithSearch(payload.User.ID, 0, currentSearchQuery); err != nil {
 				logger.Errorf("Failed to update app home with search: %v", err)
+			}
+		} else if action.ActionID == "quick_search" {
+			logger.Info("Processing quick search button click...")
+			searchTerm := action.Value
+			logger.Infof("Quick search for term: '%s'", searchTerm)
+			if err := PublishAppHomeViewWithSearch(payload.User.ID, 0, searchTerm); err != nil {
+				logger.Errorf("Failed to process quick search: %v", err)
+			} else {
+				logger.Infof("Successfully processed quick search for: '%s'", searchTerm)
 			}
 		} else if action.ActionID == "search_submit" {
 			logger.Info("Processing search submit button click...")
