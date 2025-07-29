@@ -36,6 +36,8 @@ func (s *SlackAPIClient) sendSlackAPIRequestWithResponse(endpoint string, payloa
 		return nil, fmt.Errorf("error marshaling payload: %w", err)
 	}
 
+	s.logger.Infof("Sending %s request to %s with payload size: %d bytes", endpoint, url, len(jsonData))
+
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("error creating request: %w", err)
@@ -55,6 +57,9 @@ func (s *SlackAPIClient) sendSlackAPIRequestWithResponse(endpoint string, payloa
 	if readErr != nil {
 		return nil, fmt.Errorf("error reading response body: %w", readErr)
 	}
+
+	s.logger.Infof("Slack API response status: %d, body length: %d", resp.StatusCode, len(bodyBytes))
+	s.logger.Infof("Slack API response body: %s", string(bodyBytes))
 
 	var slackResp SlackAPIResponse
 	if err := json.Unmarshal(bodyBytes, &slackResp); err != nil {

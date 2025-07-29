@@ -96,7 +96,7 @@ type Block struct {
 	Type      string                 `json:"type"`
 	Text      *Text                  `json:"text,omitempty"`
 	Fields    []Field                `json:"fields,omitempty"`
-	Elements  []Element              `json:"elements,omitempty"`
+	Elements  []interface{}          `json:"elements,omitempty"`
 	Accessory *Accessory             `json:"accessory,omitempty"`
 	BlockID   string                 `json:"block_id,omitempty"`
 	Label     *Text                  `json:"label,omitempty"`
@@ -114,11 +114,19 @@ type Field struct {
 }
 
 type Element struct {
-	Type     string      `json:"type"`
-	Text     interface{} `json:"text,omitempty"`
-	ActionID string      `json:"action_id,omitempty"`
-	Style    string      `json:"style,omitempty"`
-	Value    string      `json:"value,omitempty"`
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ActionID string `json:"action_id,omitempty"`
+	Style    string `json:"style,omitempty"`
+	Value    string `json:"value,omitempty"`
+}
+
+type ButtonElement struct {
+	Type     string `json:"type"`
+	Text     *Text  `json:"text,omitempty"`
+	ActionID string `json:"action_id,omitempty"`
+	Style    string `json:"style,omitempty"`
+	Value    string `json:"value,omitempty"`
 }
 
 type Accessory struct {

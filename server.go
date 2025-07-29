@@ -513,17 +513,10 @@ func addCommentsToTasks(tasks []TaskInfo, startTime time.Time, endTime time.Time
 // fully AI generated
 func sendTasksGroupedByProject(req *SlackCommandRequest, projectGroups map[string][]TaskInfo) {
 	logger := GetGlobalLogger()
-	logger.Infof("Starting sendTasksGroupedByProject with %d tasks", len(projectGroups))
+	logger.Infof("Starting sendTasksGroupedByProject with %d project groups", len(projectGroups))
 
 	if len(projectGroups) == 0 {
 		logger.Info("No tasks to send, returning early")
-		return
-	}
-
-	// Check for required Slack configuration
-	slackBotToken := os.Getenv("SLACK_BOT_TOKEN")
-	if slackBotToken == "" {
-		logger.Error("SLACK_BOT_TOKEN not configured in environment")
 		return
 	}
 
@@ -535,6 +528,227 @@ func sendTasksGroupedByProject(req *SlackCommandRequest, projectGroups map[strin
 	logger.Infof("Using Slack Bot API for threaded messages in channel: %s", req.ChannelID)
 
 	// Get threshold values from environment variables
+	midPoint, highPoint := getThresholdValues()
+	logger.Infof("Using thresholds - MID_POINT: %.1f, HIGH_POINT: %.1f", midPoint, highPoint)
+
+	// Send initial response via response URL
+	logger.Info("Sending initial response message")
+	initialBlocks := []map[string]interface{}{
+		{
+			"type": "section",
+			"text": map[string]interface{}{
+				"type": "mrkdwn",
+				"text": "📊 Update in thread",
+			},
+		},
+	}
+	if err := sendSlackBlockResponse(req.ResponseURL, initialBlocks, "in_channel"); err != nil {
+		logger.Errorf("Failed to send initial response: %v", err)
+		return
+	}
+
+	// Wait a moment for the message to be processed
+	time.Sleep(500 * time.Millisecond)
+
+	// Get the timestamp of the initial message for threading
+	threadTimestamp, err := getLatestMessageTimestamp(req.ChannelID)
+	if err != nil {
+		logger.Errorf("Failed to get thread timestamp: %v", err)
+		return
+	}
+
+	// Process and send all projects as threaded replies
+	for projectName, projectTasks := range projectGroups {
+		logger.Infof("Processing project '%s' with %d tasks", projectName, len(projectTasks))
+
+		// Send project header
+		headerBlocks := []map[string]interface{}{createProjectHeaderBlock(projectName)}
+		if err := sendSlackMessage(req.ChannelID, headerBlocks, threadTimestamp); err != nil {
+			logger.Errorf("Failed to send header for project '%s': %v", projectName, err)
+			continue
+		}
+		time.Sleep(200 * time.Millisecond)
+
+		// Create and send task blocks
+		taskChunks := createTaskBlocks(projectTasks)
+		for i, chunk := range taskChunks {
+			logger.Infof("Sending chunk %d for project '%s' with %d blocks", i+1, projectName, len(chunk))
+			if err := sendSlackMessage(req.ChannelID, chunk, threadTimestamp); err != nil {
+				logger.Errorf("Failed to send chunk %d for project '%s': %v", i+1, projectName, err)
+				continue
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+
+		logger.Infof("Completed processing project '%s'", projectName)
+	}
+
+	logger.Info("Completed sendTasksGroupedByProject")
+}
+
+// buildTaskMessage builds the formatted message text for a task
+func buildTaskMessage(task TaskInfo) string {
+	taskText := fmt.Sprintf("*%s*", task.Name)
+
+	// Add time spent on the task
+	taskText += fmt.Sprintf("\nTime spent: %s | Total time: %s", task.CurrentTime, task.TotalDuration)
+
+	// Add estimation info if available
+	if task.EstimationInfo.Text != "" {
+		taskText += fmt.Sprintf(" | %s", task.EstimationInfo.Text)
+	}
+
+	// Add comments as unordered list
+	if len(task.Comments) > 0 {
+		taskText += "\n"
+		for _, comment := range task.Comments {
+			if comment != "" {
+				// Limit comment length to avoid overwhelming
+				if len(comment) > 100 {
+					comment = comment[:97] + "..."
+				}
+				taskText += fmt.Sprintf("• %s\n", comment)
+			}
+		}
+	}
+
+	return taskText
+}
+
+// createTaskBlocks processes tasks and returns message blocks with chunking logic
+func createTaskBlocks(projectTasks []TaskInfo) [][]map[string]interface{} {
+	logger := GetGlobalLogger()
+	var allChunks [][]map[string]interface{}
+	var currentChunk []map[string]interface{}
+	currentBlockCount := 0
+	currentCharCount := 0
+
+	for _, task := range projectTasks {
+		logger.Infof("Processing task %d (%s) with %d comments", task.TaskID, task.Name, len(task.Comments))
+
+		taskText := buildTaskMessage(task)
+
+		// Create task block
+		taskBlock := map[string]interface{}{
+			"type": "section",
+			"text": map[string]interface{}{
+				"type": "mrkdwn",
+				"text": taskText,
+			},
+		}
+
+		// Estimate character count for this block
+		blockBytes, _ := json.Marshal(taskBlock)
+		blockCharCount := len(blockBytes)
+
+		// Check if adding this block would exceed limits
+		if currentBlockCount+1 > MAX_SLACK_BLOCKS || currentCharCount+blockCharCount > MAX_MESSAGE_CHARS_BUFFER {
+			// Save current chunk if we have any blocks
+			if len(currentChunk) > 0 {
+				allChunks = append(allChunks, currentChunk)
+				// Reset for next chunk
+				currentChunk = []map[string]interface{}{}
+				currentBlockCount = 0
+				currentCharCount = 0
+			}
+		}
+
+		// Add block to current batch
+		currentChunk = append(currentChunk, taskBlock)
+		currentBlockCount++
+		currentCharCount += blockCharCount
+	}
+
+	// Add remaining blocks if any
+	if len(currentChunk) > 0 {
+		allChunks = append(allChunks, currentChunk)
+	}
+
+	return allChunks
+}
+
+// createProjectHeaderBlock creates a project header block
+func createProjectHeaderBlock(projectName string) map[string]interface{} {
+	return map[string]interface{}{
+		"type": "section",
+		"text": map[string]interface{}{
+			"type": "mrkdwn",
+			"text": fmt.Sprintf("%s **%s**", EMOJI_FOLDER, projectName),
+		},
+	}
+}
+
+// sendSlackBlockResponse sends a response via response URL using blocks (for slash command responses)
+func sendSlackBlockResponse(responseURL string, blocks []map[string]interface{}, responseType string) error {
+	logger := GetGlobalLogger()
+	
+	payload := map[string]interface{}{
+		"response_type": responseType,
+		"blocks":        blocks,
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal payload: %v", err)
+	}
+
+	resp, err := http.Post(responseURL, "application/json", strings.NewReader(string(payloadBytes)))
+	if err != nil {
+		return fmt.Errorf("failed to send response: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("response status: %d", resp.StatusCode)
+	}
+
+	logger.Info("Response sent successfully via response URL")
+	return nil
+}
+
+// sendSlackMessage sends messages via Slack API (for follow-up messages)
+func sendSlackMessage(channel string, blocks []map[string]interface{}, threadTs string) error {
+	logger := GetGlobalLogger()
+	slackBotToken := os.Getenv("SLACK_BOT_TOKEN")
+	if slackBotToken == "" {
+		return fmt.Errorf("SLACK_BOT_TOKEN not configured")
+	}
+
+	payload := map[string]interface{}{
+		"channel": channel,
+		"blocks":  blocks,
+	}
+
+	if threadTs != "" {
+		payload["thread_ts"] = threadTs
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal payload: %v", err)
+	}
+
+	req, _ := http.NewRequest("POST", "https://slack.com/api/chat.postMessage", strings.NewReader(string(payloadBytes)))
+	req.Header.Set("Authorization", "Bearer "+slackBotToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send message: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("response status: %d", resp.StatusCode)
+	}
+
+	logger.Info("Message sent successfully via Slack API")
+	return nil
+}
+
+// getThresholdValues extracts threshold values from environment variables
+func getThresholdValues() (float64, float64) {
 	midPoint := DEFAULT_MID_POINT
 	if envMidPoint := os.Getenv("MID_POINT"); envMidPoint != "" {
 		if parsed, err := strconv.ParseFloat(envMidPoint, 64); err == nil {
@@ -549,42 +763,19 @@ func sendTasksGroupedByProject(req *SlackCommandRequest, projectGroups map[strin
 		}
 	}
 
-	logger.Infof("Using thresholds - MID_POINT: %.1f, HIGH_POINT: %.1f", midPoint, highPoint)
+	return midPoint, highPoint
+}
 
-	// Send initial thread message using response URL
-	initialMessage := map[string]interface{}{
-		"response_type": "in_channel",
-		"text":          "📊 Update in thread",
+// getLatestMessageTimestamp gets the timestamp of the latest message in a channel
+func getLatestMessageTimestamp(channelID string) (string, error) {
+	logger := GetGlobalLogger()
+	slackBotToken := os.Getenv("SLACK_BOT_TOKEN")
+	if slackBotToken == "" {
+		return "", fmt.Errorf("SLACK_BOT_TOKEN not configured")
 	}
 
-	initialPayloadBytes, err := json.Marshal(initialMessage)
-	if err != nil {
-		logger.Errorf("Failed to marshal initial message payload: %v", err)
-		return
-	}
-
-	logger.Info("Sending initial thread message")
-	initialResp, err := http.Post(req.ResponseURL, "application/json", strings.NewReader(string(initialPayloadBytes)))
-	if err != nil {
-		logger.Errorf("Failed to send initial thread message: %v", err)
-		return
-	}
-	initialResp.Body.Close()
-
-	if initialResp.StatusCode != http.StatusOK {
-		logger.Errorf("Initial thread message response status: %d", initialResp.StatusCode)
-		return
-	}
-
-	logger.Info("Initial thread message sent successfully")
-
-	// Wait a moment for the message to be processed
-	time.Sleep(500 * time.Millisecond)
-
-	// Get the timestamp of the initial message by calling Slack API
-	// We'll use the conversations.history API to get the latest message timestamp
 	historyURL := "https://slack.com/api/conversations.history"
-	historyParams := fmt.Sprintf("channel=%s&limit=1", req.ChannelID)
+	historyParams := fmt.Sprintf("channel=%s&limit=1", channelID)
 	historyReq, _ := http.NewRequest("GET", historyURL+"?"+historyParams, nil)
 	historyReq.Header.Set("Authorization", "Bearer "+slackBotToken)
 	historyReq.Header.Set("Content-Type", "application/json")
@@ -592,214 +783,26 @@ func sendTasksGroupedByProject(req *SlackCommandRequest, projectGroups map[strin
 	client := &http.Client{}
 	historyResp, err := client.Do(historyReq)
 	if err != nil {
-		logger.Errorf("Failed to get conversation history: %v", err)
-		return
+		return "", fmt.Errorf("failed to get conversation history: %v", err)
 	}
 	defer historyResp.Body.Close()
 
 	var historyData map[string]interface{}
 	if err := json.NewDecoder(historyResp.Body).Decode(&historyData); err != nil {
-		logger.Errorf("Failed to decode history response: %v", err)
-		return
+		return "", fmt.Errorf("failed to decode history response: %v", err)
 	}
 
 	// Extract timestamp from the latest message
-	var threadTimestamp string
 	if messages, ok := historyData["messages"].([]interface{}); ok && len(messages) > 0 {
 		if latestMsg, ok := messages[0].(map[string]interface{}); ok {
 			if ts, ok := latestMsg["ts"].(string); ok {
-				threadTimestamp = ts
-				logger.Infof("Got thread timestamp: %s", threadTimestamp)
+				logger.Infof("Got thread timestamp: %s", ts)
+				return ts, nil
 			}
 		}
 	}
 
-	if threadTimestamp == "" {
-		logger.Error("Failed to get thread timestamp, sending messages without threading")
-		// Could fallback to non-threaded messages here if needed
-		return
-	}
-
-	// Process each project
-	for projectName, projectTasks := range projectGroups {
-		logger.Infof("Processing project '%s' with %d tasks", projectName, len(projectTasks))
-
-		// Send project header message as threaded reply
-		projectHeaderPayload := map[string]interface{}{
-			"channel":   req.ChannelID,
-			"text":      fmt.Sprintf("%s **%s**", EMOJI_FOLDER, projectName),
-			"thread_ts": threadTimestamp,
-		}
-
-		headerPayloadBytes, err := json.Marshal(projectHeaderPayload)
-		if err != nil {
-			logger.Errorf("Failed to marshal project header payload: %v", err)
-			continue
-		}
-
-		logger.Infof("Sending project header for '%s'", projectName)
-		headerReq, _ := http.NewRequest("POST", "https://slack.com/api/chat.postMessage", strings.NewReader(string(headerPayloadBytes)))
-		headerReq.Header.Set("Authorization", "Bearer "+slackBotToken)
-		headerReq.Header.Set("Content-Type", "application/json")
-
-		headerResp, err := client.Do(headerReq)
-		if err != nil {
-			logger.Errorf("Failed to send project header for '%s': %v", projectName, err)
-			continue
-		}
-		headerResp.Body.Close()
-
-		if headerResp.StatusCode != http.StatusOK {
-			logger.Errorf("Project header response status %d for '%s'", headerResp.StatusCode, projectName)
-		} else {
-			logger.Infof("Successfully sent project header for '%s'", projectName)
-		}
-
-		// Wait 200ms before next message
-		time.Sleep(200 * time.Millisecond)
-
-		// Create task blocks
-		var blocks []map[string]interface{}
-		currentBlockCount := 0
-		currentCharCount := 0
-
-		for _, task := range projectTasks {
-			logger.Infof("Processing task %d (%s) with %d comments", task.TaskID, task.Name, len(task.Comments))
-
-			// Build task text - EstimationInfo.Text already contains percentage and emoji
-			taskText := fmt.Sprintf("*%s*", task.Name)
-
-			// Add time spent on the task
-			taskText += fmt.Sprintf("\nTime spent: %s | Total time: %s", task.CurrentTime, task.TotalDuration)
-
-			// Add estimation info if available
-			if task.EstimationInfo.Text != "" {
-				taskText += fmt.Sprintf(" | %s", task.EstimationInfo.Text)
-			}
-
-			// Add comments as unordered list
-			if len(task.Comments) > 0 {
-				logger.Infof("Adding %d comments to task %d", len(task.Comments), task.TaskID)
-				taskText += "\n"
-				for i, comment := range task.Comments {
-					if comment != "" {
-						// Limit comment length to avoid overwhelming
-						if len(comment) > 100 {
-							comment = comment[:97] + "..."
-						}
-						taskText += fmt.Sprintf("• %s\n", comment)
-						logger.Infof("Comment %d for task %d: %s", i+1, task.TaskID, comment)
-					}
-				}
-			} else {
-				logger.Infof("No comments found for task %d", task.TaskID)
-			}
-
-			// Create task block
-			taskBlock := map[string]interface{}{
-				"type": "section",
-				"text": map[string]interface{}{
-					"type": "mrkdwn",
-					"text": taskText,
-				},
-			}
-
-			// Estimate character count for this block
-			blockBytes, _ := json.Marshal(taskBlock)
-			blockCharCount := len(blockBytes)
-
-			// Check if adding this block would exceed limits
-			if currentBlockCount+1 > MAX_SLACK_BLOCKS || currentCharCount+blockCharCount > MAX_MESSAGE_CHARS_BUFFER {
-				// Send current blocks if we have any
-				if len(blocks) > 0 {
-					logger.Infof("Sending message chunk for project '%s' with %d blocks (%d chars)", projectName, len(blocks), currentCharCount)
-
-					messagePayload := map[string]interface{}{
-						"channel":   req.ChannelID,
-						"blocks":    blocks,
-						"thread_ts": threadTimestamp,
-					}
-
-					payloadBytes, err := json.Marshal(messagePayload)
-					if err != nil {
-						logger.Errorf("Failed to marshal message payload: %v", err)
-						break
-					}
-
-					msgReq, _ := http.NewRequest("POST", "https://slack.com/api/chat.postMessage", strings.NewReader(string(payloadBytes)))
-					msgReq.Header.Set("Authorization", "Bearer "+slackBotToken)
-					msgReq.Header.Set("Content-Type", "application/json")
-
-					resp, err := client.Do(msgReq)
-					if err != nil {
-						logger.Errorf("Failed to send message chunk for project '%s': %v", projectName, err)
-						break
-					}
-					resp.Body.Close()
-
-					if resp.StatusCode != http.StatusOK {
-						logger.Errorf("Message chunk response status %d for project '%s'", resp.StatusCode, projectName)
-					} else {
-						logger.Infof("Successfully sent message chunk for project '%s'", projectName)
-					}
-
-					// Wait 200ms before next message
-					time.Sleep(200 * time.Millisecond)
-
-					// Reset for next chunk
-					blocks = []map[string]interface{}{}
-					currentBlockCount = 0
-					currentCharCount = 0
-				}
-			}
-
-			// Add block to current batch
-			blocks = append(blocks, taskBlock)
-			currentBlockCount++
-			currentCharCount += blockCharCount
-		}
-
-		// Send remaining blocks if any
-		if len(blocks) > 0 {
-			logger.Infof("Sending final message chunk for project '%s' with %d blocks (%d chars)", projectName, len(blocks), currentCharCount)
-
-			messagePayload := map[string]interface{}{
-				"channel":   req.ChannelID,
-				"blocks":    blocks,
-				"thread_ts": threadTimestamp,
-			}
-
-			payloadBytes, err := json.Marshal(messagePayload)
-			if err != nil {
-				logger.Errorf("Failed to marshal final message payload: %v", err)
-				continue
-			}
-
-			finalReq, _ := http.NewRequest("POST", "https://slack.com/api/chat.postMessage", strings.NewReader(string(payloadBytes)))
-			finalReq.Header.Set("Authorization", "Bearer "+slackBotToken)
-			finalReq.Header.Set("Content-Type", "application/json")
-
-			resp, err := client.Do(finalReq)
-			if err != nil {
-				logger.Errorf("Failed to send final message chunk for project '%s': %v", projectName, err)
-				continue
-			}
-			resp.Body.Close()
-
-			if resp.StatusCode != http.StatusOK {
-				logger.Errorf("Final message chunk response status %d for project '%s'", resp.StatusCode, projectName)
-			} else {
-				logger.Infof("Successfully sent final message chunk for project '%s'", projectName)
-			}
-
-			// Wait 200ms before next project
-			time.Sleep(200 * time.Millisecond)
-		}
-
-		logger.Infof("Completed processing project '%s'", projectName)
-	}
-
-	logger.Info("Completed sendTasksGroupedByProject")
+	return "", fmt.Errorf("failed to extract timestamp from response")
 }
 
 // sendTasksGroupedByProjectToUser sends personalized task updates to a specific user via direct message
@@ -812,204 +815,32 @@ func sendTasksGroupedByProjectToUser(userID string, projectGroups map[string][]T
 		return
 	}
 
-	// Check for required Slack configuration
-	slackBotToken := os.Getenv("SLACK_BOT_TOKEN")
-	if slackBotToken == "" {
-		logger.Error("SLACK_BOT_TOKEN not configured in environment")
-		return
-	}
-
 	logger.Infof("Sending direct message to user %s", userID)
 
 	// Get threshold values from environment variables
-	midPoint := DEFAULT_MID_POINT
-	if envMidPoint := os.Getenv("MID_POINT"); envMidPoint != "" {
-		if parsed, err := strconv.ParseFloat(envMidPoint, 64); err == nil {
-			midPoint = parsed
-		}
-	}
-
-	highPoint := DEFAULT_HIGH_POINT
-	if envHighPoint := os.Getenv("HIGH_POINT"); envHighPoint != "" {
-		if parsed, err := strconv.ParseFloat(envHighPoint, 64); err == nil {
-			highPoint = parsed
-		}
-	}
-
+	midPoint, highPoint := getThresholdValues()
 	logger.Infof("Using thresholds - MID_POINT: %.1f, HIGH_POINT: %.1f", midPoint, highPoint)
-
-	client := &http.Client{}
 
 	// Process each project
 	for projectName, projectTasks := range projectGroups {
 		logger.Infof("Processing project '%s' with %d tasks for user %s", projectName, len(projectTasks), userID)
 
 		// Send project header message as direct message
-		projectHeaderPayload := map[string]interface{}{
-			"channel": userID, // For DMs, channel is the user ID
-			"text":    fmt.Sprintf("%s **%s**", EMOJI_FOLDER, projectName),
-		}
-
-		headerPayloadBytes, err := json.Marshal(projectHeaderPayload)
-		if err != nil {
-			logger.Errorf("Failed to marshal project header payload: %v", err)
+		headerBlocks := []map[string]interface{}{createProjectHeaderBlock(projectName)}
+		if err := sendSlackMessage(userID, headerBlocks, ""); err != nil {
+			logger.Errorf("Failed to send header for project '%s' to user %s: %v", projectName, userID, err)
 			continue
 		}
-
-		logger.Infof("Sending project header for '%s' to user %s", projectName, userID)
-		headerReq, _ := http.NewRequest("POST", "https://slack.com/api/chat.postMessage", strings.NewReader(string(headerPayloadBytes)))
-		headerReq.Header.Set("Authorization", "Bearer "+slackBotToken)
-		headerReq.Header.Set("Content-Type", "application/json")
-
-		headerResp, err := client.Do(headerReq)
-		if err != nil {
-			logger.Errorf("Failed to send project header for '%s' to user %s: %v", projectName, userID, err)
-			continue
-		}
-		headerResp.Body.Close()
-
-		if headerResp.StatusCode != http.StatusOK {
-			logger.Errorf("Project header response status %d for '%s' to user %s", headerResp.StatusCode, projectName, userID)
-		} else {
-			logger.Infof("Successfully sent project header for '%s' to user %s", projectName, userID)
-		}
-
-		// Wait 200ms before next message
 		time.Sleep(200 * time.Millisecond)
 
-		// Create task blocks
-		var blocks []map[string]interface{}
-		currentBlockCount := 0
-		currentCharCount := 0
-
-		for _, task := range projectTasks {
-			logger.Infof("Processing task %d (%s) with %d comments for user %s", task.TaskID, task.Name, len(task.Comments), userID)
-
-			// Build task text - EstimationInfo.Text already contains percentage and emoji
-			taskText := fmt.Sprintf("*%s*", task.Name)
-
-			// Add time spent on the task
-			taskText += fmt.Sprintf("\nTime spent: %s | Total time: %s", task.CurrentTime, task.TotalDuration)
-
-			// Add estimation info if available
-			if task.EstimationInfo.Text != "" {
-				taskText += fmt.Sprintf(" | %s", task.EstimationInfo.Text)
-			}
-
-			// Add comments as unordered list
-			if len(task.Comments) > 0 {
-				logger.Infof("Adding %d comments to task %d for user %s", len(task.Comments), task.TaskID, userID)
-				taskText += "\n"
-				for i, comment := range task.Comments {
-					if comment != "" {
-						// Limit comment length to avoid overwhelming
-						if len(comment) > 100 {
-							comment = comment[:97] + "..."
-						}
-						taskText += fmt.Sprintf("• %s\n", comment)
-						logger.Infof("Comment %d for task %d: %s", i+1, task.TaskID, comment)
-					}
-				}
-			} else {
-				logger.Infof("No comments found for task %d", task.TaskID)
-			}
-
-			// Create task block
-			taskBlock := map[string]interface{}{
-				"type": "section",
-				"text": map[string]interface{}{
-					"type": "mrkdwn",
-					"text": taskText,
-				},
-			}
-
-			// Estimate character count for this block
-			blockBytes, _ := json.Marshal(taskBlock)
-			blockCharCount := len(blockBytes)
-
-			// Check if adding this block would exceed limits
-			if currentBlockCount+1 > MAX_SLACK_BLOCKS || currentCharCount+blockCharCount > MAX_MESSAGE_CHARS_BUFFER {
-				// Send current blocks if we have any
-				if len(blocks) > 0 {
-					logger.Infof("Sending message chunk for project '%s' to user %s with %d blocks (%d chars)", projectName, userID, len(blocks), currentCharCount)
-
-					messagePayload := map[string]interface{}{
-						"channel": userID,
-						"blocks":  blocks,
-					}
-
-					payloadBytes, err := json.Marshal(messagePayload)
-					if err != nil {
-						logger.Errorf("Failed to marshal message payload: %v", err)
-						break
-					}
-
-					msgReq, _ := http.NewRequest("POST", "https://slack.com/api/chat.postMessage", strings.NewReader(string(payloadBytes)))
-					msgReq.Header.Set("Authorization", "Bearer "+slackBotToken)
-					msgReq.Header.Set("Content-Type", "application/json")
-
-					resp, err := client.Do(msgReq)
-					if err != nil {
-						logger.Errorf("Failed to send message chunk for project '%s' to user %s: %v", projectName, userID, err)
-						break
-					}
-					resp.Body.Close()
-
-					if resp.StatusCode != http.StatusOK {
-						logger.Errorf("Message chunk response status %d for project '%s' to user %s", resp.StatusCode, projectName, userID)
-					} else {
-						logger.Infof("Successfully sent message chunk for project '%s' to user %s", projectName, userID)
-					}
-
-					// Wait 200ms before next message
-					time.Sleep(200 * time.Millisecond)
-
-					// Reset for next chunk
-					blocks = []map[string]interface{}{}
-					currentBlockCount = 0
-					currentCharCount = 0
-				}
-			}
-
-			// Add block to current batch
-			blocks = append(blocks, taskBlock)
-			currentBlockCount++
-			currentCharCount += blockCharCount
-		}
-
-		// Send remaining blocks if any
-		if len(blocks) > 0 {
-			logger.Infof("Sending final message chunk for project '%s' to user %s with %d blocks (%d chars)", projectName, userID, len(blocks), currentCharCount)
-
-			messagePayload := map[string]interface{}{
-				"channel": userID,
-				"blocks":  blocks,
-			}
-
-			payloadBytes, err := json.Marshal(messagePayload)
-			if err != nil {
-				logger.Errorf("Failed to marshal final message payload: %v", err)
+		// Create and send task blocks
+		taskChunks := createTaskBlocks(projectTasks)
+		for i, chunk := range taskChunks {
+			logger.Infof("Sending chunk %d for project '%s' to user %s with %d blocks", i+1, projectName, userID, len(chunk))
+			if err := sendSlackMessage(userID, chunk, ""); err != nil {
+				logger.Errorf("Failed to send chunk %d for project '%s' to user %s: %v", i+1, projectName, userID, err)
 				continue
 			}
-
-			finalReq, _ := http.NewRequest("POST", "https://slack.com/api/chat.postMessage", strings.NewReader(string(payloadBytes)))
-			finalReq.Header.Set("Authorization", "Bearer "+slackBotToken)
-			finalReq.Header.Set("Content-Type", "application/json")
-
-			resp, err := client.Do(finalReq)
-			if err != nil {
-				logger.Errorf("Failed to send final message chunk for project '%s' to user %s: %v", projectName, userID, err)
-				continue
-			}
-			resp.Body.Close()
-
-			if resp.StatusCode != http.StatusOK {
-				logger.Errorf("Final message chunk response status %d for project '%s' to user %s", resp.StatusCode, projectName, userID)
-			} else {
-				logger.Infof("Successfully sent final message chunk for project '%s' to user %s", projectName, userID)
-			}
-
-			// Wait 200ms before next project
 			time.Sleep(200 * time.Millisecond)
 		}
 
