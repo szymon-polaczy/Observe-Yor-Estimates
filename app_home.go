@@ -252,19 +252,19 @@ func BuildSimpleAppHomeViewWithSearch(userProjects []Project, allProjects []Proj
 			ButtonElement{
 				Type:     "button",
 				Text:     &Text{Type: "plain_text", Text: "🔍 \"Web\""},
-				ActionID: "quick_search",
+				ActionID: "quick_search_web",
 				Value:    "web",
 			},
 			ButtonElement{
 				Type:     "button",
 				Text:     &Text{Type: "plain_text", Text: "🔍 \"API\""},
-				ActionID: "quick_search",
+				ActionID: "quick_search_api",
 				Value:    "api",
 			},
 			ButtonElement{
 				Type:     "button",
 				Text:     &Text{Type: "plain_text", Text: "🔍 \"Test\""},
-				ActionID: "quick_search",
+				ActionID: "quick_search_test",
 				Value:    "test",
 			},
 		}
@@ -660,7 +660,7 @@ func HandleInteractiveComponents(w http.ResponseWriter, r *http.Request) {
 			if err := PublishAppHomeViewWithSearch(payload.User.ID, 0, currentSearchQuery); err != nil {
 				logger.Errorf("Failed to update app home with search: %v", err)
 			}
-		} else if action.ActionID == "quick_search" {
+		} else if action.ActionID == "quick_search" || strings.HasPrefix(action.ActionID, "quick_search_") {
 			logger.Info("Processing quick search button click...")
 			searchTerm := action.Value
 			logger.Infof("Quick search for term: '%s'", searchTerm)
