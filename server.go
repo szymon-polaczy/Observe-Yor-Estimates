@@ -672,7 +672,7 @@ func createProjectHeaderBlock(projectName string) map[string]interface{} {
 		"type": "section",
 		"text": map[string]interface{}{
 			"type": "mrkdwn",
-			"text": fmt.Sprintf("%s **%s**", EMOJI_FOLDER, projectName),
+			"text": fmt.Sprintf("%s *%s*", EMOJI_FOLDER, projectName),
 		},
 	}
 }
