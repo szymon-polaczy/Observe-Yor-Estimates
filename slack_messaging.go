@@ -376,7 +376,7 @@ func sendSlackWebhook(message SlackMessage) error {
 	return nil
 }
 
-// sendSlackResponse sends response via response URL
+// sendSlackResponse sends response via response URL with rate limiting retry
 func sendSlackResponse(responseURL string, message SlackMessage) error {
 	if responseURL == "" {
 		return nil
@@ -396,9 +396,13 @@ func sendSlackResponse(responseURL string, message SlackMessage) error {
 		return fmt.Errorf("error marshaling response: %w", err)
 	}
 
-	resp, err := http.Post(responseURL, "application/json", bytes.NewBuffer(jsonData))
+	requestFunc := func() (*http.Response, error) {
+		return http.Post(responseURL, "application/json", bytes.NewBuffer(jsonData))
+	}
+
+	resp, err := executeWithRetry(requestFunc, "send slack response")
 	if err != nil {
-		return fmt.Errorf("error sending response: %w", err)
+		return err
 	}
 	defer resp.Body.Close()
 

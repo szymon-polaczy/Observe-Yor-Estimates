@@ -568,30 +568,18 @@ func sendTasksGroupedByProject(req *SlackCommandRequest, projectGroups map[strin
 		return
 	}
 
-	// Process and send all projects as threaded replies
-	for projectName, projectTasks := range projectGroups {
-		time.Sleep(350 * time.Millisecond)
-		logger.Infof("Processing project '%s' with %d tasks", projectName, len(projectTasks))
+	// Combine all projects into optimized messages
+	combinedMessages := combineProjectsIntoMessages(projectGroups)
 
-		// Send project header
-		headerBlocks := []map[string]interface{}{createProjectHeaderBlock(projectName)}
-		if err := sendSlackMessage(req.ChannelID, headerBlocks, threadTimestamp); err != nil {
-			logger.Errorf("Failed to send header for project '%s': %v", projectName, err)
+	// Send all combined messages as threaded replies
+	for i, messageBlocks := range combinedMessages {
+		logger.Infof("Sending combined message %d/%d with %d blocks", i+1, len(combinedMessages), len(messageBlocks))
+		if err := sendSlackMessage(req.ChannelID, messageBlocks, threadTimestamp); err != nil {
+			logger.Errorf("Failed to send combined message %d: %v", i+1, err)
 			continue
 		}
-
-		// Create and send task blocks
-		taskChunks := createTaskBlocks(projectTasks)
-		for i, chunk := range taskChunks {
-			logger.Infof("Sending chunk %d for project '%s' with %d blocks", i+1, projectName, len(chunk))
-			if err := sendSlackMessage(req.ChannelID, chunk, threadTimestamp); err != nil {
-				logger.Errorf("Failed to send chunk %d for project '%s': %v", i+1, projectName, err)
-				continue
-			}
-			time.Sleep(200 * time.Millisecond)
-		}
-
-		logger.Infof("Completed processing project '%s'", projectName)
+		// Small delay between messages
+		time.Sleep(150 * time.Millisecond)
 	}
 
 	logger.Info("Completed sendTasksGroupedByProject")
@@ -689,7 +677,86 @@ func createProjectHeaderBlock(projectName string) map[string]interface{} {
 	}
 }
 
-// sendSlackMessage sends messages via Slack API (for follow-up messages)
+// combineProjectsIntoMessages packs multiple projects into as few messages as possible
+func combineProjectsIntoMessages(projectGroups map[string][]TaskInfo) [][]map[string]interface{} {
+	logger := GetGlobalLogger()
+	var allMessages [][]map[string]interface{}
+	var currentMessage []map[string]interface{}
+	currentBlockCount := 0
+	currentCharCount := 0
+
+	for projectName, projectTasks := range projectGroups {
+		// Create project header
+		projectHeader := createProjectHeaderBlock(projectName)
+
+		// Create task blocks for this project
+		taskChunks := createTaskBlocks(projectTasks)
+
+		// Calculate size of this project (header + all task blocks)
+		projectBlocks := []map[string]interface{}{projectHeader}
+		for _, chunk := range taskChunks {
+			projectBlocks = append(projectBlocks, chunk...)
+		}
+
+		// Calculate total character count for this project
+		projectBytes, _ := json.Marshal(projectBlocks)
+		projectCharCount := len(projectBytes)
+		projectBlockCount := len(projectBlocks)
+
+		// Check if this project can fit in the current message
+		if currentBlockCount+projectBlockCount <= MAX_SLACK_BLOCKS &&
+			currentCharCount+projectCharCount <= MAX_MESSAGE_CHARS_BUFFER {
+			// Add this project to current message
+			currentMessage = append(currentMessage, projectBlocks...)
+			currentBlockCount += projectBlockCount
+			currentCharCount += projectCharCount
+			logger.Infof("Added project '%s' to current message (blocks: %d, chars: %d)",
+				projectName, projectBlockCount, projectCharCount)
+		} else {
+			// Current message is full, save it and start new one
+			if len(currentMessage) > 0 {
+				allMessages = append(allMessages, currentMessage)
+				logger.Infof("Completed message with %d blocks, %d chars", currentBlockCount, currentCharCount)
+			}
+
+			// Check if this project alone exceeds limits (needs splitting)
+			if projectBlockCount > MAX_SLACK_BLOCKS || projectCharCount > MAX_MESSAGE_CHARS_BUFFER {
+				logger.Infof("Project '%s' is too large, splitting into multiple messages", projectName)
+				// Add header to first chunk
+				if len(taskChunks) > 0 {
+					firstChunk := append([]map[string]interface{}{projectHeader}, taskChunks[0]...)
+					allMessages = append(allMessages, firstChunk)
+
+					// Add remaining chunks as separate messages
+					for i := 1; i < len(taskChunks); i++ {
+						allMessages = append(allMessages, taskChunks[i])
+					}
+				} else {
+					// Just the header
+					allMessages = append(allMessages, []map[string]interface{}{projectHeader})
+				}
+			} else {
+				// Start new message with this project
+				currentMessage = projectBlocks
+				currentBlockCount = projectBlockCount
+				currentCharCount = projectCharCount
+				logger.Infof("Started new message with project '%s' (blocks: %d, chars: %d)",
+					projectName, projectBlockCount, projectCharCount)
+			}
+		}
+	}
+
+	// Add final message if it has content
+	if len(currentMessage) > 0 {
+		allMessages = append(allMessages, currentMessage)
+		logger.Infof("Completed final message with %d blocks, %d chars", currentBlockCount, currentCharCount)
+	}
+
+	logger.Infof("Combined %d projects into %d messages", len(projectGroups), len(allMessages))
+	return allMessages
+}
+
+// sendSlackMessage sends messages via Slack API (for follow-up messages) with rate limiting retry
 func sendSlackMessage(channel string, blocks []map[string]interface{}, threadTs string) error {
 	logger := GetGlobalLogger()
 	slackBotToken := os.Getenv("SLACK_BOT_TOKEN")
@@ -711,14 +778,18 @@ func sendSlackMessage(channel string, blocks []map[string]interface{}, threadTs 
 		return fmt.Errorf("failed to marshal payload: %v", err)
 	}
 
-	req, _ := http.NewRequest("POST", "https://slack.com/api/chat.postMessage", strings.NewReader(string(payloadBytes)))
-	req.Header.Set("Authorization", "Bearer "+slackBotToken)
-	req.Header.Set("Content-Type", "application/json")
-
 	client := &http.Client{}
-	resp, err := client.Do(req)
+
+	requestFunc := func() (*http.Response, error) {
+		req, _ := http.NewRequest("POST", "https://slack.com/api/chat.postMessage", strings.NewReader(string(payloadBytes)))
+		req.Header.Set("Authorization", "Bearer "+slackBotToken)
+		req.Header.Set("Content-Type", "application/json")
+		return client.Do(req)
+	}
+
+	resp, err := executeWithRetry(requestFunc, "send slack message")
 	if err != nil {
-		return fmt.Errorf("failed to send message: %v", err)
+		return err
 	}
 	defer resp.Body.Close()
 
@@ -747,6 +818,38 @@ func getThresholdValues() (float64, float64) {
 	}
 
 	return midPoint, highPoint
+}
+
+// executeWithRetry performs HTTP requests with rate limiting retry logic
+func executeWithRetry(requestFunc func() (*http.Response, error), operation string) (*http.Response, error) {
+	logger := GetGlobalLogger()
+	maxRetries := 5
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		resp, err := requestFunc()
+		if err != nil {
+			if attempt == maxRetries {
+				return nil, fmt.Errorf("failed %s after %d attempts: %v", operation, maxRetries+1, err)
+			}
+			time.Sleep(time.Second)
+			continue
+		}
+
+		if resp.StatusCode == 429 {
+			// Rate limited, wait and retry
+			if attempt == maxRetries {
+				return resp, fmt.Errorf("rate limited after %d attempts", maxRetries+1)
+			}
+			logger.Warnf("Rate limited (429) during %s, waiting 1 second before retry %d/%d", operation, attempt+1, maxRetries)
+			resp.Body.Close()
+			time.Sleep(time.Second)
+			continue
+		}
+
+		return resp, nil
+	}
+
+	return nil, fmt.Errorf("unexpected error in retry loop")
 }
 
 // getLatestMessageTimestamp gets the timestamp of the latest message in a channel
@@ -804,30 +907,18 @@ func sendTasksGroupedByProjectToUser(userID string, projectGroups map[string][]T
 	midPoint, highPoint := getThresholdValues()
 	logger.Infof("Using thresholds - MID_POINT: %.1f, HIGH_POINT: %.1f", midPoint, highPoint)
 
-	// Process each project
-	for projectName, projectTasks := range projectGroups {
-		time.Sleep(350 * time.Millisecond)
-		logger.Infof("Processing project '%s' with %d tasks for user %s", projectName, len(projectTasks), userID)
+	// Combine all projects into optimized messages
+	combinedMessages := combineProjectsIntoMessages(projectGroups)
 
-		// Send project header message as direct message
-		headerBlocks := []map[string]interface{}{createProjectHeaderBlock(projectName)}
-		if err := sendSlackMessage(userID, headerBlocks, ""); err != nil {
-			logger.Errorf("Failed to send header for project '%s' to user %s: %v", projectName, userID, err)
+	// Send all combined messages as direct messages
+	for i, messageBlocks := range combinedMessages {
+		logger.Infof("Sending combined message %d/%d to user %s with %d blocks", i+1, len(combinedMessages), userID, len(messageBlocks))
+		if err := sendSlackMessage(userID, messageBlocks, ""); err != nil {
+			logger.Errorf("Failed to send combined message %d to user %s: %v", i+1, userID, err)
 			continue
 		}
-
-		// Create and send task blocks
-		taskChunks := createTaskBlocks(projectTasks)
-		for i, chunk := range taskChunks {
-			logger.Infof("Sending chunk %d for project '%s' to user %s with %d blocks", i+1, projectName, userID, len(chunk))
-			if err := sendSlackMessage(userID, chunk, ""); err != nil {
-				logger.Errorf("Failed to send chunk %d for project '%s' to user %s: %v", i+1, projectName, userID, err)
-				continue
-			}
-			time.Sleep(200 * time.Millisecond)
-		}
-
-		logger.Infof("Completed processing project '%s' for user %s", projectName, userID)
+		// Small delay between messages
+		time.Sleep(150 * time.Millisecond)
 	}
 
 	logger.Infof("Completed sendTasksGroupedByProjectToUser for user %s", userID)
