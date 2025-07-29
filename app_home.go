@@ -812,35 +812,41 @@ func extractSearchValueFromState(state struct {
 	} `json:"values"`
 }) string {
 	logger := GetGlobalLogger()
-	logger.Infof("Extracting search value from state with %d blocks", len(state.Values))
+	logger.Infof("=== DEBUGGING STATE EXTRACTION ===")
+	logger.Infof("Total blocks in state: %d", len(state.Values))
+	
+	// Debug: Print the entire state structure
+	for blockID, block := range state.Values {
+		logger.Infof("BLOCK ID: '%s' (contains %d elements)", blockID, len(block))
+		for actionID, element := range block {
+			logger.Infof("  ACTION ID: '%s' | TYPE: '%s' | VALUE: '%s'", actionID, element.Type, element.Value)
+		}
+	}
 
 	// Look for the search input in the state values
 	for blockID, block := range state.Values {
-		logger.Infof("Checking block %s with %d elements", blockID, len(block))
 		for actionID, element := range block {
-			logger.Infof("  Element: actionID='%s', type='%s', value='%s'", actionID, element.Type, element.Value)
-			
 			// Primary check: look for our specific action_id
 			if actionID == "project_search_input" {
-				logger.Infof("Found search input with value: '%s'", element.Value)
+				logger.Infof("✅ FOUND project_search_input with value: '%s'", element.Value)
 				return strings.TrimSpace(element.Value)
 			}
 		}
 		
 		// Fallback: check if this is our specific search block
 		if blockID == "search_input_block" {
-			logger.Infof("Found search_input_block, checking all elements...")
-			for _, element := range block {
+			logger.Infof("✅ FOUND search_input_block, checking all elements...")
+			for actionID, element := range block {
+				logger.Infof("  Checking element in search block: actionID='%s', type='%s', value='%s'", actionID, element.Type, element.Value)
 				if element.Type == "plain_text_input" {
-					logger.Infof("Found plain_text_input in search block with value: '%s'", element.Value)
+					logger.Infof("✅ FOUND plain_text_input in search block with value: '%s'", element.Value)
 					return strings.TrimSpace(element.Value)
 				}
 			}
 		}
 	}
 
-	logger.Info("No search input found in state - checking for empty state as valid input")
-	// Return empty string as valid search (to clear search)
+	logger.Warnf("❌ NO SEARCH INPUT FOUND - returning empty string")
 	return ""
 }
 
