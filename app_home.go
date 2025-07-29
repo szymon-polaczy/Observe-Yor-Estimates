@@ -655,3 +655,25 @@ func HandlePageNavigation(userID, actionID, value string) error {
 	logger.Infof("Successfully navigated to page %d for user %s", pageNum, userID)
 	return nil
 }
+
+// filterProjectsBySearch filters projects based on a search query
+func filterProjectsBySearch(projects []Project, query string) []Project {
+	if query == "" {
+		return projects
+	}
+
+	query = strings.ToLower(strings.TrimSpace(query))
+	if query == "" {
+		return projects
+	}
+
+	var filtered []Project
+	for _, project := range projects {
+		projectName := strings.ToLower(project.Name)
+		if strings.Contains(projectName, query) {
+			filtered = append(filtered, project)
+		}
+	}
+
+	return filtered
+}
