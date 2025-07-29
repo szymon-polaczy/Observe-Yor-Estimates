@@ -531,30 +531,32 @@ func sendTasksGroupedByProject(req *SlackCommandRequest, projectGroups map[strin
 	midPoint, highPoint := getThresholdValues()
 	logger.Infof("Using thresholds - MID_POINT: %.1f, HIGH_POINT: %.1f", midPoint, highPoint)
 
-	// Send initial response via response URL
-	logger.Info("Sending initial response message")
-	initialPayload := map[string]interface{}{
+	// Send initial thread message using response URL
+	initialMessage := map[string]interface{}{
 		"response_type": "in_channel",
 		"text":          "📊 Update in thread",
 	}
 
-	payloadBytes, err := json.Marshal(initialPayload)
+	initialPayloadBytes, err := json.Marshal(initialMessage)
 	if err != nil {
-		logger.Errorf("Failed to marshal initial payload: %v", err)
+		logger.Errorf("Failed to marshal initial message payload: %v", err)
 		return
 	}
 
-	resp, err := http.Post(req.ResponseURL, "application/json", strings.NewReader(string(payloadBytes)))
+	logger.Info("Sending initial thread message")
+	initialResp, err := http.Post(req.ResponseURL, "application/json", strings.NewReader(string(initialPayloadBytes)))
 	if err != nil {
-		logger.Errorf("Failed to send initial response: %v", err)
+		logger.Errorf("Failed to send initial thread message: %v", err)
 		return
 	}
-	defer resp.Body.Close()
+	initialResp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		logger.Errorf("Initial response status: %d", resp.StatusCode)
+	if initialResp.StatusCode != http.StatusOK {
+		logger.Errorf("Initial thread message response status: %d", initialResp.StatusCode)
 		return
 	}
+
+	logger.Info("Initial thread message sent successfully")
 
 	// Wait a moment for the message to be processed
 	time.Sleep(500 * time.Millisecond)
