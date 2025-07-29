@@ -245,9 +245,14 @@ func BuildSimpleAppHomeViewWithSearch(userProjects []Project, allProjects []Proj
 		},
 	})
 
-	// Search input and button in actions block
-	searchElements := []interface{}{
-		map[string]interface{}{
+	// Search input and clear buttons - use proper input block
+	blocks = append(blocks, Block{
+		Type: "input",
+		Label: &Text{
+			Type: "plain_text",
+			Text: "🔍 Search Projects",
+		},
+		Element: map[string]interface{}{
 			"type":      "plain_text_input",
 			"action_id": "project_search_input",
 			"placeholder": map[string]string{
@@ -256,28 +261,29 @@ func BuildSimpleAppHomeViewWithSearch(userProjects []Project, allProjects []Proj
 			},
 			"initial_value": searchQuery,
 		},
-		ButtonElement{
-			Type:     "button",
-			Text:     &Text{Type: "plain_text", Text: "🔍 Search"},
-			ActionID: "search_submit",
-			Value:    "search",
-			Style:    "primary",
-		},
-	}
+	})
+	// Buttons in separate actions block
+	var buttonElements []interface{}
+	buttonElements = append(buttonElements, ButtonElement{
+		Type:     "button",
+		Text:     &Text{Type: "plain_text", Text: "🔍 Search"},
+		ActionID: "search_submit",
+		Value:    "search",
+		Style:    "primary",
+	})
 
 	if searchQuery != "" {
-		clearButton := ButtonElement{
+		buttonElements = append(buttonElements, ButtonElement{
 			Type:     "button",
 			Text:     &Text{Type: "plain_text", Text: "❌ Clear"},
 			ActionID: "clear_search",
 			Value:    "clear",
-		}
-		searchElements = append(searchElements, clearButton)
+		})
 	}
 
 	blocks = append(blocks, Block{
 		Type:     "actions",
-		Elements: searchElements,
+		Elements: buttonElements,
 	})
 
 	// Add clear search button if there's an active search (moved this logic above)
