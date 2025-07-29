@@ -121,6 +121,11 @@ func PublishAppHomeView(userID string) error {
 
 // PublishAppHomeViewWithPage publishes the app home view for a user with a specific page
 func PublishAppHomeViewWithPage(userID string, page int) error {
+	return PublishAppHomeViewWithSearch(userID, page, "")
+}
+
+// PublishAppHomeViewWithSearch publishes the app home view for a user with a specific page and search query
+func PublishAppHomeViewWithSearch(userID string, page int, searchQuery string) error {
 	logger := GetGlobalLogger()
 	slackClient := NewSlackAPIClient()
 
@@ -140,7 +145,7 @@ func PublishAppHomeViewWithPage(userID string, page int) error {
 		return fmt.Errorf("failed to get all projects: %w", err)
 	}
 
-	view := BuildSimpleAppHomeView(userProjects, allProjects, userID, page)
+	view := BuildSimpleAppHomeViewWithSearch(userProjects, allProjects, userID, page, searchQuery)
 
 	payload := map[string]interface{}{
 		"user_id": userID,
@@ -166,6 +171,11 @@ func PublishAppHomeViewWithPage(userID string, page int) error {
 
 // BuildSimpleAppHomeView builds a simplified App Home view without complex interactive components
 func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userID string, page int) AppHomeView {
+	return BuildSimpleAppHomeViewWithSearch(userProjects, allProjects, userID, page, "")
+}
+
+// BuildSimpleAppHomeViewWithSearch builds App Home view with search functionality
+func BuildSimpleAppHomeViewWithSearch(userProjects []Project, allProjects []Project, userID string, page int, searchQuery string) AppHomeView {
 	var blocks []Block
 
 	// Header
@@ -226,6 +236,46 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 		},
 	})
 
+	// Add search input field
+	blocks = append(blocks, Block{
+		Type: "input",
+		Element: map[string]interface{}{
+			"type":      "plain_text_input",
+			"action_id": "project_search",
+			"placeholder": map[string]string{
+				"type": "plain_text",
+				"text": "Search projects...",
+			},
+			"initial_value": searchQuery,
+			"dispatch_action_config": map[string]interface{}{
+				"trigger_actions_on": []string{"on_character_entered"},
+			},
+		},
+		Label: &Text{
+			Type: "plain_text",
+			Text: "🔍 Search Projects",
+		},
+	})
+
+	// Add clear search button if there's an active search
+	if searchQuery != "" {
+		blocks = append(blocks, Block{
+			Type: "actions",
+			Elements: []interface{}{
+				ButtonElement{
+					Type:     "button",
+					Text:     &Text{Type: "plain_text", Text: "❌ Clear Search"},
+					ActionID: "clear_search",
+					Value:    "clear",
+					Style:    "primary",
+				},
+			},
+		})
+	}
+
+	// Apply search filter to projects
+	filteredProjects := filterProjectsBySearch(allProjects, searchQuery)
+
 	// Create a map of assigned projects for quick lookup
 	assignedProjectMap := make(map[int]bool)
 	for _, up := range userProjects {
@@ -238,24 +288,28 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 
 	startIdx := currentPage * projectsPerPage
 	endIdx := startIdx + projectsPerPage
-	if endIdx > len(allProjects) {
-		endIdx = len(allProjects)
+	if endIdx > len(filteredProjects) {
+		endIdx = len(filteredProjects)
 	}
 
-	totalPages := (len(allProjects) + projectsPerPage - 1) / projectsPerPage
+	totalPages := (len(filteredProjects) + projectsPerPage - 1) / projectsPerPage
 
-	// Header with pagination info
+	// Header with pagination info and search results
+	headerText := fmt.Sprintf("*Projects* (Page %d of %d)", currentPage+1, totalPages)
+	if searchQuery != "" {
+		headerText += fmt.Sprintf(" - Found %d projects matching \"%s\"", len(filteredProjects), searchQuery)
+	}
 	blocks = append(blocks, Block{
 		Type: "section",
 		Text: &Text{
 			Type: "mrkdwn",
-			Text: fmt.Sprintf("*Projects* (Page %d of %d)", currentPage+1, totalPages),
+			Text: headerText,
 		},
 	})
 
 	// Show current page of projects
-	if startIdx < len(allProjects) {
-		currentPageProjects := allProjects[startIdx:endIdx]
+	if startIdx < len(filteredProjects) {
+		currentPageProjects := filteredProjects[startIdx:endIdx]
 
 		// Create checkbox options for current page
 		var checkboxOptions []map[string]interface{}
@@ -295,7 +349,7 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 			},
 			Accessory: &Accessory{
 				Type:           "checkboxes",
-				ActionID:       fmt.Sprintf("project_assignments_page_%d", currentPage),
+				ActionID:       fmt.Sprintf("project_assignments_page_%d_search_%s", currentPage, searchQuery),
 				Options:        checkboxOptions,
 				InitialOptions: initialOptions,
 			},
@@ -307,7 +361,7 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 			Elements: []interface{}{
 				Element{
 					Type: "mrkdwn",
-					Text: fmt.Sprintf("_Showing projects %d-%d of %d total_", startIdx+1, endIdx, len(allProjects)),
+					Text: fmt.Sprintf("_Showing projects %d-%d of %d total_", startIdx+1, endIdx, len(filteredProjects)),
 				},
 			},
 		})
@@ -321,8 +375,8 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 				navElements = append(navElements, ButtonElement{
 					Type:     "button",
 					Text:     &Text{Type: "plain_text", Text: "⬅️ Previous"},
-					ActionID: fmt.Sprintf("page_%d", currentPage-1),
-					Value:    fmt.Sprintf("%d", currentPage-1),
+					ActionID: fmt.Sprintf("page_%d_search_%s", currentPage-1, searchQuery),
+					Value:    fmt.Sprintf("%d|%s", currentPage-1, searchQuery),
 				})
 			}
 
@@ -339,8 +393,8 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 				navElements = append(navElements, ButtonElement{
 					Type:     "button",
 					Text:     &Text{Type: "plain_text", Text: "Next ➡️"},
-					ActionID: fmt.Sprintf("page_%d", currentPage+1),
-					Value:    fmt.Sprintf("%d", currentPage+1),
+					ActionID: fmt.Sprintf("page_%d_search_%s", currentPage+1, searchQuery),
+					Value:    fmt.Sprintf("%d|%s", currentPage+1, searchQuery),
 				})
 			}
 
@@ -468,13 +522,18 @@ func HandleInteractiveComponents(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(action.ActionID, "project_assignments") {
 			logger.Info("Processing project assignment checkboxes...")
 
-			// Extract page number from action_id
+			// Extract page number and search query from action_id
 			pageNum := 0
+			searchQuery := ""
 			if strings.Contains(action.ActionID, "page_") {
 				parts := strings.Split(action.ActionID, "page_")
 				if len(parts) > 1 {
-					if num, err := strconv.Atoi(parts[1]); err == nil {
+					pageSearchParts := strings.Split(parts[1], "_search_")
+					if num, err := strconv.Atoi(pageSearchParts[0]); err == nil {
 						pageNum = num
+					}
+					if len(pageSearchParts) > 1 {
+						searchQuery = pageSearchParts[1]
 					}
 				}
 			}
@@ -485,19 +544,31 @@ func HandleInteractiveComponents(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			// Refresh the App Home view with the same page
+			// Refresh the App Home view with the same page and search
 			logger.Info("Refreshing App Home view...")
-			if err := PublishAppHomeViewWithPage(payload.User.ID, pageNum); err != nil {
+			if err := PublishAppHomeViewWithSearch(payload.User.ID, pageNum, searchQuery); err != nil {
 				logger.Errorf("Failed to refresh app home view: %v", err)
 			} else {
 				logger.Info("App Home view refreshed successfully")
 			}
 		} else if strings.HasPrefix(action.ActionID, "page_") {
 			logger.Info("Processing page navigation...")
-			if err := HandlePageNavigation(payload.User.ID, action.ActionID, action.Value); err != nil {
+			if err := HandlePageNavigationWithSearch(payload.User.ID, action.ActionID, action.Value); err != nil {
 				logger.Errorf("Failed to handle page navigation: %v", err)
 				http.Error(w, "Failed to process page navigation", http.StatusInternalServerError)
 				return
+			}
+		} else if action.ActionID == "project_search" {
+			logger.Info("Processing project search...")
+			searchValue := action.Value
+			logger.Infof("Search value: '%s'", searchValue)
+			if err := PublishAppHomeViewWithSearch(payload.User.ID, 0, searchValue); err != nil {
+				logger.Errorf("Failed to update app home with search: %v", err)
+			}
+		} else if action.ActionID == "clear_search" {
+			logger.Info("Processing clear search...")
+			if err := PublishAppHomeViewWithSearch(payload.User.ID, 0, ""); err != nil {
+				logger.Errorf("Failed to clear search: %v", err)
 			}
 		} else {
 			logger.Warnf("Unknown action ID: %s", action.ActionID)
@@ -633,6 +704,11 @@ func HandleProjectAssignmentCheckboxes(userID string, selectedOptions []Selected
 
 // HandlePageNavigation processes page navigation button clicks
 func HandlePageNavigation(userID, actionID, value string) error {
+	return HandlePageNavigationWithSearch(userID, actionID, value)
+}
+
+// HandlePageNavigationWithSearch processes page navigation with search support
+func HandlePageNavigationWithSearch(userID, actionID, value string) error {
 	logger := GetGlobalLogger()
 
 	// Skip the page_info button (just shows current page)
@@ -640,19 +716,25 @@ func HandlePageNavigation(userID, actionID, value string) error {
 		return nil
 	}
 
-	// Extract page number from value
-	pageNum, err := strconv.Atoi(value)
+	// Extract page number and search query from value (format: "pageNum|searchQuery")
+	parts := strings.Split(value, "|")
+	pageNum, err := strconv.Atoi(parts[0])
 	if err != nil {
-		return fmt.Errorf("invalid page number: %s", value)
+		return fmt.Errorf("invalid page number: %s", parts[0])
 	}
 
-	// Refresh the App Home view with the new page
-	logger.Infof("Navigating to page %d for user %s", pageNum, userID)
-	if err := PublishAppHomeViewWithPage(userID, pageNum); err != nil {
-		return fmt.Errorf("failed to refresh app home view with page %d: %w", pageNum, err)
+	searchQuery := ""
+	if len(parts) > 1 {
+		searchQuery = parts[1]
 	}
 
-	logger.Infof("Successfully navigated to page %d for user %s", pageNum, userID)
+	// Refresh the App Home view with the new page and search
+	logger.Infof("Navigating to page %d with search '%s' for user %s", pageNum, searchQuery, userID)
+	if err := PublishAppHomeViewWithSearch(userID, pageNum, searchQuery); err != nil {
+		return fmt.Errorf("failed to refresh app home view with page %d and search '%s': %w", pageNum, searchQuery, err)
+	}
+
+	logger.Infof("Successfully navigated to page %d with search '%s' for user %s", pageNum, searchQuery, userID)
 	return nil
 }
 

@@ -114,11 +114,18 @@ type Field struct {
 }
 
 type Element struct {
-	Type     string `json:"type"`
-	Text     string `json:"text,omitempty"`
-	ActionID string `json:"action_id,omitempty"`
-	Style    string `json:"style,omitempty"`
-	Value    string `json:"value,omitempty"`
+	Type                 string                `json:"type"`
+	Text                 string                `json:"text,omitempty"`
+	ActionID             string                `json:"action_id,omitempty"`
+	Style                string                `json:"style,omitempty"`
+	Value                string                `json:"value,omitempty"`
+	Placeholder          *Text                 `json:"placeholder,omitempty"`
+	InitialValue         string                `json:"initial_value,omitempty"`
+	DispatchActionConfig *DispatchActionConfig `json:"dispatch_action_config,omitempty"`
+}
+
+type DispatchActionConfig struct {
+	TriggerActionsOn []string `json:"trigger_actions_on"`
 }
 
 type ButtonElement struct {
