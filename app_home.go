@@ -98,6 +98,16 @@ func PublishAppHomeView(userID string) error {
 		return fmt.Errorf("failed to marshal app home payload: %w", err)
 	}
 
+	logger.Infof("App Home payload size: %d characters", len(payloadJSON))
+
+	// Debug: log the first part of the payload to see structure
+	payloadStr := string(payloadJSON)
+	if len(payloadStr) > 1000 {
+		logger.Infof("App Home payload preview: %s...", payloadStr[:1000])
+	} else {
+		logger.Infof("App Home payload: %s", payloadStr)
+	}
+
 	const maxAppHomeSize = 3000 // Slack's character limit for App Home
 	if len(payloadJSON) > maxAppHomeSize {
 		logger.Errorf("App Home payload too large: %d > %d characters", len(payloadJSON), maxAppHomeSize)
@@ -294,21 +304,21 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 		// Show pagination info
 		blocks = append(blocks, Block{
 			Type: "context",
-			Elements: []Element{
-				{
+			Elements: []interface{}{
+				Element{
 					Type: "mrkdwn",
-					Text: &Text{Type: "mrkdwn", Text: fmt.Sprintf("_Showing projects %d-%d of %d total_", startIdx+1, endIdx, len(allProjects))},
+					Text: fmt.Sprintf("_Showing projects %d-%d of %d total_", startIdx+1, endIdx, len(allProjects)),
 				},
 			},
 		})
 
 		// Pagination navigation (only show if we have multiple pages)
 		if totalPages > 1 {
-			var navElements []Element
+			var navElements []interface{}
 
 			// Previous button
 			if currentPage > 0 {
-				navElements = append(navElements, Element{
+				navElements = append(navElements, ButtonElement{
 					Type:     "button",
 					Text:     &Text{Type: "plain_text", Text: "⬅️ Previous"},
 					ActionID: fmt.Sprintf("page_%d", currentPage-1),
@@ -317,7 +327,7 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 			}
 
 			// Page indicator
-			navElements = append(navElements, Element{
+			navElements = append(navElements, ButtonElement{
 				Type:     "button",
 				Text:     &Text{Type: "plain_text", Text: fmt.Sprintf("Page %d/%d", currentPage+1, totalPages)},
 				ActionID: "page_info",
@@ -326,7 +336,7 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 
 			// Next button
 			if currentPage < totalPages-1 {
-				navElements = append(navElements, Element{
+				navElements = append(navElements, ButtonElement{
 					Type:     "button",
 					Text:     &Text{Type: "plain_text", Text: "Next ➡️"},
 					ActionID: fmt.Sprintf("page_%d", currentPage+1),
@@ -344,10 +354,10 @@ func BuildSimpleAppHomeView(userProjects []Project, allProjects []Project, userI
 	// Footer
 	blocks = append(blocks, Block{
 		Type: "context",
-		Elements: []Element{
-			{
+		Elements: []interface{}{
+			Element{
 				Type: "mrkdwn",
-				Text: &Text{Type: "mrkdwn", Text: "🔄 This page updates automatically when you make changes"},
+				Text: "🔄 This page updates automatically when you make changes",
 			},
 		},
 	})
