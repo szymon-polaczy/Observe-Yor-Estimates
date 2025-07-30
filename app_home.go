@@ -256,29 +256,19 @@ func BuildSimpleAppHomeViewWithSearch(userProjects []Project, allProjects []Proj
 		},
 	})
 
-	// Search input and clear buttons - use proper input block
-	blocks = append(blocks, Block{
-		Type:    "input",
-		BlockID: "search_input_block",
-		Label: &Text{
-			Type: "plain_text",
-			Text: "🔍 Search Projects",
-		},
-		Element: InputElement{
-			Type:     "plain_text_input",
-			ActionID: "project_search_input",
-			Placeholder: &Text{
-				Type: "plain_text",
-				Text: "Enter project name...",
-			},
-			InitialValue: searchQuery,
-			DispatchActionConfig: &DispatchActionConfig{
-				TriggerActionsOn: []string{"on_character_entered"},
-			},
-		},
-	})
-	// Buttons in separate actions block
+	// Search input and buttons in same actions block to ensure state is included
 	var buttonElements []interface{}
+
+	// Add search input as first element in actions block
+	buttonElements = append(buttonElements, Element{
+		Type:     "plain_text_input",
+		ActionID: "project_search_input",
+		Placeholder: &Text{
+			Type: "plain_text",
+			Text: "Enter project name...",
+		},
+		InitialValue: searchQuery,
+	})
 	buttonElements = append(buttonElements, ButtonElement{
 		Type:     "button",
 		Text:     &Text{Type: "plain_text", Text: "🔍 Search"},
