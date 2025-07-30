@@ -247,14 +247,7 @@ func BuildSimpleAppHomeViewWithSearch(userProjects []Project, allProjects []Proj
 		})
 	}
 
-	// Add search section with input and button
-	blocks = append(blocks, Block{
-		Type: "section",
-		Text: &Text{
-			Type: "mrkdwn",
-			Text: "*🔍 Search Projects*",
-		},
-	})
+	// Search functionality now handled via modal
 
 	// Simple button-based search that opens a modal
 	var buttonElements []interface{}
@@ -882,6 +875,18 @@ func OpenSearchModal(triggerID string) error {
 	modal := map[string]interface{}{
 		"type":        "modal",
 		"callback_id": "search_modal",
+		"title": map[string]string{
+			"type": "plain_text",
+			"text": "Search Projects",
+		},
+		"submit": map[string]string{
+			"type": "plain_text",
+			"text": "Search",
+		},
+		"close": map[string]string{
+			"type": "plain_text",
+			"text": "Cancel",
+		},
 		"blocks": []map[string]interface{}{
 			{
 				"type":     "input",
@@ -899,14 +904,6 @@ func OpenSearchModal(triggerID string) error {
 					},
 				},
 			},
-		},
-		"submit": map[string]string{
-			"type": "plain_text",
-			"text": "Search",
-		},
-		"close": map[string]string{
-			"type": "plain_text",
-			"text": "Cancel",
 		},
 	}
 
