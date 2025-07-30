@@ -93,14 +93,14 @@ type SlackMessage struct {
 }
 
 type Block struct {
-	Type      string                 `json:"type"`
-	Text      *Text                  `json:"text,omitempty"`
-	Fields    []Field                `json:"fields,omitempty"`
-	Elements  []interface{}          `json:"elements,omitempty"`
-	Accessory *Accessory             `json:"accessory,omitempty"`
-	BlockID   string                 `json:"block_id,omitempty"`
-	Label     *Text                  `json:"label,omitempty"`
-	Element   interface{}            `json:"element,omitempty"`
+	Type      string        `json:"type"`
+	Text      *Text         `json:"text,omitempty"`
+	Fields    []Field       `json:"fields,omitempty"`
+	Elements  []interface{} `json:"elements,omitempty"`
+	Accessory *Accessory    `json:"accessory,omitempty"`
+	BlockID   string        `json:"block_id,omitempty"`
+	Label     *Text         `json:"label,omitempty"`
+	Element   interface{}   `json:"element,omitempty"`
 }
 
 type Text struct {
@@ -137,10 +137,11 @@ type ButtonElement struct {
 }
 
 type InputElement struct {
-	Type         string            `json:"type"`
-	ActionID     string            `json:"action_id"`
-	Placeholder  map[string]string `json:"placeholder,omitempty"`
-	InitialValue string            `json:"initial_value,omitempty"`
+	Type                 string                `json:"type"`
+	ActionID             string                `json:"action_id"`
+	Placeholder          *Text                 `json:"placeholder,omitempty"`
+	InitialValue         string                `json:"initial_value,omitempty"`
+	DispatchActionConfig *DispatchActionConfig `json:"dispatch_action_config,omitempty"`
 }
 
 type Accessory struct {

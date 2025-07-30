@@ -265,13 +265,16 @@ func BuildSimpleAppHomeViewWithSearch(userProjects []Project, allProjects []Proj
 			Text: "🔍 Search Projects",
 		},
 		Element: InputElement{
-			Type:         "plain_text_input",
-			ActionID:     "project_search_input",
-			Placeholder: map[string]string{
-				"type": "plain_text",
-				"text": "Enter project name...",
+			Type:     "plain_text_input",
+			ActionID: "project_search_input",
+			Placeholder: &Text{
+				Type: "plain_text",
+				Text: "Enter project name...",
 			},
 			InitialValue: searchQuery,
+			DispatchActionConfig: &DispatchActionConfig{
+				TriggerActionsOn: []string{"on_character_entered"},
+			},
 		},
 	})
 	// Buttons in separate actions block
@@ -550,7 +553,9 @@ func HandleInteractiveComponents(w http.ResponseWriter, r *http.Request) {
 	logger.Infof("Number of actions: %d", len(payload.Actions))
 
 	// Extract search value from state if available
+	logger.Info("🔍 ABOUT TO CALL extractSearchValueFromState")
 	searchValue := extractSearchValueFromState(payload.State)
+	logger.Infof("🔍 RETURNED FROM extractSearchValueFromState with value: '%s'", searchValue)
 	if searchValue != "" {
 		logger.Infof("Found search value in state: '%s'", searchValue)
 	} else {
@@ -814,7 +819,7 @@ func extractSearchValueFromState(state struct {
 	logger := GetGlobalLogger()
 	logger.Infof("=== DEBUGGING STATE EXTRACTION ===")
 	logger.Infof("Total blocks in state: %d", len(state.Values))
-	
+
 	// Debug: Print the entire state structure
 	for blockID, block := range state.Values {
 		logger.Infof("BLOCK ID: '%s' (contains %d elements)", blockID, len(block))
@@ -832,7 +837,7 @@ func extractSearchValueFromState(state struct {
 				return strings.TrimSpace(element.Value)
 			}
 		}
-		
+
 		// Fallback: check if this is our specific search block
 		if blockID == "search_input_block" {
 			logger.Infof("✅ FOUND search_input_block, checking all elements...")
