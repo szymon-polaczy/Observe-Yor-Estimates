@@ -882,10 +882,6 @@ func OpenSearchModal(triggerID string) error {
 	modal := map[string]interface{}{
 		"type":        "modal",
 		"callback_id": "search_modal",
-		"title": map[string]string{
-			"type": "plain_text",
-			"text": "Search Projects",
-		},
 		"blocks": []map[string]interface{}{
 			{
 				"type":     "input",
