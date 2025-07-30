@@ -256,24 +256,13 @@ func BuildSimpleAppHomeViewWithSearch(userProjects []Project, allProjects []Proj
 		},
 	})
 
-	// Search input and buttons in same actions block to ensure state is included
+	// Simple button-based search that opens a modal
 	var buttonElements []interface{}
-
-	// Add search input as first element in actions block
-	buttonElements = append(buttonElements, Element{
-		Type:     "plain_text_input",
-		ActionID: "project_search_input",
-		Placeholder: &Text{
-			Type: "plain_text",
-			Text: "Enter project name...",
-		},
-		InitialValue: searchQuery,
-	})
 	buttonElements = append(buttonElements, ButtonElement{
 		Type:     "button",
-		Text:     &Text{Type: "plain_text", Text: "🔍 Search"},
-		ActionID: "search_submit",
-		Value:    "search",
+		Text:     &Text{Type: "plain_text", Text: "🔍 Open Search"},
+		ActionID: "open_search_modal",
+		Value:    "open_modal",
 		Style:    "primary",
 	})
 
@@ -542,6 +531,18 @@ func HandleInteractiveComponents(w http.ResponseWriter, r *http.Request) {
 	logger.Infof("Interactive component request from user %s, payload type: %s", payload.User.ID, payload.Type)
 	logger.Infof("Number of actions: %d", len(payload.Actions))
 
+	// Handle modal submissions first
+	if payload.Type == "view_submission" {
+		logger.Info("Processing modal submission...")
+		if err := HandleModalSubmission(payload); err != nil {
+			logger.Errorf("Failed to handle modal submission: %v", err)
+			http.Error(w, "Failed to process modal submission", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	// Extract search value from state if available
 	logger.Info("🔍 ABOUT TO CALL extractSearchValueFromState")
 	searchValue := extractSearchValueFromState(payload.State)
@@ -606,14 +607,12 @@ func HandleInteractiveComponents(w http.ResponseWriter, r *http.Request) {
 			if err := PublishAppHomeViewWithSearch(payload.User.ID, 0, currentSearchQuery); err != nil {
 				logger.Errorf("Failed to update app home with search: %v", err)
 			}
-		} else if action.ActionID == "search_submit" {
-			logger.Info("Processing search submit button click...")
-			logger.Infof("Search submit - current search value from state: '%s'", currentSearchQuery)
-			// Use the search value from state when search button is clicked
-			if err := PublishAppHomeViewWithSearch(payload.User.ID, 0, currentSearchQuery); err != nil {
-				logger.Errorf("Failed to submit search: %v", err)
+		} else if action.ActionID == "open_search_modal" {
+			logger.Info("Processing open search modal button click...")
+			if err := OpenSearchModal(payload.TriggerID); err != nil {
+				logger.Errorf("Failed to open search modal: %v", err)
 			} else {
-				logger.Infof("Successfully processed search for query: '%s'", currentSearchQuery)
+				logger.Info("Successfully opened search modal")
 			}
 		} else if action.ActionID == "clear_search" {
 			logger.Info("Processing clear search...")
@@ -637,8 +636,9 @@ func HandleInteractiveComponents(w http.ResponseWriter, r *http.Request) {
 
 // SlackInteractivePayload represents interactive component payloads
 type SlackInteractivePayload struct {
-	Type string `json:"type"`
-	User struct {
+	Type      string `json:"type"`
+	TriggerID string `json:"trigger_id"`
+	User      struct {
 		ID   string `json:"id"`
 		Name string `json:"name,omitempty"`
 	} `json:"user"`
@@ -655,7 +655,14 @@ type SlackInteractivePayload struct {
 		} `json:"values"`
 	} `json:"state,omitempty"`
 	View struct {
-		Type string `json:"type,omitempty"`
+		Type       string `json:"type,omitempty"`
+		CallbackID string `json:"callback_id,omitempty"`
+		State      struct {
+			Values map[string]map[string]struct {
+				Type  string `json:"type"`
+				Value string `json:"value"`
+			} `json:"values"`
+		} `json:"state,omitempty"`
 	} `json:"view,omitempty"`
 }
 
@@ -865,4 +872,82 @@ func filterProjectsBySearch(projects []Project, query string) []Project {
 	}
 
 	return filtered
+}
+
+// OpenSearchModal opens a modal dialog for project search
+func OpenSearchModal(triggerID string) error {
+	logger := GetGlobalLogger()
+	slackClient := NewSlackAPIClient()
+
+	modal := map[string]interface{}{
+		"type":        "modal",
+		"callback_id": "search_modal",
+		"title": map[string]string{
+			"type": "plain_text",
+			"text": "Search Projects",
+		},
+		"blocks": []map[string]interface{}{
+			{
+				"type":     "input",
+				"block_id": "search_input",
+				"label": map[string]string{
+					"type": "plain_text",
+					"text": "Search Term",
+				},
+				"element": map[string]interface{}{
+					"type":      "plain_text_input",
+					"action_id": "search_value",
+					"placeholder": map[string]string{
+						"type": "plain_text",
+						"text": "Enter project name to search...",
+					},
+				},
+			},
+		},
+		"submit": map[string]string{
+			"type": "plain_text",
+			"text": "Search",
+		},
+		"close": map[string]string{
+			"type": "plain_text",
+			"text": "Cancel",
+		},
+	}
+
+	payload := map[string]interface{}{
+		"trigger_id": triggerID,
+		"view":       modal,
+	}
+
+	logger.Infof("Opening search modal with trigger_id: %s", triggerID)
+	return slackClient.sendSlackAPIRequest("views.open", payload)
+}
+
+// HandleModalSubmission handles modal form submissions
+func HandleModalSubmission(payload SlackInteractivePayload) error {
+	logger := GetGlobalLogger()
+
+	// Check if this is our search modal
+	if payload.View.CallbackID != "search_modal" {
+		logger.Warnf("Unknown modal callback_id: %s", payload.View.CallbackID)
+		return nil
+	}
+
+	// Extract search value from modal state
+	searchValue := ""
+	if values, ok := payload.View.State.Values["search_input"]; ok {
+		if searchField, ok := values["search_value"]; ok {
+			searchValue = strings.TrimSpace(searchField.Value)
+		}
+	}
+
+	logger.Infof("Modal search submitted with value: '%s'", searchValue)
+
+	// Refresh the App Home view with the search results
+	if err := PublishAppHomeViewWithSearch(payload.User.ID, 0, searchValue); err != nil {
+		return fmt.Errorf("failed to refresh app home with search results: %w", err)
+	}
+
+	logger.Infof("Successfully processed modal search for query: '%s'", searchValue)
+	return nil
 }

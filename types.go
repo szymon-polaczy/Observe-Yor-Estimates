@@ -150,6 +150,8 @@ type Accessory struct {
 	ActionID       string                   `json:"action_id,omitempty"`
 	Options        []map[string]interface{} `json:"options,omitempty"`
 	InitialOptions []map[string]interface{} `json:"initial_options,omitempty"`
+	Placeholder    *Text                    `json:"placeholder,omitempty"`
+	InitialValue   string                   `json:"initial_value,omitempty"`
 }
 
 // Slack API structures
