@@ -562,8 +562,9 @@ func HandleInteractiveComponents(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(action.ActionID, "project_assignments") {
 			logger.Info("Processing project assignment checkboxes...")
 
-			// Extract page number from action_id (search query comes from state now)
+			// Extract page number and search query from action_id
 			pageNum := 0
+			searchQuery := ""
 			if strings.Contains(action.ActionID, "page_") {
 				parts := strings.Split(action.ActionID, "page_")
 				if len(parts) > 1 {
@@ -571,18 +572,23 @@ func HandleInteractiveComponents(w http.ResponseWriter, r *http.Request) {
 					if num, err := strconv.Atoi(pageSearchParts[0]); err == nil {
 						pageNum = num
 					}
+					// Extract search query if present
+					if len(pageSearchParts) > 1 {
+						searchQuery = pageSearchParts[1]
+					}
 				}
 			}
+			logger.Infof("Checkbox action: page=%d, search='%s'", pageNum, searchQuery)
 
-			if err := HandleProjectAssignmentCheckboxes(payload.User.ID, action.SelectedOptions, pageNum); err != nil {
+			if err := HandleProjectAssignmentCheckboxes(payload.User.ID, action.SelectedOptions, pageNum, searchQuery); err != nil {
 				logger.Errorf("Failed to handle project assignment checkboxes: %v", err)
 				http.Error(w, "Failed to process assignments", http.StatusInternalServerError)
 				return
 			}
 
-			// Refresh the App Home view with the same page and current search
+			// Refresh the App Home view with the same page and search from action_id
 			logger.Info("Refreshing App Home view...")
-			if err := PublishAppHomeViewWithSearch(payload.User.ID, pageNum, currentSearchQuery); err != nil {
+			if err := PublishAppHomeViewWithSearch(payload.User.ID, pageNum, searchQuery); err != nil {
 				logger.Errorf("Failed to refresh app home view: %v", err)
 			} else {
 				logger.Info("App Home view refreshed successfully")
@@ -664,7 +670,7 @@ type SelectedOption struct {
 }
 
 // HandleProjectAssignmentCheckboxes processes checkbox selections for project assignments
-func HandleProjectAssignmentCheckboxes(userID string, selectedOptions []SelectedOption, pageNum int) error {
+func HandleProjectAssignmentCheckboxes(userID string, selectedOptions []SelectedOption, pageNum int, searchQuery string) error {
 	logger := GetGlobalLogger()
 
 	db, err := GetDB()
@@ -678,25 +684,28 @@ func HandleProjectAssignmentCheckboxes(userID string, selectedOptions []Selected
 		return fmt.Errorf("failed to get current user projects: %w", err)
 	}
 
-	// Get all projects to determine which are visible on current page
+	// Get all projects and apply search filter to match what user sees
 	allProjects, err := GetAllProjects(db)
 	if err != nil {
 		return fmt.Errorf("failed to get all projects: %w", err)
 	}
 
+	// Apply same search filter as in the UI
+	filteredProjects := filterProjectsBySearch(allProjects, searchQuery)
+
 	// Calculate which projects are visible on current page using same pagination logic
 	const projectsPerPage = 10
 	startIdx := pageNum * projectsPerPage
 	endIdx := startIdx + projectsPerPage
-	if endIdx > len(allProjects) {
-		endIdx = len(allProjects)
+	if endIdx > len(filteredProjects) {
+		endIdx = len(filteredProjects)
 	}
 
-	if startIdx >= len(allProjects) {
-		return fmt.Errorf("page %d is out of range", pageNum)
+	if startIdx >= len(filteredProjects) {
+		return fmt.Errorf("page %d is out of range for search results", pageNum)
 	}
 
-	currentPageProjects := allProjects[startIdx:endIdx]
+	currentPageProjects := filteredProjects[startIdx:endIdx]
 
 	// Create a map of projects visible on current page
 	visibleProjectIDs := make(map[int]bool)
@@ -823,7 +832,6 @@ func extractSearchValueFromState(state struct {
 		for actionID, element := range block {
 			// Primary check: look for our specific action_id
 			if actionID == "project_search_input" {
-				logger.Infof("✅ FOUND project_search_input with value: '%s'", element.Value)
 				return strings.TrimSpace(element.Value)
 			}
 		}
@@ -841,7 +849,6 @@ func extractSearchValueFromState(state struct {
 		}
 	}
 
-	logger.Warnf("❌ NO SEARCH INPUT FOUND - returning empty string")
 	return ""
 }
 
