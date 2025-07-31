@@ -168,13 +168,10 @@ func sendDailyUpdate(logger *Logger) {
 			userProjectNames = append(userProjectNames, project.Name)
 		}
 
-		// Determine if we should filter by project or show all tasks
-		filteringByProject := len(userProjectNames) > 0
-
 		logger.Infof("User %s has %d assigned projects: %v", user.ID, len(userProjectNames), userProjectNames)
 
 		// Get filtered tasks for this user
-		filteredTasks := getFilteredTasks(startTime, endTime, filteringByProject, userProjectNames, filteringByPercentage, percentage)
+		filteredTasks := getFilteredTasksWithTimeout(startTime, endTime, userProjectNames, percentage)
 		if len(filteredTasks) == 0 {
 			logger.Infof("No tasks found for user %s in the specified period", user.ID)
 			continue

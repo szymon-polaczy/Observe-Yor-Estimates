@@ -80,14 +80,14 @@ func handleUnifiedOYECommand(responseWriter http.ResponseWriter, request *http.R
 		return
 	}
 
-	filteringByProject, projectName, err := confirmProject(commandText)
+	projectName, err := confirmProject(commandText)
 	if err != nil {
 		logger.Errorf(err.Error())
 		sendImmediateResponse(responseWriter, err.Error(), "ephemeral")
 		return
 	}
 
-	filteringByPercentage, percentage, err := confirmPercentage(commandText)
+	percentage, err := confirmPercentage(commandText)
 	if err != nil {
 		logger.Errorf(err.Error())
 		sendImmediateResponse(responseWriter, err.Error(), "ephemeral")
@@ -122,7 +122,7 @@ func handleUnifiedOYECommand(responseWriter http.ResponseWriter, request *http.R
 	go func() {
 		logger.Infof("Starting background processing for /oye command")
 
-		filteredTasks := getFilteredTasksWithTimeout(startTime, endTime, filteringByProject, []string{projectName}, filteringByPercentage, percentage)
+		filteredTasks := getFilteredTasksWithTimeout(startTime, endTime, []string{projectName}, percentage)
 		if len(filteredTasks) == 0 {
 			logger.Info("No tasks found in background processing")
 			return
@@ -140,7 +140,7 @@ func handleUnifiedOYECommand(responseWriter http.ResponseWriter, request *http.R
  * If the project name is found, but is not in the database, returns an error
  * If the project name is found, and is in the database, returns the project name and nil
  */
-func confirmProject(commandText string) (bool, string, error) {
+func confirmProject(commandText string) (string, error) {
 	projectName := ""
 	projectNameRegex := regexp.MustCompile(`project (.*?) (for|over)`)
 
@@ -148,31 +148,31 @@ func confirmProject(commandText string) (bool, string, error) {
 	if len(matches) >= 1 {
 		projectName = strings.TrimSpace(matches[1])
 	} else {
-		return false, "", nil
+		return "", nil
 	}
 
 	if projectName == "" {
-		return true, "", fmt.Errorf("Failed to parse project name from command")
+		return "", fmt.Errorf("Failed to parse project name from command")
 	}
 
 	db, err := GetDB()
 	if err != nil {
-		return true, "", fmt.Errorf("Failed to get database: %v", err)
+		return "", fmt.Errorf("Failed to get database: %v", err)
 	}
 
 	_, err = FindProjectsByName(db, projectName)
 	if err != nil {
-		return true, "", err
+		return "", err
 	}
 
-	return true, projectName, nil
+	return projectName, nil
 }
 
 /* Gets the percentage from the command text
  * If the percentage is not found, returns an error
  * If the percentage is found, returns the percentage and nil
  */
-func confirmPercentage(commandText string) (bool, string, error) {
+func confirmPercentage(commandText string) (string, error) {
 	percentage := ""
 	percentageRegex := regexp.MustCompile(`over (.*?) for`)
 
@@ -180,14 +180,14 @@ func confirmPercentage(commandText string) (bool, string, error) {
 	if len(matches) >= 1 {
 		percentage = strings.TrimSpace(matches[1])
 	} else {
-		return false, "", nil
+		return "", nil
 	}
 
 	if percentage == "" {
-		return true, "", fmt.Errorf("Failed to parse percentage from command")
+		return "", fmt.Errorf("Failed to parse percentage from command")
 	}
 
-	return true, percentage, nil
+	return percentage, nil
 }
 
 /* Gets the period from the command text
