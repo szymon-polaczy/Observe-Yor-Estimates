@@ -20,57 +20,16 @@ type EstimationInfo struct {
 	ErrorMessage string // if parsing failed
 }
 
-// Time period information
-type PeriodInfo struct {
-	Type        string // "last_x_days", "today", "yesterday", etc.
-	Days        int    // Number of days for "last_x_days" type
-	DisplayName string // Human-readable name
-}
-
-// User contribution to a task (legacy name for compatibility)
-type UserTimeContribution struct {
-	UserID       int
-	CurrentTime  string
-	PreviousTime string
-}
-
-// User contribution to a task (new name)
-type UserContribution struct {
-	UserID       int
-	CurrentTime  string
-	PreviousTime string
-}
-
-// TaskUpdateInfo - legacy format still used by existing functions
-type TaskUpdateInfo struct {
-	TaskID           int
-	ParentID         int
-	Name             string
-	EstimationInfo   string
-	EstimationStatus string
-	CurrentPeriod    string
-	CurrentTime      string
-	PreviousPeriod   string
-	PreviousTime     string
-	DaysWorked       int
-	Comments         []string
-	UserBreakdown    map[int]UserTimeContribution
-}
-
-// Simplified task information (consolidates TaskUpdateInfo variations)
+// Simplified task information
 type TaskInfo struct {
 	TaskID         int
 	ParentID       int
 	Name           string
 	EstimationInfo EstimationInfo
-	CurrentPeriod  string
 	CurrentTime    string
-	PreviousPeriod string
-	PreviousTime   string
 	TotalDuration  string
 	DaysWorked     int
 	Comments       []string
-	UserBreakdown  map[int]UserTimeContribution
 }
 
 // Threshold alert information
@@ -80,7 +39,7 @@ type ThresholdAlert struct {
 	Name             string
 	EstimationInfo   EstimationInfo
 	CurrentTime      string
-	PreviousTime     string
+	TotalDuration    string
 	Percentage       float64
 	ThresholdCrossed int
 	JustCrossed      bool

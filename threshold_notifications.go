@@ -1,0 +1,299 @@
+package main
+
+import (
+	"database/sql"
+	"fmt"
+	"time"
+)
+
+// Threshold levels for notifications (50%, 70%, 90%, 100%)
+var thresholdLevels = []int{100, 90, 70, 50}
+
+// checkThresholdNotifications detects threshold crossings and sends notifications
+// This function is called after time entries sync to check tasks that were updated
+func checkThresholdNotifications(db *sql.DB, updatedTaskIDs []int) error {
+	logger := GetGlobalLogger()
+
+	if len(updatedTaskIDs) == 0 {
+		logger.Debug("No updated tasks to check for threshold notifications")
+		return nil
+	}
+
+	logger.Infof("Checking threshold notifications for %d updated tasks", len(updatedTaskIDs))
+
+	// Get threshold alerts for updated tasks
+	alerts, err := detectThresholdCrossings(db, updatedTaskIDs)
+	if err != nil {
+		return fmt.Errorf("failed to detect threshold crossings: %w", err)
+	}
+
+	if len(alerts) == 0 {
+		logger.Debug("No threshold crossings detected")
+		return nil
+	}
+
+	logger.Infof("Detected %d threshold crossings", len(alerts))
+
+	// Send notifications to users
+	return sendThresholdNotifications(db, alerts)
+}
+
+// detectThresholdCrossings finds tasks that have crossed threshold levels
+func detectThresholdCrossings(db *sql.DB, taskIDs []int) ([]ThresholdAlert, error) {
+	logger := GetGlobalLogger()
+
+	// Get recent time entries for these tasks (last 7 days to calculate usage)
+	now := time.Now()
+	startDate := now.AddDate(0, 0, -7).Format("2006-01-02")
+	endDate := now.Format("2006-01-02")
+
+	// Query to get task usage information (similar to main task handling)
+	query := `
+		SELECT 
+			t.task_id,
+			t.parent_id,
+			t.name,
+			COALESCE(SUM(CASE 
+				WHEN te.date >= $2 AND te.date <= $3
+				THEN te.duration 
+				ELSE 0 
+			END), 0) as current_period_duration,
+			COALESCE(SUM(te.duration), 0) as total_duration
+		FROM tasks t
+		LEFT JOIN time_entries te ON t.task_id = te.task_id
+		WHERE t.task_id = ANY($1)
+		GROUP BY t.task_id, t.parent_id, t.name
+		HAVING COALESCE(SUM(CASE 
+			WHEN te.date >= $4 AND te.date <= $5
+			THEN te.duration 
+			ELSE 0 
+		END), 0) > 0
+		ORDER BY t.name
+	`
+
+	rows, err := db.Query(query, taskIDs, startDate, endDate, startDate, endDate)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query task usage: %w", err)
+	}
+	defer rows.Close()
+
+	var alerts []ThresholdAlert
+
+	for rows.Next() {
+		var taskID, parentID, currentDuration, totalDuration int
+		var name string
+
+		err := rows.Scan(&taskID, &parentID, &name, &currentDuration, &totalDuration)
+		if err != nil {
+			logger.Errorf("Failed to scan task usage row: %v", err)
+			continue
+		}
+
+		// Calculate usage percentage using existing functions (same as main task handling)
+		currentTime := formatDuration(currentDuration)
+		totalTime := formatDuration(totalDuration)
+
+		// Parse estimation from task name (using currentTime and "0h 0m" like main system)
+		estimation := ParseTaskEstimationWithUsage(name, currentTime, "0h 0m")
+		if estimation.ErrorMessage != "" {
+			logger.Debugf("Skipping task %d (%s): %s", taskID, name, estimation.ErrorMessage)
+			continue
+		}
+
+		percentage := estimation.Percentage
+
+		// Check if this task crossed any threshold
+		thresholdCrossed, justCrossed, err := checkThresholdCrossing(db, taskID, percentage)
+		if err != nil {
+			logger.Errorf("Failed to check threshold crossing for task %d: %v", taskID, err)
+			continue
+		}
+
+		if justCrossed {
+			alert := ThresholdAlert{
+				TaskID:           taskID,
+				ParentID:         parentID,
+				Name:             name,
+				EstimationInfo:   estimation,
+				CurrentTime:      currentTime,
+				TotalDuration:    totalTime,
+				Percentage:       percentage,
+				ThresholdCrossed: thresholdCrossed,
+				JustCrossed:      true,
+			}
+			alerts = append(alerts, alert)
+
+			// Record the notification
+			err = recordThresholdNotification(db, taskID, thresholdCrossed, percentage)
+			if err != nil {
+				logger.Errorf("Failed to record threshold notification for task %d: %v", taskID, err)
+			}
+		}
+	}
+
+	return alerts, nil
+}
+
+// checkThresholdCrossing determines if a task crossed a new threshold
+func checkThresholdCrossing(db *sql.DB, taskID int, currentPercentage float64) (int, bool, error) {
+	// Check what's the highest threshold this task has already been notified for
+	var lastNotifiedThreshold sql.NullInt64
+	query := `SELECT MAX(threshold_percentage) FROM threshold_notifications WHERE task_id = $1`
+	err := db.QueryRow(query, taskID).Scan(&lastNotifiedThreshold)
+	if err != nil && err != sql.ErrNoRows {
+		return 0, false, err
+	}
+
+	// Find the highest threshold the current percentage has crossed
+	var highestCrossedThreshold int
+	for _, threshold := range thresholdLevels {
+		if currentPercentage >= float64(threshold) {
+			highestCrossedThreshold = threshold
+			break
+		}
+	}
+
+	if highestCrossedThreshold == 0 {
+		return 0, false, nil // No threshold crossed
+	}
+
+	// Check if this is a new threshold (higher than previously notified)
+	if !lastNotifiedThreshold.Valid || highestCrossedThreshold > int(lastNotifiedThreshold.Int64) {
+		return highestCrossedThreshold, true, nil
+	}
+
+	return highestCrossedThreshold, false, nil
+}
+
+// recordThresholdNotification records that we've notified about a threshold
+func recordThresholdNotification(db *sql.DB, taskID, threshold int, percentage float64) error {
+	query := `
+		INSERT INTO threshold_notifications (task_id, threshold_percentage, current_percentage, last_time_entry_date)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (task_id, threshold_percentage) 
+		DO UPDATE SET 
+			current_percentage = EXCLUDED.current_percentage,
+			notified_at = CURRENT_TIMESTAMP,
+			last_time_entry_date = EXCLUDED.last_time_entry_date
+	`
+
+	today := time.Now().Format("2006-01-02")
+	_, err := db.Exec(query, taskID, threshold, percentage, today)
+	return err
+}
+
+// sendThresholdNotifications sends notifications to users about threshold crossings
+func sendThresholdNotifications(db *sql.DB, alerts []ThresholdAlert) error {
+	logger := GetGlobalLogger()
+
+	// Get all Slack users
+	users, err := GetSlackUsersFromDatabase()
+	if err != nil {
+		return fmt.Errorf("failed to get Slack users: %w", err)
+	}
+
+	logger.Infof("Sending threshold notifications to %d users", len(users))
+
+	for _, user := range users {
+		// Get user's assigned projects
+		userProjects, err := GetUserProjects(db, user.ID)
+		if err != nil {
+			logger.Errorf("Failed to get projects for user %s: %v", user.ID, err)
+			continue
+		}
+
+		// Filter alerts to only include user's projects
+		userAlerts := filterAlertsForUser(alerts, userProjects)
+		if len(userAlerts) == 0 {
+			continue
+		}
+
+		// Convert ThresholdAlert to TaskInfo for existing messaging functions
+		taskInfos := convertAlertsToTaskInfos(userAlerts)
+
+		// Group by project using existing function
+		projectGroups := groupTasksByProject(taskInfos)
+
+		// Send using existing messaging function
+		logger.Infof("Sending threshold notifications to user %s for %d tasks", user.ID, len(userAlerts))
+		sendTasksGroupedByProjectToUser(user.ID, projectGroups)
+
+		// Small delay between users to avoid rate limiting
+		time.Sleep(250 * time.Millisecond)
+	}
+
+	return nil
+}
+
+// filterAlertsForUser filters alerts to only include tasks from user's assigned projects
+func filterAlertsForUser(alerts []ThresholdAlert, userProjects []Project) []ThresholdAlert {
+	if len(userProjects) == 0 {
+		// If user has no project assignments, send all alerts (backward compatibility)
+		return alerts
+	}
+
+	// Create a map of project task IDs for quick lookup
+	projectTaskIDs := make(map[int]bool)
+	for _, project := range userProjects {
+		projectTaskIDs[project.TimeCampTaskID] = true
+	}
+
+	var filteredAlerts []ThresholdAlert
+	for _, alert := range alerts {
+		// Check if this task belongs to any of the user's projects
+		// We need to check the task hierarchy to find the project
+		if isTaskInUserProjects(alert.TaskID, alert.ParentID, projectTaskIDs) {
+			filteredAlerts = append(filteredAlerts, alert)
+		}
+	}
+
+	return filteredAlerts
+}
+
+// isTaskInUserProjects checks if a task belongs to user's assigned projects
+func isTaskInUserProjects(taskID, parentID int, projectTaskIDs map[int]bool) bool {
+	// Direct project match
+	if projectTaskIDs[taskID] {
+		return true
+	}
+
+	// Parent project match (most common case - task under project)
+	if projectTaskIDs[parentID] {
+		return true
+	}
+
+	// TODO: Could add more sophisticated hierarchy checking if needed
+	// For now, this covers the most common cases
+
+	return false
+}
+
+// convertAlertsToTaskInfos converts ThresholdAlert to TaskInfo for messaging compatibility
+func convertAlertsToTaskInfos(alerts []ThresholdAlert) []TaskInfo {
+	var taskInfos []TaskInfo
+
+	for _, alert := range alerts {
+		taskInfo := TaskInfo{
+			TaskID:         alert.TaskID,
+			ParentID:       alert.ParentID,
+			Name:           alert.Name,
+			EstimationInfo: alert.EstimationInfo,
+			CurrentTime:    alert.CurrentTime,
+			TotalDuration:  alert.TotalDuration,
+			DaysWorked:     1, // Not relevant for threshold notifications
+			Comments:       []string{fmt.Sprintf("🚨 THRESHOLD ALERT: %d%% reached!", alert.ThresholdCrossed)},
+		}
+
+		taskInfos = append(taskInfos, taskInfo)
+	}
+
+	return taskInfos
+}
+
+// clearTaskThresholdNotifications clears threshold notifications for a task
+// This should be called when task estimation changes
+func clearTaskThresholdNotifications(db *sql.DB, taskID int) error {
+	query := `DELETE FROM threshold_notifications WHERE task_id = $1`
+	_, err := db.Exec(query, taskID)
+	return err
+}

@@ -126,7 +126,6 @@ func setupCronJobs(logger *Logger) {
 
 func sendDailyUpdate(logger *Logger) {
 	commandText := "for yesterday"
-	filteringByPercentage := false
 	percentage := ""
 
 	db, err := GetDB()

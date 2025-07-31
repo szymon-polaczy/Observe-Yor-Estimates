@@ -254,14 +254,14 @@ func SyncTimeEntriesToDatabaseWithOptions(fromDate, toDate string, includeOrphan
 	}
 
 	// Use optimized batch processing for better performance
-	err = processBatchTimeEntries(db, validEntries, logger)
+	updatedTaskIDs, err := processBatchTimeEntries(db, validEntries, logger)
 	if err != nil {
 		return err
 	}
 
 	// Process orphaned entries if in full sync mode
 	if includeOrphaned && len(orphanedEntries) > 0 {
-		err = processBatchOrphanedTimeEntries(db, orphanedEntries, orphanedInsertStatement, logger)
+		err = processBatchOrphanedTimeEntries(orphanedEntries, orphanedInsertStatement, logger)
 		if err != nil {
 			logger.Errorf("Failed to store orphaned time entries: %v", err)
 			// Don't fail the entire sync for orphaned entries
@@ -274,13 +274,22 @@ func SyncTimeEntriesToDatabaseWithOptions(fromDate, toDate string, includeOrphan
 		checkMissingTasksAndSuggestRemediation(db, missingTaskCount, logger)
 	}
 
+	// Check for threshold notifications after successful sync
+	if len(updatedTaskIDs) > 0 {
+		if err := checkThresholdNotifications(db, updatedTaskIDs); err != nil {
+			logger.Errorf("Failed to check threshold notifications: %v", err)
+			// Don't fail the entire sync for threshold notification errors
+		}
+	}
+
 	return nil
 }
 
 // processBatchTimeEntries performs optimized batch insert of time entries
-func processBatchTimeEntries(db *sql.DB, entries []ProcessedTimeEntry, logger *Logger) error {
+// Returns a slice of task IDs that were updated during the sync
+func processBatchTimeEntries(db *sql.DB, entries []ProcessedTimeEntry, logger *Logger) ([]int, error) {
 	if len(entries) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	logger.Infof("Starting optimized batch processing for %d time entries", len(entries))
@@ -288,7 +297,7 @@ func processBatchTimeEntries(db *sql.DB, entries []ProcessedTimeEntry, logger *L
 	// Start a transaction for better performance
 	tx, err := db.Begin()
 	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback() // Will be ignored if tx.Commit() succeeds
 
@@ -308,7 +317,7 @@ func processBatchTimeEntries(db *sql.DB, entries []ProcessedTimeEntry, logger *L
 		locked = EXCLUDED.locked,
 		modify_time = EXCLUDED.modify_time`)
 	if err != nil {
-		return fmt.Errorf("failed to prepare batch statement: %w", err)
+		return nil, fmt.Errorf("failed to prepare batch statement: %w", err)
 	}
 	defer stmt.Close()
 
@@ -316,6 +325,12 @@ func processBatchTimeEntries(db *sql.DB, entries []ProcessedTimeEntry, logger *L
 	const batchSize = 500 // Larger batch size for time entries since they're simpler
 	successCount := 0
 	errorCount := 0
+
+	// Track unique task IDs that were updated
+	updatedTaskIDs := make(map[int]bool)
+	for _, entry := range entries {
+		updatedTaskIDs[entry.TaskID] = true
+	}
 
 	for i := 0; i < len(entries); i += batchSize {
 		end := i + batchSize
@@ -343,16 +358,22 @@ func processBatchTimeEntries(db *sql.DB, entries []ProcessedTimeEntry, logger *L
 
 	// Commit the transaction
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
+		return nil, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
 	logger.Infof("Optimized time entries sync completed: %d entries processed successfully, %d errors encountered", successCount, errorCount)
 
 	if errorCount > 0 && successCount == 0 {
-		return fmt.Errorf("all time entry operations failed during sync")
+		return nil, fmt.Errorf("all time entry operations failed during sync")
 	}
 
-	return nil
+	// Convert map keys to slice
+	taskIDSlice := make([]int, 0, len(updatedTaskIDs))
+	for taskID := range updatedTaskIDs {
+		taskIDSlice = append(taskIDSlice, taskID)
+	}
+
+	return taskIDSlice, nil
 }
 
 // getTimeCampTimeEntries fetches time entries from TimeCamp API
@@ -647,7 +668,7 @@ func ensureOrphanedTimeEntriesTable(db *sql.DB) error {
 }
 
 // processBatchOrphanedTimeEntries performs optimized batch insert of orphaned time entries
-func processBatchOrphanedTimeEntries(db *sql.DB, entries []ProcessedTimeEntry, stmt *sql.Stmt, logger *Logger) error {
+func processBatchOrphanedTimeEntries(entries []ProcessedTimeEntry, stmt *sql.Stmt, logger *Logger) error {
 	if len(entries) == 0 {
 		return nil
 	}
@@ -805,182 +826,4 @@ func GetOrphanedTimeEntriesCount(db *sql.DB) (int, error) {
 		return 0, fmt.Errorf("failed to count orphaned time entries: %w", err)
 	}
 	return count, nil
-}
-
-// GetDynamicTaskTimeEntriesWithProject fetches task time entries for any dynamic time period
-func GetDynamicTaskTimeEntriesWithProject(db *sql.DB, periodType string, days int, projectTaskID *int) ([]TaskUpdateInfo, error) {
-	logger := GetGlobalLogger()
-	logger.Debugf("Querying database for dynamic task time entries with period: %s, days: %d, project filtering", periodType, days)
-
-	// Calculate date ranges for the period
-	dateRanges := calculateDateRanges(periodType, days)
-
-	var projectTaskIDs []int
-	if projectTaskID != nil {
-		var err error
-		projectTaskIDs, err = GetProjectTaskIDs(db, *projectTaskID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get project task IDs: %w", err)
-		}
-		if len(projectTaskIDs) == 0 {
-			return []TaskUpdateInfo{}, nil
-		}
-	}
-
-	// Build project filtering clause for time_entries using project_id
-	var projectCTE string
-	var timeEntriesFilter string
-	var args []interface{}
-
-	if projectTaskID != nil {
-		// Create a CTE that gets all task IDs for the project once
-		projectCTE = `
-project_tasks AS (
-    SELECT task_id FROM tasks WHERE project_id = (
-        SELECT id FROM projects WHERE timecamp_task_id = $1
-    )
-),`
-		timeEntriesFilter = `AND task_id IN (SELECT task_id FROM project_tasks)`
-		args = append(args, *projectTaskID)
-	}
-
-	// User breakdown query
-	userBreakdownQuery := fmt.Sprintf(`
-WITH %scurrent_period AS (
-    SELECT task_id, user_id, SUM(duration) AS total_duration
-    FROM time_entries
-    WHERE date::date >= '%s'::date AND date::date <= '%s'::date %s
-    GROUP BY task_id, user_id
-),
-previous_period AS (
-    SELECT task_id, user_id, SUM(duration) AS total_duration
-    FROM time_entries
-    WHERE date::date >= '%s'::date AND date::date <= '%s'::date %s
-    GROUP BY task_id, user_id
-)
-SELECT 
-    COALESCE(tc.task_id, tp.task_id) AS task_id,
-    COALESCE(tc.user_id, tp.user_id) AS user_id,
-    COALESCE(tc.total_duration, 0) AS current_duration, 
-    COALESCE(tp.total_duration, 0) AS previous_duration
-FROM current_period tc
-FULL OUTER JOIN previous_period tp ON tc.task_id = tp.task_id AND tc.user_id = tp.user_id
-WHERE COALESCE(tc.total_duration, 0) > 0;`,
-		projectCTE,
-		dateRanges.Current.Start, dateRanges.Current.End, timeEntriesFilter,
-		dateRanges.Previous.Start, dateRanges.Previous.End, timeEntriesFilter)
-
-	userRows, err := db.Query(userBreakdownQuery, args...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query user breakdown: %w", err)
-	}
-	defer userRows.Close()
-
-	userBreakdowns := make(map[int]map[int]UserTimeContribution)
-	for userRows.Next() {
-		var taskID, userID, currentDuration, previousDuration int
-		err := userRows.Scan(&taskID, &userID, &currentDuration, &previousDuration)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan user breakdown row: %w", err)
-		}
-
-		if _, exists := userBreakdowns[taskID]; !exists {
-			userBreakdowns[taskID] = make(map[int]UserTimeContribution)
-		}
-
-		userBreakdowns[taskID][userID] = UserTimeContribution{
-			UserID:       userID,
-			CurrentTime:  formatDuration(currentDuration),
-			PreviousTime: formatDuration(previousDuration),
-		}
-	}
-
-	// Main query
-	mainQuery := fmt.Sprintf(`
-WITH %scurrent_period AS (
-    SELECT task_id, SUM(duration) AS total_duration, 
-           string_agg(DISTINCT NULLIF(description, ''), '; ' ORDER BY NULLIF(description, '')) AS descriptions
-    FROM time_entries
-    WHERE date::date >= '%s'::date AND date::date <= '%s'::date %s
-    GROUP BY task_id
-),
-previous_period AS (
-    SELECT task_id, SUM(duration) AS total_duration
-    FROM time_entries
-    WHERE date::date >= '%s'::date AND date::date <= '%s'::date %s
-    GROUP BY task_id
-),
-days_worked AS (
-    SELECT task_id, COUNT(DISTINCT date::date) AS days_worked
-    FROM time_entries
-    WHERE date::date >= '%s'::date AND date::date <= '%s'::date %s
-    GROUP BY task_id
-)
-SELECT 
-    COALESCE(tc.task_id, tp.task_id) AS task_id,
-    t.parent_id,
-    t.name,
-    COALESCE(tc.total_duration, 0) AS current_duration, 
-    COALESCE(tp.total_duration, 0) AS previous_duration,
-    COALESCE(dw.days_worked, 0) AS days_worked,
-    COALESCE(tc.descriptions, '') AS descriptions
-FROM current_period tc
-FULL OUTER JOIN previous_period tp ON tc.task_id = tp.task_id
-LEFT JOIN days_worked dw ON COALESCE(tc.task_id, tp.task_id) = dw.task_id
-LEFT JOIN tasks t ON COALESCE(tc.task_id, tp.task_id) = t.task_id
-WHERE COALESCE(tc.total_duration, 0) > 0
-  AND t.task_id IS NOT NULL
-ORDER BY COALESCE(tc.total_duration, 0) DESC;`,
-		projectCTE,
-		dateRanges.Current.Start, dateRanges.Current.End, timeEntriesFilter,
-		dateRanges.Previous.Start, dateRanges.Previous.End, timeEntriesFilter,
-		dateRanges.Current.Start, dateRanges.Current.End, timeEntriesFilter)
-
-	rows, err := db.Query(mainQuery, args...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query dynamic task time entries: %w", err)
-	}
-	defer rows.Close()
-
-	var taskInfos []TaskUpdateInfo
-	for rows.Next() {
-		var taskID, parentID, currentDuration, previousDuration, daysWorked int
-		var name, descriptions string
-		err := rows.Scan(&taskID, &parentID, &name, &currentDuration, &previousDuration, &daysWorked, &descriptions)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan dynamic task time entry row: %w", err)
-		}
-
-		comments := []string{}
-		if descriptions != "" {
-			comments = strings.Split(descriptions, "; ")
-		}
-
-		userBreakdown := userBreakdowns[taskID]
-		if userBreakdown == nil {
-			userBreakdown = make(map[int]UserTimeContribution)
-		}
-
-		taskInfo := TaskUpdateInfo{
-			TaskID:         taskID,
-			ParentID:       parentID,
-			Name:           name,
-			CurrentPeriod:  dateRanges.Current.Label,
-			CurrentTime:    formatDuration(currentDuration),
-			PreviousPeriod: dateRanges.Previous.Label,
-			PreviousTime:   formatDuration(previousDuration),
-			DaysWorked:     daysWorked,
-			Comments:       comments,
-			UserBreakdown:  userBreakdown,
-		}
-
-		taskInfos = append(taskInfos, taskInfo)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating rows: %w", err)
-	}
-
-	logger.Debugf("Found %d dynamic task updates with project filtering for period: %s", len(taskInfos), dateRanges.Current.Label)
-	return taskInfos, nil
 }
