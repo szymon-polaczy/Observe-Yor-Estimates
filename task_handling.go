@@ -99,14 +99,20 @@ func getFilteredTasksWithTimeout(startTime time.Time, endTime time.Time, project
 	var query string
 	var args []interface{}
 
-	if len(projectNames) > 0 {
-		for i, projectName := range projectNames {
-			projectNames[i] = strings.ToLower(projectName)
+	// Filter out empty project names and check if we have valid project names
+	validProjectNames := make([]string, 0)
+	for _, projectName := range projectNames {
+		projectName = strings.TrimSpace(projectName)
+		if projectName != "" {
+			validProjectNames = append(validProjectNames, strings.ToLower(projectName))
 		}
+	}
+
+	if len(validProjectNames) > 0 {
 
 		// Build dynamic placeholders for IN clause
-		placeholders := make([]string, len(projectNames))
-		for i := range projectNames {
+		placeholders := make([]string, len(validProjectNames))
+		for i := range validProjectNames {
 			placeholders[i] = fmt.Sprintf("$%d", i+3) // Start from $3 since $1,$2 are dates
 		}
 		inClause := strings.Join(placeholders, ",")
@@ -133,11 +139,11 @@ func getFilteredTasksWithTimeout(startTime time.Time, endTime time.Time, project
 			THEN te.duration 
 			ELSE 0 
 		END), 0) > 0
-		ORDER BY t.name;`, inClause, len(projectNames)+3, len(projectNames)+4)
+		ORDER BY t.name;`, inClause, len(validProjectNames)+3, len(validProjectNames)+4)
 
 		// Build args array with individual project names
 		args = []interface{}{startDateStr, endDateStr}
-		for _, projectName := range projectNames {
+		for _, projectName := range validProjectNames {
 			args = append(args, projectName)
 		}
 		args = append(args, startDateStr, endDateStr)
