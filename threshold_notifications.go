@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -42,36 +43,56 @@ func checkThresholdNotifications(db *sql.DB, updatedTaskIDs []int) error {
 func detectThresholdCrossings(db *sql.DB, taskIDs []int) ([]ThresholdAlert, error) {
 	logger := GetGlobalLogger()
 
-	// Get recent time entries for these tasks (last 7 days to calculate usage)
+	// Get recent time entries for these tasks
 	now := time.Now()
-	startDate := now.AddDate(0, 0, -7).Format("2006-01-02")
+	startDate := now.AddDate(0, 0, -1).Format("2006-01-02")
 	endDate := now.Format("2006-01-02")
 
-	// Query to get task usage information (similar to main task handling)
-	query := `
+	// Build dynamic placeholders for task IDs
+	if len(taskIDs) == 0 {
+		return []ThresholdAlert{}, nil
+	}
+
+	placeholders := make([]string, len(taskIDs))
+	args := make([]interface{}, 0, len(taskIDs)+4)
+
+	// Add task IDs to args and create placeholders
+	for i, taskID := range taskIDs {
+		placeholders[i] = fmt.Sprintf("$%d", i+1+2) // +2 because we add 2 date parameters
+		args = append(args, taskID)
+	}
+
+	// Add date parameters
+	args = append(args, startDate, endDate)
+
+	// Build query with dynamic IN clause
+	inClause := strings.Join(placeholders, ",")
+	startDateParam := len(taskIDs) + 1
+	endDateParam := len(taskIDs) + 2
+	query := fmt.Sprintf(`
 		SELECT 
 			t.task_id,
 			t.parent_id,
 			t.name,
 			COALESCE(SUM(CASE 
-				WHEN te.date >= $2 AND te.date <= $3
+				WHEN te.date >= $1 AND te.date <= $2
 				THEN te.duration 
 				ELSE 0 
 			END), 0) as current_period_duration,
 			COALESCE(SUM(te.duration), 0) as total_duration
 		FROM tasks t
 		LEFT JOIN time_entries te ON t.task_id = te.task_id
-		WHERE t.task_id = ANY($1)
+		WHERE t.task_id IN (%s)
 		GROUP BY t.task_id, t.parent_id, t.name
 		HAVING COALESCE(SUM(CASE 
-			WHEN te.date >= $4 AND te.date <= $5
+			WHEN te.date >= $%d AND te.date <= $%d
 			THEN te.duration 
 			ELSE 0 
 		END), 0) > 0
 		ORDER BY t.name
-	`
+	`, inClause, startDateParam, endDateParam)
 
-	rows, err := db.Query(query, taskIDs, startDate, endDate, startDate, endDate)
+	rows, err := db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query task usage: %w", err)
 	}
