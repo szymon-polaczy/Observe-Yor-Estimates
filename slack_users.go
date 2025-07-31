@@ -167,30 +167,6 @@ func SyncSlackUsersToDatabase() error {
 		currentUserIDs[i] = user.ID
 	}
 
-	// This is a bit complex with PostgreSQL, but we'll mark users as deleted
-	// if they weren't in this sync (they may have been removed from workspace)
-	/*if len(currentUserIDs) > 0 {
-		// Create placeholders for the IN clause
-		placeholders := make([]string, len(currentUserIDs))
-		args := make([]interface{}, len(currentUserIDs)+1)
-		for i, userID := range currentUserIDs {
-			placeholders[i] = fmt.Sprintf("$%d", i+1)
-			args[i] = userID
-		}
-		args[len(currentUserIDs)] = syncTime
-
-		markDeletedQuery := fmt.Sprintf(`
-			UPDATE slack_users
-			SET deleted = true, last_sync = $%d
-			WHERE slack_user_id NOT IN (%s) AND deleted = false
-		`, len(currentUserIDs)+1, fmt.Sprintf("%s", placeholders))
-
-		_, err = tx.Exec(markDeletedQuery, args...)
-		if err != nil {
-			logger.Errorf("Failed to mark absent users as deleted: %v", err)
-		}
-	}*/
-
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit transaction: %v", err)
 	}
