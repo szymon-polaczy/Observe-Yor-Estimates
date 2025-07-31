@@ -267,9 +267,28 @@ func createThresholdNotificationsTable(db *sql.DB) error {
 	return err
 }
 
+type project struct {
+	taskID int
+	name   string
+}
+
 func populateProjectsFromTasks(db *sql.DB) error {
 	logger := GetGlobalLogger()
 
+	// Check if projects table already has data to avoid unnecessary work
+	var projectCount int
+	countQuery := `SELECT COUNT(*) FROM projects`
+	if err := db.QueryRow(countQuery).Scan(&projectCount); err != nil {
+		return fmt.Errorf("failed to count existing projects: %w", err)
+	}
+
+	// If projects already exist, skip population
+	if projectCount > 0 {
+		logger.Debugf("Projects table already has %d entries, skipping population", projectCount)
+		return nil
+	}
+
+	// Get all project-level tasks in one query
 	query := `
 		SELECT DISTINCT task_id, name
 		FROM tasks
@@ -283,36 +302,71 @@ func populateProjectsFromTasks(db *sql.DB) error {
 	}
 	defer rows.Close()
 
-	projectCount := 0
-	for rows.Next() {
-		var taskID int
-		var name string
+	// Collect all projects first for batch insert
+	var projects []project
 
-		if err := rows.Scan(&taskID, &name); err != nil {
+	for rows.Next() {
+		var p project
+		if err := rows.Scan(&p.taskID, &p.name); err != nil {
 			logger.Warnf("Failed to scan project row: %v", err)
 			continue
 		}
-
-		insertQuery := `
-			INSERT INTO projects (name, timecamp_task_id) 
-			VALUES ($1, $2) 
-			ON CONFLICT (timecamp_task_id) DO NOTHING
-		`
-
-		if _, err := db.Exec(insertQuery, name, taskID); err != nil {
-			logger.Warnf("Failed to insert project %s (task_id: %d): %v", name, taskID, err)
-			continue
-		}
-
-		projectCount++
+		projects = append(projects, p)
 	}
 
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("error iterating project rows: %w", err)
 	}
 
-	logger.Infof("Successfully populated %d projects from task hierarchy", projectCount)
+	if len(projects) == 0 {
+		logger.Debug("No projects found to populate")
+		return nil
+	}
+
+	// Use batch insert for better performance
+	insertedCount := 0
+	batchSize := 50 // Process in batches to avoid too large transactions
+
+	for i := 0; i < len(projects); i += batchSize {
+		end := i + batchSize
+		if end > len(projects) {
+			end = len(projects)
+		}
+
+		batch := projects[i:end]
+		if err := insertProjectBatch(db, batch); err != nil {
+			logger.Warnf("Failed to insert project batch %d-%d: %v", i, end-1, err)
+			continue
+		}
+		insertedCount += len(batch)
+	}
+
+	logger.Infof("Successfully populated %d projects from task hierarchy", insertedCount)
 	return nil
+}
+
+func insertProjectBatch(db *sql.DB, projects []project) error {
+	if len(projects) == 0 {
+		return nil
+	}
+
+	// Build multi-row insert query
+	valueStrings := make([]string, 0, len(projects))
+	valueArgs := make([]interface{}, 0, len(projects)*2)
+	
+	for i, p := range projects {
+		valueStrings = append(valueStrings, fmt.Sprintf("($%d, $%d)", i*2+1, i*2+2))
+		valueArgs = append(valueArgs, p.name, p.taskID)
+	}
+
+	query := fmt.Sprintf(`
+		INSERT INTO projects (name, timecamp_task_id) 
+		VALUES %s 
+		ON CONFLICT (timecamp_task_id) DO NOTHING`,
+		strings.Join(valueStrings, ","))
+
+	_, err := db.Exec(query, valueArgs...)
+	return err
 }
 
 func createSlackUsersTable(db *sql.DB) error {
