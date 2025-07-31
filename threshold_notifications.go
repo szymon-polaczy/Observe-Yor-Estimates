@@ -54,28 +54,26 @@ func detectThresholdCrossings(db *sql.DB, taskIDs []int) ([]ThresholdAlert, erro
 	}
 
 	placeholders := make([]string, len(taskIDs))
-	args := make([]interface{}, 0, len(taskIDs)+4)
+	args := make([]interface{}, 0, len(taskIDs)+2)
 
+	// Add date parameters first
+	args = append(args, startDate, endDate)
+	
 	// Add task IDs to args and create placeholders
 	for i, taskID := range taskIDs {
-		placeholders[i] = fmt.Sprintf("$%d", i+1+2) // +2 because we add 2 date parameters
+		placeholders[i] = fmt.Sprintf("$%d", i+3) // +3 because $1 and $2 are dates
 		args = append(args, taskID)
 	}
 
-	// Add date parameters
-	args = append(args, startDate, endDate)
-
 	// Build query with dynamic IN clause
 	inClause := strings.Join(placeholders, ",")
-	startDateParam := len(taskIDs) + 1
-	endDateParam := len(taskIDs) + 2
 	query := fmt.Sprintf(`
 		SELECT 
 			t.task_id,
 			t.parent_id,
 			t.name,
 			COALESCE(SUM(CASE 
-				WHEN te.date >= $1 AND te.date <= $2
+				WHEN te.date >= $1::text AND te.date <= $2::text
 				THEN te.duration 
 				ELSE 0 
 			END), 0) as current_period_duration,
@@ -85,12 +83,12 @@ func detectThresholdCrossings(db *sql.DB, taskIDs []int) ([]ThresholdAlert, erro
 		WHERE t.task_id IN (%s)
 		GROUP BY t.task_id, t.parent_id, t.name
 		HAVING COALESCE(SUM(CASE 
-			WHEN te.date >= $%d AND te.date <= $%d
+			WHEN te.date >= $1::text AND te.date <= $2::text
 			THEN te.duration 
 			ELSE 0 
 		END), 0) > 0
 		ORDER BY t.name
-	`, inClause, startDateParam, endDateParam)
+	`, inClause)
 
 	rows, err := db.Query(query, args...)
 	if err != nil {
