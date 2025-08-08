@@ -155,11 +155,21 @@ func handleUnifiedOYECommand(responseWriter http.ResponseWriter, request *http.R
 		sendImmediateResponse(responseWriter, err.Error(), "ephemeral")
 		return
 	}
+	// Stricter validation: if command starts with "project" but no project parsed, return clear error
+	if projectName == "" && firstWord == "project" {
+		sendImmediateResponse(responseWriter, "Missing project name. Use: `/oye project [project name] for [period]` or `/oye project [project name] over [percentage] for [period]`", "ephemeral")
+		return
+	}
 
 	percentage, err := confirmPercentage(commandText)
 	if err != nil {
 		logger.Errorf(err.Error())
 		sendImmediateResponse(responseWriter, err.Error(), "ephemeral")
+		return
+	}
+	// Stricter validation: if command starts with "over" but no percentage parsed, return clear error
+	if percentage == "" && firstWord == "over" {
+		sendImmediateResponse(responseWriter, "Missing percentage value. Use: `/oye over [percentage] for [period]` or `/oye project [project name] over [percentage] for [period]`", "ephemeral")
 		return
 	}
 

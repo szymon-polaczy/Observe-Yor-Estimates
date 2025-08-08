@@ -257,6 +257,19 @@ func RunTestCommand(logger *Logger, fullCommand string, slackUserName string) er
 		return fmt.Errorf("failed to confirm percentage: %w", err)
 	}
 
+	// Stricter validation mirroring HTTP handler behavior
+	fields := strings.Fields(commandText)
+	firstWord := ""
+	if len(fields) > 0 {
+		firstWord = fields[0]
+	}
+	if firstWord == "project" && projectName == "" {
+		return fmt.Errorf("Missing project name. Use: `/oye project [project name] for [period]` or `/oye project [project name] over [percentage] for [period]`")
+	}
+	if firstWord == "over" && percentage == "" {
+		return fmt.Errorf("Missing percentage value. Use: `/oye over [percentage] for [period]` or `/oye project [project name] over [percentage] for [period]`")
+	}
+
 	startTime, endTime, err := confirmPeriod(commandText)
 	if err != nil {
 		return fmt.Errorf("failed to confirm period: %w", err)
