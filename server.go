@@ -187,10 +187,10 @@ func handleUnifiedOYECommand(responseWriter http.ResponseWriter, request *http.R
 		return
 	}
 
-	// Send immediate "Update in thread" response to prevent timeout
+	// Send immediate ephemeral ack to prevent timeout. We'll post the visible thread anchor via bot API.
 	initialMessage := map[string]interface{}{
-		"response_type": "in_channel",
-		"text":          "📊 Update in thread",
+		"response_type": "ephemeral",
+		"text":          "Working on it… posting an update thread shortly",
 	}
 
 	initialPayloadBytes, err := json.Marshal(initialMessage)
@@ -387,19 +387,21 @@ func sendTasksGroupedByProjectAsync(req *SlackCommandRequest, projectGroups map[
 
 	logger.Infof("Using Slack Bot API for threaded messages in channel: %s", req.ChannelID)
 
+	// Post the thread anchor via bot API and use returned ts to avoid races
+	slackClient := NewSlackAPIClient()
+	initResp, initErr := slackClient.sendSlackAPIRequestWithResponse("chat.postMessage", map[string]interface{}{
+		"channel": req.ChannelID,
+		"text":    "\U0001F4CA Update in thread",
+	})
+	if initErr != nil {
+		logger.Errorf("Failed to post initial thread message: %v", initErr)
+		return
+	}
+	threadTimestamp := initResp.Timestamp
+
 	// Get threshold values from environment variables
 	midPoint, highPoint := getThresholdValues()
 	logger.Infof("Using thresholds - MID_POINT: %.1f, HIGH_POINT: %.1f", midPoint, highPoint)
-
-	// Wait a moment for the initial message to be processed
-	time.Sleep(500 * time.Millisecond)
-
-	// Get the timestamp of the initial message for threading
-	threadTimestamp, err := getLatestMessageTimestamp(req.ChannelID)
-	if err != nil {
-		logger.Errorf("Failed to get thread timestamp: %v", err)
-		return
-	}
 
 	// Combine all projects into optimized messages
 	combinedMessages := combineProjectsIntoMessages(projectGroups)
@@ -699,44 +701,7 @@ func executeWithRetry(requestFunc func() (*http.Response, error), operation stri
 	return nil, fmt.Errorf("unexpected error in retry loop")
 }
 
-// getLatestMessageTimestamp gets the timestamp of the latest message in a channel
-func getLatestMessageTimestamp(channelID string) (string, error) {
-	logger := GetGlobalLogger()
-	slackBotToken := os.Getenv("SLACK_BOT_TOKEN")
-	if slackBotToken == "" {
-		return "", fmt.Errorf("SLACK_BOT_TOKEN not configured")
-	}
-
-	historyURL := "https://slack.com/api/conversations.history"
-	historyParams := fmt.Sprintf("channel=%s&limit=1", channelID)
-	historyReq, _ := http.NewRequest("GET", historyURL+"?"+historyParams, nil)
-	historyReq.Header.Set("Authorization", "Bearer "+slackBotToken)
-	historyReq.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{}
-	historyResp, err := client.Do(historyReq)
-	if err != nil {
-		return "", fmt.Errorf("failed to get conversation history: %v", err)
-	}
-	defer historyResp.Body.Close()
-
-	var historyData map[string]interface{}
-	if err := json.NewDecoder(historyResp.Body).Decode(&historyData); err != nil {
-		return "", fmt.Errorf("failed to decode history response: %v", err)
-	}
-
-	// Extract timestamp from the latest message
-	if messages, ok := historyData["messages"].([]interface{}); ok && len(messages) > 0 {
-		if latestMsg, ok := messages[0].(map[string]interface{}); ok {
-			if ts, ok := latestMsg["ts"].(string); ok {
-				logger.Infof("Got thread timestamp: %s", ts)
-				return ts, nil
-			}
-		}
-	}
-
-	return "", fmt.Errorf("failed to extract timestamp from response")
-}
+// Removed: getLatestMessageTimestamp - replaced by posting the thread anchor and using returned ts
 
 // sendTasksGroupedByProjectToUser sends personalized task updates to a specific user via direct message
 func sendTasksGroupedByProjectToUser(userID string, projectGroups map[string][]TaskInfo) {
