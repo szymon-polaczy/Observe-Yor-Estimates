@@ -58,7 +58,7 @@ func detectThresholdCrossings(db *sql.DB, taskIDs []int) ([]ThresholdAlert, erro
 
 	// Add date parameters first
 	args = append(args, startDate, endDate)
-	
+
 	// Add task IDs to args and create placeholders
 	for i, taskID := range taskIDs {
 		placeholders[i] = fmt.Sprintf("$%d", i+3) // +3 because $1 and $2 are dates
@@ -112,8 +112,8 @@ func detectThresholdCrossings(db *sql.DB, taskIDs []int) ([]ThresholdAlert, erro
 		currentTime := formatDuration(currentDuration)
 		totalTime := formatDuration(totalDuration)
 
-		// Parse estimation from task name (using currentTime and "0h 0m" like main system)
-		estimation := ParseTaskEstimationWithUsage(name, currentTime, "0h 0m")
+		// Parse estimation from task name using total time to calculate usage
+		estimation := ParseTaskEstimationWithUsage(name, totalTime, "0h 0m")
 		if estimation.ErrorMessage != "" {
 			logger.Debugf("Skipping task %d (%s): %s", taskID, name, estimation.ErrorMessage)
 			continue

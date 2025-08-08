@@ -226,8 +226,8 @@ func getFilteredTasksWithTimeout(startTime time.Time, endTime time.Time, project
 		task.CurrentTime = formatDuration(currentDuration)
 		task.TotalDuration = formatDuration(totalDuration)
 
-		// Parse estimation from task name and calculate usage
-		estimationInfo := ParseTaskEstimationWithUsage(task.Name, task.CurrentTime, "0h 0m")
+		// Parse estimation from task name and calculate usage based on total time spent
+		estimationInfo := ParseTaskEstimationWithUsage(task.Name, task.TotalDuration, "0h 0m")
 		task.EstimationInfo = estimationInfo
 
 		// If filtering by percentage, apply the logic
