@@ -254,118 +254,8 @@ func getFilteredTasksWithTimeout(startTime time.Time, endTime time.Time, project
 	return allTasks
 }
 
-// addCommentsToTasksWithTimeout is the same as addCommentsToTasks but with database timeout
-func addCommentsToTasksWithTimeout(tasks []TaskInfo, startTime time.Time, endTime time.Time) []TaskInfo {
-	logger := GetGlobalLogger()
-	if len(tasks) == 0 {
-		logger.Info("No tasks to add comments to")
-		return tasks
-	}
-
-	logger.Infof("Adding comments to %d tasks with timeout", len(tasks))
-
-	db, err := GetDB()
-	if err != nil {
-		logger.Errorf("Failed to get database connection for comments: %v", err)
-		return tasks
-	}
-
-	// Create context with 10 second timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	// Collect all task IDs
-	taskIDs := make([]string, 0, len(tasks))
-	taskMap := make(map[int]*TaskInfo)
-
-	for i := range tasks {
-		taskIDs = append(taskIDs, strconv.Itoa(tasks[i].TaskID))
-		taskMap[tasks[i].TaskID] = &tasks[i]
-	}
-
-	logger.Infof("Querying comments for task IDs: %v", taskIDs)
-
-	startDateStr := startTime.Format("2006-01-02")
-	endDateStr := endTime.Format("2006-01-02")
-	// Parameterize IN clause using ANY with int[] to avoid string interpolation
-	// Convert taskIDs to []int64 and pass as Postgres int array
-	intIDs := make([]int64, 0, len(taskIDs))
-	for _, idStr := range taskIDs {
-		if id, err := strconv.ParseInt(idStr, 10, 64); err == nil {
-			intIDs = append(intIDs, id)
-		}
-	}
-
-	queryWithTaskIDs := `
-        SELECT task_id, description
-        FROM time_entries 
-        WHERE task_id = ANY($1) 
-        AND date >= $2 AND date <= $3
-        AND description IS NOT NULL 
-        AND description != ''
-        ORDER BY task_id, date DESC`
-
-	rows, err := db.QueryContext(ctx, queryWithTaskIDs, pq.Array(intIDs), startDateStr, endDateStr)
-	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			logger.Errorf("Comments query timed out after 10 seconds")
-		} else {
-			logger.Errorf("Failed to query comments: %v", err)
-		}
-		return tasks
-	}
-	defer rows.Close()
-
-	// Map to collect comments by task_id
-	taskComments := make(map[int][]string)
-	commentCount := 0
-
-	for rows.Next() {
-		var taskID int
-		var description sql.NullString
-
-		if err := rows.Scan(&taskID, &description); err != nil {
-			logger.Errorf("Failed to scan comment row: %v", err)
-			continue
-		}
-
-		if description.Valid && description.String != "" {
-			logger.Infof("Found comment for task %d: %s", taskID, description.String)
-			// Split descriptions by "; " as done in existing code
-			comments := strings.Split(description.String, "; ")
-			taskComments[taskID] = append(taskComments[taskID], comments...)
-			commentCount++
-		}
-	}
-
-	logger.Infof("Found %d comment entries for %d tasks", commentCount, len(taskComments))
-
-	// Add comments to tasks and remove duplicates
-	for taskID, comments := range taskComments {
-		if task, exists := taskMap[taskID]; exists {
-			// Remove duplicates and empty strings
-			uniqueComments := make([]string, 0)
-			seen := make(map[string]bool)
-
-			for _, comment := range comments {
-				comment = strings.TrimSpace(comment)
-				if comment != "" && !seen[comment] {
-					uniqueComments = append(uniqueComments, comment)
-					seen[comment] = true
-				}
-			}
-
-			logger.Infof("Adding %d unique comments to task %d (%s)", len(uniqueComments), taskID, task.Name)
-			task.Comments = uniqueComments
-		}
-	}
-
-	logger.Infof("Completed adding comments to tasks with timeout")
-	return tasks
-}
-
-// fully AI generated
-func addCommentsToTasks(tasks []TaskInfo, startTime time.Time, endTime time.Time) []TaskInfo {
+// addCommentsToTasksCtx is the single implementation that enriches tasks with comments using the provided context
+func addCommentsToTasksCtx(ctx context.Context, tasks []TaskInfo, startTime time.Time, endTime time.Time) []TaskInfo {
 	logger := GetGlobalLogger()
 	if len(tasks) == 0 {
 		logger.Info("No tasks to add comments to")
@@ -393,8 +283,9 @@ func addCommentsToTasks(tasks []TaskInfo, startTime time.Time, endTime time.Time
 
 	startDateStr := startTime.Format("2006-01-02")
 	endDateStr := endTime.Format("2006-01-02")
-	// Parameterize IN clause using ANY with int[] to avoid string interpolation
-	intIDs := make([]int64, 0, len(tasks))
+
+	// Convert taskIDs to []int64 and pass as Postgres int array
+	intIDs := make([]int64, 0, len(taskIDs))
 	for _, idStr := range taskIDs {
 		if id, err := strconv.ParseInt(idStr, 10, 64); err == nil {
 			intIDs = append(intIDs, id)
@@ -410,9 +301,13 @@ func addCommentsToTasks(tasks []TaskInfo, startTime time.Time, endTime time.Time
         AND description != ''
         ORDER BY task_id, date DESC`
 
-	rows, err := db.Query(queryWithTaskIDs, pq.Array(intIDs), startDateStr, endDateStr)
+	rows, err := db.QueryContext(ctx, queryWithTaskIDs, pq.Array(intIDs), startDateStr, endDateStr)
 	if err != nil {
-		logger.Errorf("Failed to query comments: %v", err)
+		if ctx != nil && ctx.Err() == context.DeadlineExceeded {
+			logger.Errorf("Comments query timed out")
+		} else {
+			logger.Errorf("Failed to query comments: %v", err)
+		}
 		return tasks
 	}
 	defer rows.Close()
@@ -431,8 +326,6 @@ func addCommentsToTasks(tasks []TaskInfo, startTime time.Time, endTime time.Time
 		}
 
 		if description.Valid && description.String != "" {
-			logger.Infof("Found comment for task %d: %s", taskID, description.String)
-			// Split descriptions by "; " as done in existing code
 			comments := strings.Split(description.String, "; ")
 			taskComments[taskID] = append(taskComments[taskID], comments...)
 			commentCount++
@@ -456,11 +349,22 @@ func addCommentsToTasks(tasks []TaskInfo, startTime time.Time, endTime time.Time
 				}
 			}
 
-			logger.Infof("Adding %d unique comments to task %d (%s)", len(uniqueComments), taskID, task.Name)
 			task.Comments = uniqueComments
 		}
 	}
 
 	logger.Infof("Completed adding comments to tasks")
 	return tasks
+}
+
+// addCommentsToTasksWithTimeout wraps addCommentsToTasksCtx with a 10s timeout
+func addCommentsToTasksWithTimeout(tasks []TaskInfo, startTime time.Time, endTime time.Time) []TaskInfo {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return addCommentsToTasksCtx(ctx, tasks, startTime, endTime)
+}
+
+// fully AI generated
+func addCommentsToTasks(tasks []TaskInfo, startTime time.Time, endTime time.Time) []TaskInfo {
+	return addCommentsToTasksCtx(context.Background(), tasks, startTime, endTime)
 }
