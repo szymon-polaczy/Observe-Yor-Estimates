@@ -1,9 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
@@ -15,14 +20,21 @@ import (
 )
 
 func StartServer(logger *Logger) {
-	// Unified handler for all OYE commands
-	http.HandleFunc("/slack/oye", handleUnifiedOYECommand)
+	// Unified handler for all OYE commands (protected by Slack signature verification)
+	http.Handle("/slack/oye", slackSignatureMiddleware(http.HandlerFunc(handleUnifiedOYECommand)))
 
-	// New App Home routes
-	http.HandleFunc("/slack/events", HandleAppHome)
-	http.HandleFunc("/slack/interactive", HandleInteractiveComponents)
+	// New App Home routes (protected by Slack signature verification)
+	http.Handle("/slack/events", slackSignatureMiddleware(http.HandlerFunc(HandleAppHome)))
+	http.Handle("/slack/interactive", slackSignatureMiddleware(http.HandlerFunc(HandleInteractiveComponents)))
 
-	server := &http.Server{Addr: ":8080"}
+	server := &http.Server{
+		Addr:              ":8080",
+		ReadTimeout:       10 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20, // 1 MiB
+	}
 
 	// Goroutine for graceful shutdown
 	go func() {
@@ -41,6 +53,63 @@ func StartServer(logger *Logger) {
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		logger.Fatalf("Could not start server: %v", err)
 	}
+}
+
+// slackSignatureMiddleware verifies Slack request signatures using the signing secret.
+// It rejects requests if the signature is invalid or missing, or if the timestamp is too old.
+func slackSignatureMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		logger := GetGlobalLogger()
+		signingSecret := os.Getenv("SLACK_SIGNING_SECRET")
+		if signingSecret == "" {
+			logger.Error("SLACK_SIGNING_SECRET not configured; rejecting Slack request")
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		timestamp := r.Header.Get("X-Slack-Request-Timestamp")
+		signature := r.Header.Get("X-Slack-Signature")
+		if timestamp == "" || signature == "" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		// Prevent replay attacks: only allow requests within 5 minutes
+		tsInt, err := strconv.ParseInt(timestamp, 10, 64)
+		if err != nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		now := time.Now().Unix()
+		if now-tsInt > 60*5 || tsInt-now > 60*5 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		// Read and restore body for downstream handler
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		r.Body.Close()
+		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+
+		// Build base string and compute HMAC SHA256
+		base := "v0:" + timestamp + ":" + string(bodyBytes)
+		mac := hmac.New(sha256.New, []byte(signingSecret))
+		mac.Write([]byte(base))
+		expected := "v0=" + hex.EncodeToString(mac.Sum(nil))
+
+		// Constant-time compare
+		if !hmac.Equal([]byte(expected), []byte(signature)) {
+			logger.Warnf("Invalid Slack signature for %s", r.URL.Path)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 // handleUnifiedOYECommand handles the new unified /oye command
@@ -152,12 +221,12 @@ func confirmProject(commandText string) (string, error) {
 	}
 
 	if projectName == "" {
-		return "", fmt.Errorf("Failed to parse project name from command")
+		return "", fmt.Errorf("failed to parse project name from command")
 	}
 
 	db, err := GetDB()
 	if err != nil {
-		return "", fmt.Errorf("Failed to get database: %v", err)
+		return "", fmt.Errorf("failed to get database: %v", err)
 	}
 
 	_, err = FindProjectsByName(db, projectName)
@@ -184,7 +253,7 @@ func confirmPercentage(commandText string) (string, error) {
 	}
 
 	if percentage == "" {
-		return "", fmt.Errorf("Failed to parse percentage from command")
+		return "", fmt.Errorf("failed to parse percentage from command")
 	}
 
 	return percentage, nil
@@ -207,7 +276,7 @@ func confirmPeriod(commandText string) (time.Time, time.Time, error) {
 	}
 
 	if period == "" {
-		return time.Time{}, time.Time{}, fmt.Errorf("Failed to parse period from command")
+		return time.Time{}, time.Time{}, fmt.Errorf("failed to parse period from command")
 	}
 
 	logger.Infof("Parsing period: '%s'", period)
@@ -222,9 +291,9 @@ func confirmPeriod(commandText string) (time.Time, time.Time, error) {
 			days := matches[1]
 			// Convert to int to validate it's a positive number
 			if daysInt, err := strconv.Atoi(days); err != nil {
-				return time.Time{}, time.Time{}, fmt.Errorf("Invalid number in 'last %s days': not a valid number", days)
+				return time.Time{}, time.Time{}, fmt.Errorf("invalid number in 'last %s days': not a valid number", days)
 			} else if daysInt <= 0 {
-				return time.Time{}, time.Time{}, fmt.Errorf("Invalid number in 'last %s days': must be a positive number", days)
+				return time.Time{}, time.Time{}, fmt.Errorf("invalid number in 'last %s days': must be a positive number", days)
 			} else {
 				// Start: x days ago at 0:00, End: today at 23:59
 				startTime = now.AddDate(0, 0, -daysInt).Truncate(24 * time.Hour)
@@ -278,7 +347,7 @@ func confirmPeriod(commandText string) (time.Time, time.Time, error) {
 		startTime = firstDayLastMonth
 		endTime = time.Date(lastDayLastMonth.Year(), lastDayLastMonth.Month(), lastDayLastMonth.Day(), 23, 59, 59, 999999999, lastDayLastMonth.Location())
 	default:
-		return time.Time{}, time.Time{}, fmt.Errorf("Invalid period: %s", period)
+		return time.Time{}, time.Time{}, fmt.Errorf("invalid period: %s", period)
 	}
 
 	logger.Infof("Period '%s' resolved to: %s to %s", period, startTime.Format("2006-01-02 15:04:05"), endTime.Format("2006-01-02 15:04:05"))

@@ -489,8 +489,6 @@ func HandleInteractiveComponents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logger.Infof("Raw payload: %s", payloadStr)
-
 	// Try to unmarshal as a generic map first to see the structure
 	var genericPayload map[string]interface{}
 	if err := json.Unmarshal([]byte(payloadStr), &genericPayload); err != nil {

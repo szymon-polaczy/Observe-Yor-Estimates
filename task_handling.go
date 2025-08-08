@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	pq "github.com/lib/pq"
 )
 
 // groupTasksByProject groups tasks by project name
@@ -285,18 +287,25 @@ func addCommentsToTasksWithTimeout(tasks []TaskInfo, startTime time.Time, endTim
 
 	startDateStr := startTime.Format("2006-01-02")
 	endDateStr := endTime.Format("2006-01-02")
-	placeholderStr := strings.Join(taskIDs, ",")
+	// Parameterize IN clause using ANY with int[] to avoid string interpolation
+	// Convert taskIDs to []int64 and pass as Postgres int array
+	intIDs := make([]int64, 0, len(taskIDs))
+	for _, idStr := range taskIDs {
+		if id, err := strconv.ParseInt(idStr, 10, 64); err == nil {
+			intIDs = append(intIDs, id)
+		}
+	}
 
-	queryWithTaskIDs := fmt.Sprintf(`
-		SELECT task_id, description
-		FROM time_entries 
-		WHERE task_id IN (%s) 
-		AND date >= '%s' AND date <= '%s'
-		AND description IS NOT NULL 
-		AND description != ''
-		ORDER BY task_id, date DESC`, placeholderStr, startDateStr, endDateStr)
+	queryWithTaskIDs := `
+        SELECT task_id, description
+        FROM time_entries 
+        WHERE task_id = ANY($1) 
+        AND date >= $2 AND date <= $3
+        AND description IS NOT NULL 
+        AND description != ''
+        ORDER BY task_id, date DESC`
 
-	rows, err := db.QueryContext(ctx, queryWithTaskIDs)
+	rows, err := db.QueryContext(ctx, queryWithTaskIDs, pq.Array(intIDs), startDateStr, endDateStr)
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			logger.Errorf("Comments query timed out after 10 seconds")
@@ -384,18 +393,24 @@ func addCommentsToTasks(tasks []TaskInfo, startTime time.Time, endTime time.Time
 
 	startDateStr := startTime.Format("2006-01-02")
 	endDateStr := endTime.Format("2006-01-02")
-	placeholderStr := strings.Join(taskIDs, ",")
+	// Parameterize IN clause using ANY with int[] to avoid string interpolation
+	intIDs := make([]int64, 0, len(tasks))
+	for _, idStr := range taskIDs {
+		if id, err := strconv.ParseInt(idStr, 10, 64); err == nil {
+			intIDs = append(intIDs, id)
+		}
+	}
 
-	queryWithTaskIDs := fmt.Sprintf(`
-		SELECT task_id, description
-		FROM time_entries 
-		WHERE task_id IN (%s) 
-		AND date >= '%s' AND date <= '%s'
-		AND description IS NOT NULL 
-		AND description != ''
-		ORDER BY task_id, date DESC`, placeholderStr, startDateStr, endDateStr)
+	queryWithTaskIDs := `
+        SELECT task_id, description
+        FROM time_entries 
+        WHERE task_id = ANY($1) 
+        AND date >= $2 AND date <= $3
+        AND description IS NOT NULL 
+        AND description != ''
+        ORDER BY task_id, date DESC`
 
-	rows, err := db.Query(queryWithTaskIDs)
+	rows, err := db.Query(queryWithTaskIDs, pq.Array(intIDs), startDateStr, endDateStr)
 	if err != nil {
 		logger.Errorf("Failed to query comments: %v", err)
 		return tasks

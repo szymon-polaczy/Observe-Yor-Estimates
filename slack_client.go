@@ -58,8 +58,7 @@ func (s *SlackAPIClient) sendSlackAPIRequestWithResponse(endpoint string, payloa
 		return nil, fmt.Errorf("error reading response body: %w", readErr)
 	}
 
-	s.logger.Infof("Slack API response status: %d, body length: %d", resp.StatusCode, len(bodyBytes))
-	s.logger.Infof("Slack API response body: %s", string(bodyBytes))
+	s.logger.Infof("Slack API %s status: %d", endpoint, resp.StatusCode)
 
 	var slackResp SlackAPIResponse
 	if err := json.Unmarshal(bodyBytes, &slackResp); err != nil {
