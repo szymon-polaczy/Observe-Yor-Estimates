@@ -652,13 +652,27 @@ func executeWithRetry(requestFunc func() (*http.Response, error), operation stri
 		}
 
 		if resp.StatusCode == 429 {
-			// Rate limited, wait and retry
+			// Rate limited, honor Retry-After header and retry
 			if attempt == maxRetries {
 				return resp, fmt.Errorf("rate limited after %d attempts", maxRetries+1)
 			}
-			logger.Warnf("Rate limited (429) during %s, waiting 1 second before retry %d/%d", operation, attempt+1, maxRetries)
+
+			retryAfter := resp.Header.Get("Retry-After")
+			waitDuration := time.Second
+			if retryAfter != "" {
+				if seconds, err := strconv.Atoi(retryAfter); err == nil && seconds >= 0 {
+					waitDuration = time.Duration(seconds) * time.Second
+				} else if retryTime, err := http.ParseTime(retryAfter); err == nil {
+					now := time.Now()
+					if retryTime.After(now) {
+						waitDuration = retryTime.Sub(now)
+					}
+				}
+			}
+
+			logger.Warnf("Rate limited (429) during %s, waiting %v before retry %d/%d", operation, waitDuration, attempt+1, maxRetries)
 			resp.Body.Close()
-			time.Sleep(time.Second)
+			time.Sleep(waitDuration)
 			continue
 		}
 
@@ -719,6 +733,18 @@ func sendTasksGroupedByProjectToUser(userID string, projectGroups map[string][]T
 
 	logger.Infof("Sending direct message to user %s", userID)
 
+	// Post initial message to create a thread anchor (same UX as slash command flow)
+	slackClient := NewSlackAPIClient()
+	initResp, initErr := slackClient.sendSlackAPIRequestWithResponse("chat.postMessage", map[string]interface{}{
+		"channel": userID,
+		"text":    "\U0001F4CA Update in thread",
+	})
+	if initErr != nil {
+		logger.Errorf("Failed to post initial thread message to user %s: %v", userID, initErr)
+		return
+	}
+	threadTs := initResp.Timestamp
+
 	// Get threshold values from environment variables
 	midPoint, highPoint := getThresholdValues()
 	logger.Infof("Using thresholds - MID_POINT: %.1f, HIGH_POINT: %.1f", midPoint, highPoint)
@@ -729,7 +755,7 @@ func sendTasksGroupedByProjectToUser(userID string, projectGroups map[string][]T
 	// Send all combined messages as direct messages
 	for i, messageBlocks := range combinedMessages {
 		logger.Infof("Sending combined message %d/%d to user %s with %d blocks", i+1, len(combinedMessages), userID, len(messageBlocks))
-		if err := sendSlackMessage(userID, messageBlocks, ""); err != nil {
+		if err := sendSlackMessage(userID, messageBlocks, threadTs); err != nil {
 			logger.Errorf("Failed to send combined message %d to user %s: %v", i+1, userID, err)
 			continue
 		}
