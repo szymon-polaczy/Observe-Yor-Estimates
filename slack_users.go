@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -37,7 +38,7 @@ func GetAllSlackUsers() ([]SlackUser, error) {
 	logger := GetGlobalLogger()
 	slackBotToken := os.Getenv("SLACK_BOT_TOKEN")
 	if slackBotToken == "" {
-		return nil, fmt.Errorf("SLACK_BOT_TOKEN not configured")
+		return nil, fmt.Errorf("slack bot token not configured")
 	}
 
 	logger.Info("Fetching all Slack workspace users")
@@ -59,7 +60,7 @@ func GetAllSlackUsers() ([]SlackUser, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Slack API returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("slack api returned status %d", resp.StatusCode)
 	}
 
 	var slackResp struct {
@@ -73,7 +74,7 @@ func GetAllSlackUsers() ([]SlackUser, error) {
 	}
 
 	if !slackResp.OK {
-		return nil, fmt.Errorf("Slack API error: %s", slackResp.Error)
+		return nil, fmt.Errorf("slack api error: %s", slackResp.Error)
 	}
 
 	// Convert to our SlackUser type and filter active users
@@ -226,4 +227,35 @@ func GetSlackUsersFromDatabase() ([]SlackUser, error) {
 
 	logger.Infof("Retrieved %d active users from database", len(users))
 	return users, nil
+}
+
+// FindSlackUserIDByName finds a Slack user ID by matching real name or display name (case-insensitive)
+func FindSlackUserIDByName(db *sql.DB, name string) (string, error) {
+	if strings.TrimSpace(name) == "" {
+		return "", fmt.Errorf("empty name")
+	}
+	query := `
+        SELECT slack_user_id, real_name, display_name
+        FROM slack_users
+        WHERE deleted = false AND is_bot = false
+    `
+	rows, err := db.Query(query)
+	if err != nil {
+		return "", fmt.Errorf("failed to query slack users: %w", err)
+	}
+	defer rows.Close()
+
+	nameLower := strings.ToLower(strings.TrimSpace(name))
+	for rows.Next() {
+		var id string
+		var realName, displayName sql.NullString
+		if err := rows.Scan(&id, &realName, &displayName); err != nil {
+			continue
+		}
+		if (realName.Valid && strings.ToLower(realName.String) == nameLower) ||
+			(displayName.Valid && strings.ToLower(displayName.String) == nameLower) {
+			return id, nil
+		}
+	}
+	return "", fmt.Errorf("user not found: %s", name)
 }

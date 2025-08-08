@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -54,9 +55,31 @@ func handleCliCommands(args []string, logger *Logger) {
 		return
 	}
 	command := args[0]
+
+	// Support --test-command=<command> format
+	if strings.HasPrefix(command, "--test-command=") {
+		testCmd := strings.TrimPrefix(command, "--test-command=")
+		if err := RunTestCommand(logger, testCmd, "Szymon"); err != nil {
+			logger.Errorf("Test command failed: %v", err)
+			os.Exit(1)
+		}
+		logger.Info("Test command completed successfully")
+		return
+	}
+
 	switch command {
 	case "--help", "-h", "help":
 		showHelp()
+	case "--test-command":
+		if len(args) < 2 {
+			logger.Errorf("missing command string for --test-command")
+			os.Exit(1)
+		}
+		if err := RunTestCommand(logger, args[1], "Szymon"); err != nil {
+			logger.Errorf("Test command failed: %v", err)
+			os.Exit(1)
+		}
+		logger.Info("Test command completed successfully")
 	case "full-sync":
 		logger.Info("Running full synchronization command")
 		if err := FullSyncAll(); err != nil {
@@ -212,4 +235,55 @@ func showHelp() {
 	fmt.Println("Usage: observe-yor-estimates [command]")
 	fmt.Println("\nAvailable commands:")
 	fmt.Println("  full-sync                - Full sync of all tasks and time entries")
+	fmt.Println("  --test-command=\"/oye ...\"  - Run a test slash command locally and DM the result to 'Szymon'")
+}
+
+// RunTestCommand simulates handling a Slack slash command locally and sends results via DM to the given Slack user name
+func RunTestCommand(logger *Logger, fullCommand string, slackUserName string) error {
+	logger.Infof("Running test command: %s", fullCommand)
+
+	// Normalize like the HTTP path
+	commandText := strings.ToLower(strings.TrimSpace(fullCommand))
+	commandText = strings.Replace(commandText, "/oye", "", 1)
+
+	// Parse inputs using the same helpers as HTTP path
+	projectName, err := confirmProject(commandText)
+	if err != nil {
+		return fmt.Errorf("failed to confirm project: %w", err)
+	}
+
+	percentage, err := confirmPercentage(commandText)
+	if err != nil {
+		return fmt.Errorf("failed to confirm percentage: %w", err)
+	}
+
+	startTime, endTime, err := confirmPeriod(commandText)
+	if err != nil {
+		return fmt.Errorf("failed to confirm period: %w", err)
+	}
+
+	// Prepare data like the async path
+	filteredTasks := getFilteredTasksWithTimeout(startTime, endTime, []string{projectName}, percentage)
+	if len(filteredTasks) == 0 {
+		logger.Info("No tasks found for test command")
+		return nil
+	}
+
+	filteredTasks = addCommentsToTasksWithTimeout(filteredTasks, startTime, endTime)
+	grouped := groupTasksByProject(filteredTasks)
+
+	// Lookup Slack user ID by name (real or display)
+	db, err := GetDB()
+	if err != nil {
+		return fmt.Errorf("failed to get database: %w", err)
+	}
+
+	userID, err := FindSlackUserIDByName(db, slackUserName)
+	if err != nil {
+		return fmt.Errorf("failed to find slack user '%s': %w", slackUserName, err)
+	}
+
+	// Send via DM path
+	sendTasksGroupedByProjectToUser(userID, grouped)
+	return nil
 }
