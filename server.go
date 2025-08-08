@@ -141,8 +141,15 @@ func handleUnifiedOYECommand(responseWriter http.ResponseWriter, request *http.R
 	//string replace /oye with ""
 	commandText = strings.Replace(commandText, "/oye", "", 1)
 
+	// Guard against empty command (e.g., user typed just /oye)
+	fields := strings.Fields(commandText)
+	if len(fields) == 0 {
+		sendUnifiedHelp(responseWriter)
+		return
+	}
+
 	//if the first word is not in the allowed commands, send help
-	firstWord := strings.Fields(commandText)[0]
+	firstWord := fields[0]
 	allowedCommands := []string{"project", "for", "over"}
 	if !slices.Contains(allowedCommands, firstWord) {
 		sendUnifiedHelp(responseWriter)
