@@ -76,7 +76,8 @@ func getAllTasks(db *sql.DB) (map[int]Task, error) {
 	return tasks, nil
 }
 
-// getFilteredTasksWithTimeout is the same as getFilteredTasks but with database timeout
+// getFilteredTasksWithTimeout gets tasks with time entries for a period, optionally filtered by projects
+// If projectNames is empty, returns all tasks with time entries in the period
 func getFilteredTasksWithTimeout(startTime time.Time, endTime time.Time, projectNames []string, percentage string) []TaskInfo {
 	logger := GetGlobalLogger()
 	logger.Infof("getFilteredTasksWithTimeout called with: startTime=%s, endTime=%s, projectNames='%s', percentage='%s'",

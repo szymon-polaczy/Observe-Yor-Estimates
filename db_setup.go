@@ -154,6 +154,16 @@ func createAllTables(db *sql.DB) error {
 		}
 	}
 
+	// Run database migrations for existing installations
+	if err := runDatabaseMigrations(db); err != nil {
+		return fmt.Errorf("failed to run database migrations: %w", err)
+	}
+
+	// Create strategic indexes for performance
+	if err := createStrategicIndexes(db); err != nil {
+		return fmt.Errorf("failed to create database indexes: %w", err)
+	}
+
 	return populateProjectsFromTasks(db)
 }
 
@@ -166,7 +176,9 @@ func createTasksTable(db *sql.DB) error {
 		level INTEGER NOT NULL,
 		root_group_id INTEGER NOT NULL,
 		archived INTEGER DEFAULT 0,
-		project_id INTEGER REFERENCES projects(id)
+		project_id INTEGER REFERENCES projects(id),
+		used_time DECIMAL(10,2) DEFAULT 0,
+		estimated_time DECIMAL(10,2) DEFAULT 0
 	)`
 
 	_, err := db.Exec(query)
@@ -382,4 +394,125 @@ func createSlackUsersTable(db *sql.DB) error {
 
 	_, err := db.Exec(query)
 	return err
+}
+
+// runDatabaseMigrations handles schema migrations for existing databases
+func runDatabaseMigrations(db *sql.DB) error {
+	logger := GetGlobalLogger()
+	
+	// Migration 001: Add used_time and estimated_time columns to tasks table
+	if err := addTaskTimeColumns(db); err != nil {
+		return fmt.Errorf("failed to add time columns to tasks table: %w", err)
+	}
+	
+	logger.Debug("Database migrations completed successfully")
+	return nil
+}
+
+// addTaskTimeColumns adds used_time and estimated_time columns to tasks table if they don't exist
+func addTaskTimeColumns(db *sql.DB) error {
+	logger := GetGlobalLogger()
+	
+	// Check if columns already exist
+	checkQuery := `SELECT column_name FROM information_schema.columns 
+		WHERE table_name = 'tasks' AND column_name IN ('used_time', 'estimated_time')`
+	
+	rows, err := db.Query(checkQuery)
+	if err != nil {
+		return fmt.Errorf("failed to check existing columns: %w", err)
+	}
+	defer rows.Close()
+	
+	existingColumns := make(map[string]bool)
+	for rows.Next() {
+		var columnName string
+		if err := rows.Scan(&columnName); err == nil {
+			existingColumns[columnName] = true
+		}
+	}
+	
+	// Add used_time column if it doesn't exist
+	if !existingColumns["used_time"] {
+		alterQuery := `ALTER TABLE tasks ADD COLUMN used_time DECIMAL(10,2) DEFAULT 0`
+		if _, err := db.Exec(alterQuery); err != nil {
+			return fmt.Errorf("failed to add used_time column: %w", err)
+		}
+		logger.Debug("Added used_time column to tasks table")
+	}
+	
+	// Add estimated_time column if it doesn't exist
+	if !existingColumns["estimated_time"] {
+		alterQuery := `ALTER TABLE tasks ADD COLUMN estimated_time DECIMAL(10,2) DEFAULT 0`
+		if _, err := db.Exec(alterQuery); err != nil {
+			return fmt.Errorf("failed to add estimated_time column: %w", err)
+		}
+		logger.Debug("Added estimated_time column to tasks table")
+	}
+	
+	return nil
+}
+
+// createStrategicIndexes creates database indexes for better query performance
+func createStrategicIndexes(db *sql.DB) error {
+	logger := GetGlobalLogger()
+	
+	// Define indexes for better performance
+	indexes := []struct {
+		name  string
+		query string
+	}{
+		{
+			"idx_time_entries_task_date",
+			"CREATE INDEX IF NOT EXISTS idx_time_entries_task_date ON time_entries(task_id, date)",
+		},
+		{
+			"idx_time_entries_user_date",
+			"CREATE INDEX IF NOT EXISTS idx_time_entries_user_date ON time_entries(user_id, date)",
+		},
+		{
+			"idx_time_entries_date",
+			"CREATE INDEX IF NOT EXISTS idx_time_entries_date ON time_entries(date)",
+		},
+		{
+			"idx_tasks_level",
+			"CREATE INDEX IF NOT EXISTS idx_tasks_level ON tasks(level)",
+		},
+		{
+			"idx_tasks_parent_id",
+			"CREATE INDEX IF NOT EXISTS idx_tasks_parent_id ON tasks(parent_id)",
+		},
+		{
+			"idx_tasks_project_id",
+			"CREATE INDEX IF NOT EXISTS idx_tasks_project_id ON tasks(project_id)",
+		},
+		{
+			"idx_tasks_estimation_time",
+			"CREATE INDEX IF NOT EXISTS idx_tasks_estimation_time ON tasks(estimated_time, used_time)",
+		},
+		{
+			"idx_user_project_assignments_user",
+			"CREATE INDEX IF NOT EXISTS idx_user_project_assignments_user ON user_project_assignments(slack_user_id)",
+		},
+		{
+			"idx_user_project_assignments_project",
+			"CREATE INDEX IF NOT EXISTS idx_user_project_assignments_project ON user_project_assignments(project_id)",
+		},
+		{
+			"idx_threshold_notifications_task",
+			"CREATE INDEX IF NOT EXISTS idx_threshold_notifications_task ON threshold_notifications(task_id)",
+		},
+	}
+	
+	// Create each index
+	for _, idx := range indexes {
+		if _, err := db.Exec(idx.query); err != nil {
+			logger.Warnf("Failed to create index %s: %v (continuing)", idx.name, err)
+			// Don't fail the entire setup for index creation failures
+			continue
+		}
+		logger.Debugf("Created or verified index: %s", idx.name)
+	}
+	
+	logger.Debug("Strategic database indexes created successfully")
+	return nil
 }

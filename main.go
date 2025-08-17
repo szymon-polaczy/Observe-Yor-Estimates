@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
 	"strings"
@@ -96,13 +97,13 @@ func handleCliCommands(args []string, logger *Logger) {
 func setupCronJobs(logger *Logger) {
 	cronScheduler := cron.New()
 
-	addCronJob(cronScheduler, "TASK_SYNC_SCHEDULE", "0 */3 * * *", "task sync", logger, func() {
+	addCronJob(cronScheduler, "TASK_SYNC_SCHEDULE", "0 */6 * * *", "task sync", logger, func() {
 		if err := SyncTasksToDatabase(false); err != nil {
 			logger.Errorf("Scheduled task sync failed: %v", err)
 		}
 	})
 
-	addCronJob(cronScheduler, "TIME_ENTRIES_SYNC_SCHEDULE", "*/10 * * * *", "time entries sync", logger, func() {
+	addCronJob(cronScheduler, "TIME_ENTRIES_SYNC_SCHEDULE", "*/30 * * * *", "time entries sync", logger, func() {
 		if err := SyncTimeEntriesToDatabaseWithOptions("", "", false); err != nil {
 			logger.Errorf("Scheduled time entries sync failed: %v", err)
 		}
@@ -118,8 +119,8 @@ func setupCronJobs(logger *Logger) {
 		sendDailyUpdate(logger)
 	})
 
-	// Add orphaned time entries processing cron job (every hour)
-	addCronJob(cronScheduler, "ORPHANED_PROCESSING_SCHEDULE", "0 * * * *", "orphaned time entries processing", logger, func() {
+	// Add orphaned time entries processing cron job (every 6 hours)
+	addCronJob(cronScheduler, "ORPHANED_PROCESSING_SCHEDULE", "0 */6 * * *", "orphaned time entries processing", logger, func() {
 		db, err := GetDB()
 		if err != nil {
 			logger.Errorf("Failed to get database connection for orphaned processing: %v", err)
@@ -149,7 +150,6 @@ func setupCronJobs(logger *Logger) {
 
 func sendDailyUpdate(logger *Logger) {
 	commandText := "for yesterday"
-	percentage := ""
 
 	db, err := GetDB()
 	if err != nil {
@@ -164,7 +164,7 @@ func sendDailyUpdate(logger *Logger) {
 		return
 	}
 
-	logger.Infof("Starting daily updates for %d users", len(users))
+	logger.Infof("Starting optimized daily updates for %d users", len(users))
 
 	// Get time period for filtering tasks
 	startTime, endTime, err := confirmPeriod(commandText)
@@ -173,39 +173,44 @@ func sendDailyUpdate(logger *Logger) {
 		return
 	}
 
-	// Process each user individually
+	// OPTIMIZATION: Query ALL data once instead of per-user queries
+	logger.Info("Fetching ALL yesterday's data in single queries...")
+	
+	// 1. Get ALL user-project assignments at once
+	userProjectMap, err := getAllUserProjectAssignments(db)
+	if err != nil {
+		logger.Errorf("Failed to get user project assignments: %v", err)
+		return
+	}
+	
+	// 2. Get ALL tasks with time entries for yesterday at once  
+	allTasksWithTime := getFilteredTasksWithTimeout(startTime, endTime, []string{}, "")
+	if len(allTasksWithTime) == 0 {
+		logger.Info("No tasks with time entries found for yesterday")
+		return
+	}
+	
+	// 3. Add comments to all tasks at once
+	allTasksWithTime = addCommentsToTasks(allTasksWithTime, startTime, endTime)
+	
+	logger.Infof("Successfully fetched data: %d user-project assignments, %d tasks with time", 
+		len(userProjectMap), len(allTasksWithTime))
+
+	// Process each user with pre-fetched data
 	for _, user := range users {
 		logger.Infof("Processing daily update for user %s (%s)", user.ID, user.RealName)
 
-		// Get user's project assignments
-		userProjects, err := GetUserProjects(db, user.ID)
-		if err != nil {
-			logger.Errorf("Failed to get projects for user %s: %v", user.ID, err)
-			continue
-		}
-
-		// Extract project names for filtering
-		userProjectNames := []string{}
-		for _, project := range userProjects {
-			userProjectNames = append(userProjectNames, project.Name)
-		}
-
-		logger.Infof("User %s has %d assigned projects: %v", user.ID, len(userProjectNames), userProjectNames)
-
-		// Get filtered tasks for this user
-		filteredTasks := getFilteredTasksWithTimeout(startTime, endTime, userProjectNames, percentage)
-		if len(filteredTasks) == 0 {
+		// Filter tasks for this user based on their project assignments
+		userTasks := filterTasksForUser(user.ID, userProjectMap, allTasksWithTime)
+		if len(userTasks) == 0 {
 			logger.Infof("No tasks found for user %s in the specified period", user.ID)
 			continue
 		}
 
-		logger.Infof("Found %d tasks for user %s", len(filteredTasks), user.ID)
+		logger.Infof("Found %d tasks for user %s", len(userTasks), user.ID)
 
-		// Add comments and group by project
-		filteredTasks = addCommentsToTasks(filteredTasks, startTime, endTime)
-		filteredTasksGroupedByProject := groupTasksByProject(filteredTasks)
-
-		// Send personalized update to this user
+		// Group by project and send
+		filteredTasksGroupedByProject := groupTasksByProject(userTasks)
 		sendTasksGroupedByProjectToUser(user.ID, filteredTasksGroupedByProject)
 
 		// Small delay between users to avoid rate limiting
@@ -214,7 +219,7 @@ func sendDailyUpdate(logger *Logger) {
 		logger.Infof("Completed daily update for user %s", user.ID)
 	}
 
-	logger.Infof("Completed daily updates for all %d users", len(users))
+	logger.Infof("Completed optimized daily updates for all %d users", len(users))
 }
 
 func addCronJob(scheduler *cron.Cron, envVar, defaultSchedule, jobName string, logger *Logger, cmd func()) {
@@ -299,4 +304,78 @@ func RunTestCommand(logger *Logger, fullCommand string, slackUserName string) er
 	// Send via DM path
 	sendTasksGroupedByProjectToUser(userID, grouped)
 	return nil
+}
+
+// OPTIMIZATION HELPER FUNCTIONS FOR DAILY UPDATES
+
+// getAllUserProjectAssignments gets all user-project assignments in a single query
+func getAllUserProjectAssignments(db *sql.DB) (map[string][]string, error) {
+	query := `
+		SELECT upa.slack_user_id, p.name
+		FROM user_project_assignments upa
+		INNER JOIN projects p ON upa.project_id = p.id
+		ORDER BY upa.slack_user_id, p.name
+	`
+	
+	rows, err := db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query user project assignments: %w", err)
+	}
+	defer rows.Close()
+	
+	userProjectMap := make(map[string][]string)
+	for rows.Next() {
+		var userID, projectName string
+		if err := rows.Scan(&userID, &projectName); err != nil {
+			continue // Skip invalid rows
+		}
+		userProjectMap[userID] = append(userProjectMap[userID], projectName)
+	}
+	
+	return userProjectMap, nil
+}
+
+
+
+// filterTasksForUser filters tasks for a specific user based on their project assignments
+func filterTasksForUser(userID string, userProjectMap map[string][]string, allTasks []TaskInfo) []TaskInfo {
+	// Get user's project names (case insensitive)
+	userProjects, exists := userProjectMap[userID]
+	if !exists {
+		return []TaskInfo{} // User has no project assignments
+	}
+	
+	// Convert to lowercase for comparison
+	userProjectsLower := make(map[string]bool)
+	for _, project := range userProjects {
+		userProjectsLower[strings.ToLower(project)] = true
+	}
+	
+	// Get all tasks map for project lookups
+	db, err := GetDB()
+	if err != nil {
+		return []TaskInfo{}
+	}
+	
+	allTasksMap, err := getAllTasks(db)
+	if err != nil {
+		return []TaskInfo{}
+	}
+	
+	var userTasks []TaskInfo
+	for _, task := range allTasks {
+		// Find project name for this task
+		projectName := getProjectNameForTask(task.TaskID, allTasksMap)
+		if projectName == "" {
+			continue
+		}
+		
+		// Check if user is assigned to this project
+		if userProjectsLower[strings.ToLower(projectName)] {
+			// Comments are already added to the task from addCommentsToTasks
+			userTasks = append(userTasks, task)
+		}
+	}
+	
+	return userTasks
 }
