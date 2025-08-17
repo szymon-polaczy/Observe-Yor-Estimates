@@ -121,14 +121,14 @@ func detectThresholdCrossings(db *sql.DB, taskIDs []int) ([]ThresholdAlert, erro
 
 		percentage := estimation.Percentage
 
-		// Check if this task crossed any threshold
-		thresholdCrossed, justCrossed, err := checkThresholdCrossing(db, taskID, percentage)
+		// Check and record threshold crossing in a transaction
+		thresholdCrossed, shouldNotify, err := checkAndRecordThresholdCrossing(db, taskID, percentage)
 		if err != nil {
 			logger.Errorf("Failed to check threshold crossing for task %d: %v", taskID, err)
 			continue
 		}
 
-		if justCrossed {
+		if shouldNotify {
 			alert := ThresholdAlert{
 				TaskID:           taskID,
 				ParentID:         parentID,
@@ -141,26 +141,27 @@ func detectThresholdCrossings(db *sql.DB, taskIDs []int) ([]ThresholdAlert, erro
 				JustCrossed:      true,
 			}
 			alerts = append(alerts, alert)
-
-			// Record the notification
-			err = recordThresholdNotification(db, taskID, thresholdCrossed, percentage)
-			if err != nil {
-				logger.Errorf("Failed to record threshold notification for task %d: %v", taskID, err)
-			}
 		}
 	}
 
 	return alerts, nil
 }
 
-// checkThresholdCrossing determines if a task crossed a new threshold
-func checkThresholdCrossing(db *sql.DB, taskID int, currentPercentage float64) (int, bool, error) {
-	// Check what's the highest threshold this task has already been notified for
+// checkAndRecordThresholdCrossing atomically checks and records threshold crossing
+func checkAndRecordThresholdCrossing(db *sql.DB, taskID int, currentPercentage float64) (int, bool, error) {
+	// Start a transaction for atomic check and record
+	tx, err := db.Begin()
+	if err != nil {
+		return 0, false, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback() // Will be no-op if committed
+
+	// Check what's the highest threshold this task has already been notified for (with row lock)
 	var lastNotifiedThreshold sql.NullInt64
-	query := `SELECT MAX(threshold_percentage) FROM threshold_notifications WHERE task_id = $1`
-	err := db.QueryRow(query, taskID).Scan(&lastNotifiedThreshold)
+	query := `SELECT MAX(threshold_percentage) FROM threshold_notifications WHERE task_id = $1 FOR UPDATE`
+	err = tx.QueryRow(query, taskID).Scan(&lastNotifiedThreshold)
 	if err != nil && err != sql.ErrNoRows {
-		return 0, false, err
+		return 0, false, fmt.Errorf("failed to query threshold notifications: %w", err)
 	}
 
 	// Find the highest threshold the current percentage has crossed
@@ -173,20 +174,18 @@ func checkThresholdCrossing(db *sql.DB, taskID int, currentPercentage float64) (
 	}
 
 	if highestCrossedThreshold == 0 {
+		tx.Commit() // No work done, but commit to release lock
 		return 0, false, nil // No threshold crossed
 	}
 
-	// Check if this is a new threshold (higher than previously notified)
-	if !lastNotifiedThreshold.Valid || highestCrossedThreshold > int(lastNotifiedThreshold.Int64) {
-		return highestCrossedThreshold, true, nil
+	// Check if we've already notified for this threshold or higher
+	if lastNotifiedThreshold.Valid && int(lastNotifiedThreshold.Int64) >= highestCrossedThreshold {
+		tx.Commit() // No work done, but commit to release lock
+		return highestCrossedThreshold, false, nil // Already notified
 	}
 
-	return highestCrossedThreshold, false, nil
-}
-
-// recordThresholdNotification records that we've notified about a threshold
-func recordThresholdNotification(db *sql.DB, taskID, threshold int, percentage float64) error {
-	query := `
+	// Record the notification
+	insertQuery := `
 		INSERT INTO threshold_notifications (task_id, threshold_percentage, current_percentage, last_time_entry_date)
 		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (task_id, threshold_percentage) 
@@ -195,11 +194,20 @@ func recordThresholdNotification(db *sql.DB, taskID, threshold int, percentage f
 			notified_at = CURRENT_TIMESTAMP,
 			last_time_entry_date = EXCLUDED.last_time_entry_date
 	`
-
 	today := time.Now().Format("2006-01-02")
-	_, err := db.Exec(query, taskID, threshold, percentage, today)
-	return err
+	_, err = tx.Exec(insertQuery, taskID, highestCrossedThreshold, currentPercentage, today)
+	if err != nil {
+		return 0, false, fmt.Errorf("failed to record threshold notification: %w", err)
+	}
+
+	// Commit the transaction
+	if err = tx.Commit(); err != nil {
+		return 0, false, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return highestCrossedThreshold, true, nil // New notification needed
 }
+
 
 // sendThresholdNotifications sends notifications to users about threshold crossings
 func sendThresholdNotifications(db *sql.DB, alerts []ThresholdAlert) error {
@@ -309,10 +317,3 @@ func convertAlertsToTaskInfos(alerts []ThresholdAlert) []TaskInfo {
 	return taskInfos
 }
 
-// clearTaskThresholdNotifications clears threshold notifications for a task
-// This should be called when task estimation changes
-func clearTaskThresholdNotifications(db *sql.DB, taskID int) error {
-	query := `DELETE FROM threshold_notifications WHERE task_id = $1`
-	_, err := db.Exec(query, taskID)
-	return err
-}
