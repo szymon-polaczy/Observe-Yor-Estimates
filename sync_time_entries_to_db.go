@@ -196,19 +196,38 @@ func SyncTimeEntriesToDatabaseWithOptions(fromDate, toDate string, includeOrphan
 		defer CloseWithErrorLog(orphanedInsertStatement, "orphaned prepared statement")
 	}
 
-	// Build an optimized in-memory set of existing task IDs to avoid per-entry queries
+	// Build a scoped set of task IDs present in this batch to avoid full-table scan
 	existingTasks := make(map[int]struct{})
-	rowsTasks, err := db.Query(`SELECT task_id FROM tasks`)
-	if err != nil {
-		return fmt.Errorf("failed to fetch existing tasks: %w", err)
-	}
-	defer rowsTasks.Close()
-
-	for rowsTasks.Next() {
-		var id int
-		if err := rowsTasks.Scan(&id); err == nil {
-			existingTasks[id] = struct{}{}
+	requiredTaskIDsSet := make(map[int]struct{})
+	for _, te := range timeEntries {
+		if te.TaskID == "" {
+			continue
 		}
+		if id, err := strconv.Atoi(te.TaskID); err == nil {
+			requiredTaskIDsSet[id] = struct{}{}
+		}
+	}
+
+	var requiredTaskIDs []int
+	for id := range requiredTaskIDsSet {
+		requiredTaskIDs = append(requiredTaskIDs, id)
+	}
+
+	if len(requiredTaskIDs) > 0 {
+		rowsTasks, err := db.Query(`SELECT task_id FROM tasks WHERE task_id = ANY($1)`, pq.Array(requiredTaskIDs))
+		if err != nil {
+			return fmt.Errorf("failed to fetch existing tasks: %w", err)
+		}
+		defer rowsTasks.Close()
+
+		for rowsTasks.Next() {
+			var id int
+			if err := rowsTasks.Scan(&id); err == nil {
+				existingTasks[id] = struct{}{}
+			}
+		}
+	} else {
+		logger.Debug("No task IDs present in time entries batch; skipping existing task lookup")
 	}
 
 	logger.Debugf("Loaded %d existing task IDs for validation", len(existingTasks))
@@ -717,7 +736,6 @@ func ProcessOrphanedTimeEntries(db *sql.DB) error {
 	defer rows.Close()
 
 	var processableEntries []ProcessedTimeEntry
-	var processableIDs []int
 
 	for rows.Next() {
 		var entry ProcessedTimeEntry
@@ -731,7 +749,6 @@ func ProcessOrphanedTimeEntries(db *sql.DB) error {
 			continue
 		}
 		processableEntries = append(processableEntries, entry)
-		processableIDs = append(processableIDs, entry.ID)
 	}
 
 	if len(processableEntries) == 0 {
