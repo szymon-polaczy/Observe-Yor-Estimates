@@ -175,25 +175,25 @@ func sendDailyUpdate(logger *Logger) {
 
 	// OPTIMIZATION: Query ALL data once instead of per-user queries
 	logger.Info("Fetching ALL yesterday's data in single queries...")
-	
+
 	// 1. Get ALL user-project assignments at once
 	userProjectMap, err := getAllUserProjectAssignments(db)
 	if err != nil {
 		logger.Errorf("Failed to get user project assignments: %v", err)
 		return
 	}
-	
-	// 2. Get ALL tasks with time entries for yesterday at once  
+
+	// 2. Get ALL tasks with time entries for yesterday at once
 	allTasksWithTime := getFilteredTasksWithTimeout(startTime, endTime, []string{}, "")
 	if len(allTasksWithTime) == 0 {
 		logger.Info("No tasks with time entries found for yesterday")
 		return
 	}
-	
+
 	// 3. Add comments to all tasks at once
 	allTasksWithTime = addCommentsToTasks(allTasksWithTime, startTime, endTime)
-	
-	logger.Infof("Successfully fetched data: %d user-project assignments, %d tasks with time", 
+
+	logger.Infof("Successfully fetched data: %d user-project assignments, %d tasks with time",
 		len(userProjectMap), len(allTasksWithTime))
 
 	// Process each user with pre-fetched data
@@ -269,10 +269,10 @@ func RunTestCommand(logger *Logger, fullCommand string, slackUserName string) er
 		firstWord = fields[0]
 	}
 	if firstWord == "project" && projectName == "" {
-		return fmt.Errorf("Missing project name. Use: `/oye project [project name] for [period]` or `/oye project [project name] over [percentage] for [period]`")
+		return fmt.Errorf("missing project name. Use: `/oye project [project name] for [period]` or `/oye project [project name] over [percentage] for [period]`")
 	}
 	if firstWord == "over" && percentage == "" {
-		return fmt.Errorf("Missing percentage value. Use: `/oye over [percentage] for [period]` or `/oye project [project name] over [percentage] for [period]`")
+		return fmt.Errorf("missing percentage value. Use: `/oye over [percentage] for [period]` or `/oye project [project name] over [percentage] for [period]`")
 	}
 
 	startTime, endTime, err := confirmPeriod(commandText)
@@ -316,13 +316,13 @@ func getAllUserProjectAssignments(db *sql.DB) (map[string][]string, error) {
 		INNER JOIN projects p ON upa.project_id = p.id
 		ORDER BY upa.slack_user_id, p.name
 	`
-	
+
 	rows, err := db.Query(query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query user project assignments: %w", err)
 	}
 	defer rows.Close()
-	
+
 	userProjectMap := make(map[string][]string)
 	for rows.Next() {
 		var userID, projectName string
@@ -331,37 +331,36 @@ func getAllUserProjectAssignments(db *sql.DB) (map[string][]string, error) {
 		}
 		userProjectMap[userID] = append(userProjectMap[userID], projectName)
 	}
-	
+
 	return userProjectMap, nil
 }
-
-
 
 // filterTasksForUser filters tasks for a specific user based on their project assignments
 func filterTasksForUser(userID string, userProjectMap map[string][]string, allTasks []TaskInfo) []TaskInfo {
 	// Get user's project names (case insensitive)
 	userProjects, exists := userProjectMap[userID]
-	if !exists {
-		return []TaskInfo{} // User has no project assignments
+	if !exists || len(userProjects) == 0 {
+		// No project assignments for this user: send all tasks
+		return allTasks
 	}
-	
+
 	// Convert to lowercase for comparison
 	userProjectsLower := make(map[string]bool)
 	for _, project := range userProjects {
 		userProjectsLower[strings.ToLower(project)] = true
 	}
-	
+
 	// Get all tasks map for project lookups
 	db, err := GetDB()
 	if err != nil {
 		return []TaskInfo{}
 	}
-	
+
 	allTasksMap, err := getAllTasks(db)
 	if err != nil {
 		return []TaskInfo{}
 	}
-	
+
 	var userTasks []TaskInfo
 	for _, task := range allTasks {
 		// Find project name for this task
@@ -369,13 +368,13 @@ func filterTasksForUser(userID string, userProjectMap map[string][]string, allTa
 		if projectName == "" {
 			continue
 		}
-		
+
 		// Check if user is assigned to this project
 		if userProjectsLower[strings.ToLower(projectName)] {
 			// Comments are already added to the task from addCommentsToTasks
 			userTasks = append(userTasks, task)
 		}
 	}
-	
+
 	return userTasks
 }
