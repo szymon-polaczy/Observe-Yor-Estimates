@@ -156,14 +156,6 @@ func checkAndRecordThresholdCrossing(db *sql.DB, taskID int, currentPercentage f
 	}
 	defer tx.Rollback() // Will be no-op if committed
 
-	// Check what's the highest threshold this task has already been notified for (with row lock)
-	var lastNotifiedThreshold sql.NullInt64
-	query := `SELECT MAX(threshold_percentage) FROM threshold_notifications WHERE task_id = $1 FOR UPDATE`
-	err = tx.QueryRow(query, taskID).Scan(&lastNotifiedThreshold)
-	if err != nil && err != sql.ErrNoRows {
-		return 0, false, fmt.Errorf("failed to query threshold notifications: %w", err)
-	}
-
 	// Find the highest threshold the current percentage has crossed
 	var highestCrossedThreshold int
 	for _, threshold := range thresholdLevels {
@@ -174,14 +166,30 @@ func checkAndRecordThresholdCrossing(db *sql.DB, taskID int, currentPercentage f
 	}
 
 	if highestCrossedThreshold == 0 {
-		tx.Commit() // No work done, but commit to release lock
+		tx.Commit()          // No work done, but commit to release lock
 		return 0, false, nil // No threshold crossed
 	}
 
-	// Check if we've already notified for this threshold or higher
-	if lastNotifiedThreshold.Valid && int(lastNotifiedThreshold.Int64) >= highestCrossedThreshold {
-		tx.Commit() // No work done, but commit to release lock
-		return highestCrossedThreshold, false, nil // Already notified
+	// Check if we've already notified for this specific threshold or any higher threshold
+	// Only query for thresholds >= the one we're about to cross (much more efficient)
+	var existingThreshold sql.NullInt64
+	checkQuery := `
+		SELECT threshold_percentage 
+		FROM threshold_notifications 
+		WHERE task_id = $1 AND threshold_percentage >= $2 
+		ORDER BY threshold_percentage DESC 
+		LIMIT 1 
+		FOR UPDATE`
+
+	err = tx.QueryRow(checkQuery, taskID, highestCrossedThreshold).Scan(&existingThreshold)
+	if err != nil && err != sql.ErrNoRows {
+		return 0, false, fmt.Errorf("failed to check existing threshold notifications: %w", err)
+	}
+
+	// If we found an existing notification for this threshold or higher, don't send another
+	if existingThreshold.Valid {
+		tx.Commit()                                     // No work done, but commit to release lock
+		return int(existingThreshold.Int64), false, nil // Already notified
 	}
 
 	// Record the notification
@@ -207,7 +215,6 @@ func checkAndRecordThresholdCrossing(db *sql.DB, taskID int, currentPercentage f
 
 	return highestCrossedThreshold, true, nil // New notification needed
 }
-
 
 // sendThresholdNotifications sends notifications to users about threshold crossings
 func sendThresholdNotifications(db *sql.DB, alerts []ThresholdAlert) error {
@@ -316,4 +323,3 @@ func convertAlertsToTaskInfos(alerts []ThresholdAlert) []TaskInfo {
 
 	return taskInfos
 }
-
